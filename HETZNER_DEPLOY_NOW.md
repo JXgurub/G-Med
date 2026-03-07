@@ -2,6 +2,23 @@
 
 This is the fastest path to deploy G-Med on your new Hetzner server.
 
+## Single-Command Option (recommended)
+After cloning the repo on the server, you can run one command to bootstrap, generate secrets,
+prepare `.env.production`, provision SSL, and deploy:
+
+```bash
+bash scripts/one-command-deploy.sh \
+	--domain g-med.uz \
+	--certbot-email mailer@g-med.uz \
+	--email-host-password '<smtp-app-password>' \
+	--telegram-bot-token '<telegram-bot-token>' \
+	--telegram-bot-username hosptol_bot
+```
+
+Notes:
+- Add `--skip-bootstrap` if server bootstrap was already completed.
+- Add `--self-signed-ssl` only for temporary testing (not for production/Telegram webhook).
+
 ## 0. DNS first (required)
 Point domain records to your server IP:
 - `A` -> `g-med.uz` -> `<SERVER_IPV4>`
