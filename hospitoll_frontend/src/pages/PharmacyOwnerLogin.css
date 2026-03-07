@@ -1,0 +1,361 @@
+.pharmacy-owner-login-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  padding: 2rem;
+}
+
+.login-container {
+  width: 100%;
+  max-width: 480px;
+  position: relative;
+}
+
+.login-card {
+  background: var(--bg-white);
+  border-radius: 1rem;
+  padding: 2rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
+  position: relative;
+  z-index: 10;
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.logo-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.login-header h1 {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text-dark);
+  margin: 0 0 0.5rem 0;
+}
+
+.login-header p {
+  color: var(--text-light);
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.form-group label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-dark);
+}
+
+.form-group input {
+  padding: 0.875rem;
+  border: 1.5px solid var(--border-color);
+  border-radius: 0.625rem;
+  font-size: 1rem;
+  color: var(--text-dark);
+  background: var(--bg-white);
+  transition: all 0.3s ease;
+  font-family: inherit;
+}
+
+.form-group input:focus {
+  outline: none;
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+}
+
+.form-group input:disabled {
+  background: var(--bg-light);
+  color: var(--text-light);
+  cursor: not-allowed;
+}
+
+.error-message {
+  background: rgba(244, 67, 54, 0.1);
+  border: 1px solid rgba(244, 67, 54, 0.3);
+  color: #f44336;
+  padding: 0.875rem;
+  border-radius: 0.625rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.warning-message {
+  background: rgba(255, 152, 0, 0.1);
+  border: 1.5px solid rgba(255, 152, 0, 0.4);
+  padding: 1rem;
+  border-radius: 0.75rem;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.warning-message.blocked {
+  background: rgba(255, 87, 34, 0.1);
+  border-color: rgba(255, 87, 34, 0.4);
+}
+
+.warning-icon {
+  font-size: 1.75rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.warning-content {
+  flex: 1;
+}
+
+.warning-content strong {
+  display: block;
+  color: #ff5722;
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 0.5rem;
+}
+
+.warning-content p {
+  color: #e64a19;
+  font-size: 0.9rem;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.btn-login {
+  padding: 0.875rem;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: var(--bg-white);
+  border: none;
+  border-radius: 0.625rem;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-login:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(16, 185, 129, 0.3);
+}
+
+.btn-login:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-back {
+  width: 100%;
+  padding: 0.75rem;
+  background: #f2f4f7;
+  color: #1a1a1a;
+  border: 1px solid #d0d5dd;
+  border-radius: 0.625rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-back:hover {
+  background: #e4e7eb;
+  color: #1a1a1a;
+}
+
+.demo-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.demo-section h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-light);
+  margin: 0 0 1rem 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.demo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.demo-item {
+  padding: 0.875rem;
+  background: var(--bg-light);
+  border: 1px solid var(--border-color);
+  border-radius: 0.625rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.demo-item:hover {
+  background: var(--bg-white);
+  border-color: #10b981;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.1);
+}
+
+.demo-info {
+  flex: 1;
+}
+
+.demo-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-dark);
+  margin: 0 0 0.25rem 0;
+}
+
+.demo-spec {
+  font-size: 0.8rem;
+  color: #10b981;
+  margin: 0 0 0.4rem 0;
+  font-weight: 500;
+}
+
+.demo-creds {
+  font-size: 0.8rem;
+  color: var(--text-light);
+  margin: 0;
+}
+
+.demo-creds code {
+  background: rgba(16, 185, 129, 0.1);
+  color: #10b981;
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.3rem;
+  font-family: 'Courier New', monospace;
+  font-size: 0.75rem;
+}
+
+.demo-arrow {
+  color: #10b981;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.login-switch {
+  margin-top: 1.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px dashed var(--border-color);
+  text-align: center;
+}
+
+.login-switch p {
+  color: var(--text-light);
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.switch-buttons {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.switch-btn {
+  padding: 0.75rem 1rem;
+  border-radius: 0.625rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--border-color);
+  transition: all 0.3s ease;
+}
+
+.switch-btn.patient {
+  background: rgba(16, 185, 129, 0.08);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.25);
+}
+
+.switch-btn.admin {
+  background: rgba(211, 47, 47, 0.08);
+  color: #d32f2f;
+  border-color: rgba(211, 47, 47, 0.25);
+}
+
+.switch-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+.login-background {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.gradient-orb {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0.1;
+  filter: blur(40px);
+}
+
+.orb-1 {
+  width: 300px;
+  height: 300px;
+  background: var(--bg-white);
+  top: -150px;
+  right: -150px;
+}
+
+.orb-2 {
+  width: 400px;
+  height: 400px;
+  background: var(--bg-white);
+  bottom: -200px;
+  left: -200px;
+}
+
+.orb-3 {
+  width: 250px;
+  height: 250px;
+  background: var(--bg-white);
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+@media (max-width: 480px) {
+  .pharmacy-owner-login-page {
+    padding: 1rem;
+  }
+
+  .login-card {
+    padding: 1.5rem;
+  }
+
+  .login-header h1 {
+    font-size: 1.5rem;
+  }
+
+  .demo-list {
+    max-height: 300px;
+    overflow-y: auto;
+  }
+}

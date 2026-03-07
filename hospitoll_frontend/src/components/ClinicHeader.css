@@ -1,0 +1,191 @@
+.clinic-header {
+  background-color: var(--bg-white);
+  border-radius: 1rem;
+  padding: 2rem;
+  margin-bottom: 3rem;
+  box-shadow: var(--shadow);
+}
+
+.clinic-header-banner {
+  width: 100%;
+  height: 190px;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-light);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  margin-bottom: 1.75rem;
+}
+
+.clinic-header-content {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+.clinic-header-left {
+  display: flex;
+  gap: 1.5rem;
+  flex: 1;
+}
+
+.clinic-header-icon {
+  flex-shrink: 0;
+}
+
+.clinic-header-info h1 {
+  font-size: 2.5rem;
+  color: var(--text-dark);
+  margin-bottom: 1rem;
+  font-weight: 700;
+}
+
+.clinic-test-badge {
+  background: linear-gradient(135deg, rgba(30, 111, 215, 0.1) 0%, rgba(100, 179, 52, 0.05) 100%);
+  border: 1px solid rgba(30, 111, 215, 0.2);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.test-badge-label {
+  color: var(--primary-color);
+  font-weight: 600;
+}
+
+.test-badge-id,
+.test-badge-password {
+  background: var(--bg-white);
+  color: var(--primary-color);
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.35rem;
+  font-family: 'Courier New', monospace;
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.test-badge-separator {
+  color: var(--text-light);
+}
+
+.clinic-rating {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.rating-stars {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.rating-text {
+  color: var(--text-light);
+  font-size: 1rem;
+}
+
+.clinic-header-actions {
+  display: flex;
+  gap: 1rem;
+  flex-shrink: 0;
+}
+
+.btn-book {
+  padding: 0.875rem 2rem;
+  background-color: var(--secondary-color);
+  color: var(--bg-white);
+  border: none;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-book:hover {
+  background-color: var(--secondary-hover);
+  transform: translateY(-2px);
+}
+
+.btn-patient {
+  padding: 0.875rem 2rem;
+  background-color: var(--primary-color);
+  color: var(--bg-white);
+  border: none;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-patient:hover {
+  background-color: var(--primary-hover);
+  transform: translateY(-2px);
+}
+
+.clinic-details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 2rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.detail-item {
+  display: flex;
+  gap: 1rem;
+}
+
+.detail-item svg {
+  color: var(--primary-color);
+  flex-shrink: 0;
+}
+
+.detail-label {
+  color: var(--text-light);
+  font-size: 0.875rem;
+  margin-bottom: 0.25rem;
+}
+
+.detail-value {
+  color: var(--text-dark);
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .clinic-header {
+    padding: 1.5rem;
+  }
+
+  .clinic-header-banner {
+    height: 160px;
+    margin-bottom: 1.25rem;
+  }
+
+  .clinic-header-content {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .clinic-header-info h1 {
+    font-size: 1.75rem;
+  }
+
+  .clinic-header-actions {
+    flex-direction: column;
+  }
+
+  .clinic-details {
+    grid-template-columns: 1fr;
+  }
+}

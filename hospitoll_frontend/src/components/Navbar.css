@@ -1,0 +1,114 @@
+.navbar {
+  background-color: rgba(255, 255, 255, 0.98);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.navbar-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.navbar-logo {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logo-icon {
+  width: 40px;
+  height: 40px;
+  background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bg-white);
+  font-weight: 700;
+  font-size: 1.5rem;
+}
+
+.navbar-logo h1 {
+  color: var(--text-dark);
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.navbar-menu {
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+  align-items: center;
+}
+
+.navbar-link {
+  color: var(--text-dark);
+  font-weight: 500;
+  font-size: 0.95rem;
+  padding: 0.625rem 1rem;
+  border-radius: 0.375rem;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+}
+
+.navbar-link:hover {
+  color: var(--primary-color);
+  background-color: rgba(30, 111, 215, 0.05);
+}
+
+.navbar-link-patient {
+  color: var(--bg-white);
+  background-color: var(--primary-color);
+  font-weight: 600;
+}
+
+.navbar-link-patient:hover {
+  background-color: var(--primary-hover);
+  color: var(--bg-white);
+  transform: translateY(-1px);
+}
+
+.navbar-link-login {
+  padding: 0.625rem 1.75rem;
+  background-color: var(--primary-color);
+  color: var(--bg-white);
+  border-radius: 0.5rem;
+  font-weight: 600;
+  transition: all 0.3s ease;
+}
+
+.navbar-link-login:hover {
+  background-color: var(--primary-hover);
+  color: var(--bg-white);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(30, 111, 215, 0.3);
+}
+
+@media (max-width: 968px) {
+  .navbar-menu {
+    gap: 0.25rem;
+  }
+  
+  .navbar-link {
+    font-size: 0.875rem;
+    padding: 0.5rem 0.75rem;
+  }
+}
+
+@media (max-width: 768px) {
+  .navbar-container {
+    padding: 1rem;
+  }
+  
+  .navbar-menu {
+    display: none;
+  }
+}

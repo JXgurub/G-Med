@@ -1,0 +1,414 @@
+from django.urls import reverse
+from django.utils import timezone
+from datetime import timedelta, datetime
+from rest_framework.test import APITestCase
+from typing import Any, cast
+
+from apps.users.models import CustomUser
+from apps.clinics.models import Clinic
+from apps.doctors.models import Doctor, Specialization, DoctorAvailability
+
+
+class DoctorEmploymentLifecycleTests(APITestCase):
+    def auth_as(self, user: CustomUser) -> None:
+        cast(Any, self.client).force_authenticate(user=user)
+
+    def setUp(self):
+        self.owner_a = CustomUser.objects.create_user(
+            username='clinic_owner_a',
+            email='owner.a@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='OwnerA',
+        )
+        self.clinic_a = Clinic.objects.create(
+            owner=self.owner_a,
+            name='Clinic A',
+            slug='clinic-a',
+            address='Address A',
+            phone_number='+998901110000',
+            email='clinic.a@example.com',
+            registration_number='REG-CLINIC-A',
+            status='active',
+        )
+
+        self.owner_b = CustomUser.objects.create_user(
+            username='clinic_owner_b',
+            email='owner.b@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='OwnerB',
+        )
+        self.clinic_b = Clinic.objects.create(
+            owner=self.owner_b,
+            name='Clinic B',
+            slug='clinic-b',
+            address='Address B',
+            phone_number='+998902220000',
+            email='clinic.b@example.com',
+            registration_number='REG-CLINIC-B',
+            status='active',
+        )
+
+        self.doctor_user = CustomUser.objects.create_user(
+            username='doctor.user',
+            email='doctor.user@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Doctor',
+            last_name='User',
+        )
+        self.doctor = Doctor.objects.create(
+            user=self.doctor_user,
+            clinic=self.clinic_a,
+            license_number='LIC-EMP-001',
+            pinfl='12345678901234',
+            passport_id='AB1234567',
+            is_active=True,
+        )
+
+    def test_active_doctor_cannot_be_hired_to_other_clinic_by_pinfl(self):
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+
+        response = self.client.post(create_url, {'pinfl': '12345678901234'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertIn('detail', payload)
+        self.assertIn('boshqa klinikada ham faoliyat yuritadi', str(payload['detail']).lower())
+
+    def test_active_doctor_cannot_be_hired_to_other_clinic_by_passport(self):
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+
+        response = self.client.post(create_url, {'passport_id': 'AB1234567'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertIn('detail', payload)
+        self.assertIn('boshqa klinikada ham faoliyat yuritadi', str(payload['detail']).lower())
+
+    def test_terminate_keeps_profile_but_unassigns_clinic(self):
+        self.auth_as(self.owner_a)
+        url = reverse('doctor-terminate', args=[self.doctor.id])
+
+        response = self.client.post(url, {})
+
+        self.assertEqual(response.status_code, 200)
+        self.doctor.refresh_from_db()
+        self.assertFalse(self.doctor.is_active)
+        self.assertIsNone(self.doctor.clinic)
+
+    def test_rehire_by_pinfl_reuses_same_doctor_profile(self):
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        terminate_response = self.client.post(terminate_url, {})
+        self.assertEqual(terminate_response.status_code, 200)
+
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+        doctor_count_before = Doctor.objects.count()
+
+        response = self.client.post(create_url, {'pinfl': '12345678901234'}, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Doctor.objects.count(), doctor_count_before)
+        self.doctor.refresh_from_db()
+        self.assertTrue(self.doctor.is_active)
+        self.assertEqual(self.doctor.clinic, self.clinic_b)
+
+    def test_rehire_by_passport_reuses_same_doctor_profile(self):
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        terminate_response = self.client.post(terminate_url, {})
+        self.assertEqual(terminate_response.status_code, 200)
+
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+        doctor_count_before = Doctor.objects.count()
+
+        response = self.client.post(create_url, {'passport_id': 'AB1234567'}, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(Doctor.objects.count(), doctor_count_before)
+        self.doctor.refresh_from_db()
+        self.assertTrue(self.doctor.is_active)
+        self.assertEqual(self.doctor.clinic, self.clinic_b)
+
+    def test_rehire_with_same_email_for_same_doctor_is_allowed(self):
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        self.client.post(terminate_url, {})
+
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+        response = self.client.post(create_url, {
+            'pinfl': '12345678901234',
+            'email': 'doctor.user@example.com',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.clinic, self.clinic_b)
+
+    def test_rehire_with_email_of_another_doctor_returns_error(self):
+        other_user = CustomUser.objects.create_user(
+            username='doctor.other',
+            email='other.doctor@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Other',
+            last_name='Doctor',
+        )
+        Doctor.objects.create(
+            user=other_user,
+            clinic=self.clinic_b,
+            license_number='LIC-OTHER-001',
+            pinfl='55556666777788',
+            is_active=True,
+        )
+
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        self.client.post(terminate_url, {})
+
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+        response = self.client.post(create_url, {
+            'pinfl': '12345678901234',
+            'email': 'other.doctor@example.com',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertIn('email', response_json)
+        self.assertIn('boshqa doktorga tegishli', str(response_json['email']).lower())
+
+    def test_delete_doctor_is_not_allowed(self):
+        self.auth_as(self.owner_a)
+        url = reverse('doctor-detail', args=[self.doctor.id])
+
+        response = self.client.delete(url)
+
+        self.assertEqual(response.status_code, 405)
+
+    def test_fired_doctor_can_update_own_profile(self):
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        self.client.post(terminate_url, {})
+
+        self.auth_as(self.doctor_user)
+        update_url = reverse('doctor-my-update')
+        current_year = timezone.localdate().year
+        response = self.client.patch(update_url, {
+            'first_name': 'Updated',
+            'last_name': 'Doctor',
+            'phone_number': '+998900001122',
+            'bio': 'Updated bio',
+            'first_work_year': current_year - 7,
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.user.first_name, 'Updated')
+        self.assertEqual(self.doctor.user.phone_number, '+998900001122')
+        self.assertEqual(self.doctor.bio, 'Updated bio')
+        self.assertEqual(self.doctor.years_of_experience, 7)
+
+    def test_doctor_self_update_cannot_change_work_time(self):
+        self.auth_as(self.doctor_user)
+        update_url = reverse('doctor-my-update')
+        response = self.client.patch(update_url, {
+            'available_from': '12:00',
+            'available_until': '18:00',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.doctor.refresh_from_db()
+        self.assertNotEqual(str(self.doctor.available_from)[:5], '12:00')
+
+    def test_doctor_self_update_can_change_slot_minutes(self):
+        self.auth_as(self.doctor_user)
+        update_url = reverse('doctor-my-update')
+
+        response = self.client.patch(update_url, {
+            'slot_minutes': 20,
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.slot_minutes, 20)
+
+    def test_doctor_pinfl_immutable_once_set(self):
+        self.auth_as(self.doctor_user)
+        update_url = reverse('doctor-my-update')
+        response = self.client.patch(update_url, {'pinfl': '99999999999999'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.pinfl, '12345678901234')
+
+    def test_doctor_can_add_pinfl_if_missing(self):
+        self.doctor.pinfl = None
+        self.doctor.save(update_fields=['pinfl'])
+        self.auth_as(self.doctor_user)
+        update_url = reverse('doctor-my-update')
+        response = self.client.patch(update_url, {'pinfl': '77777777777777'}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.doctor.refresh_from_db()
+        self.assertEqual(self.doctor.pinfl, '77777777777777')
+
+    def test_experience_uses_first_work_month(self):
+        self.auth_as(self.doctor_user)
+        update_url = reverse('doctor-my-update')
+
+        today = timezone.localdate()
+        year = today.year - 5
+        month = 12
+
+        response = self.client.patch(update_url, {
+            'first_work_year': year,
+            'first_work_month': month,
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.doctor.refresh_from_db()
+        expected_experience = max(0, (today.year - year) - (1 if today.month < month else 0))
+        self.assertEqual(self.doctor.years_of_experience, expected_experience)
+
+    def test_create_doctor_without_license_with_identity_and_compensation_fields(self):
+        self.auth_as(self.owner_a)
+        create_url = reverse('doctor-list')
+        specialization = Specialization.objects.create(name='Kardiolog', code='CARD')
+
+        payload = {
+            'pinfl': '88887777666655',
+            'first_name': 'Yangi',
+            'last_name': 'Doktor',
+            'email': 'new.doctor@example.com',
+            'phone_number': '+998901234567',
+            'password': 'Pass12345!',
+            'passport_id': 'AA1234567',
+            'date_of_birth': '1990-01-20',
+            'compensation_type': 'percent',
+            'compensation_value': '25',
+            'specialization_ids': [str(specialization.id)],
+            'available_from': '08:00',
+            'available_until': '16:00',
+            'lunch_break_start': '12:00',
+            'lunch_break_end': '13:00',
+            'working_days': 'Mon,Tue,Wed,Thu,Fri',
+        }
+
+        response = self.client.post(create_url, payload, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        created = Doctor.objects.get(pinfl='88887777666655')
+        self.assertTrue(created.license_number.startswith('AUTO-'))
+        self.assertEqual(created.passport_id, 'AA1234567')
+        self.assertEqual(created.compensation_type, 'percent')
+        self.assertIsNotNone(created.compensation_value)
+        self.assertEqual(float(cast(Any, created.compensation_value)), 25.0)
+        self.assertEqual(str(created.lunch_break_start)[:5], '12:00')
+        self.assertEqual(str(created.lunch_break_end)[:5], '13:00')
+
+    def test_clinic_owner_can_update_doctor_lunch_schedule(self):
+        self.auth_as(self.owner_a)
+        url = reverse('doctor-detail', args=[self.doctor.id])
+
+        response = self.client.patch(url, {
+            'available_from': '09:00',
+            'available_until': '18:00',
+            'lunch_break_start': '13:00',
+            'lunch_break_end': '14:00',
+            'working_days': 'Mon,Tue,Wed,Thu,Fri',
+            'version': self.doctor.updated_at.isoformat(),
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.doctor.refresh_from_db()
+        self.assertEqual(str(self.doctor.lunch_break_start)[:5], '13:00')
+        self.assertEqual(str(self.doctor.lunch_break_end)[:5], '14:00')
+
+    def _next_weekday(self):
+        target = timezone.localdate() + timedelta(days=1)
+        while target.weekday() >= 5:
+            target += timedelta(days=1)
+        return target
+
+    def test_available_endpoint_rebuilds_legacy_available_slots_for_current_interval(self):
+        target_date = self._next_weekday()
+
+        self.doctor.available_from = datetime.strptime('09:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri'
+        self.doctor.slot_minutes = 20
+        self.doctor.save(update_fields=['available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
+
+        DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time=datetime.strptime('09:15', '%H:%M').time(),
+            end_time=datetime.strptime('09:30', '%H:%M').time(),
+            status='available',
+        )
+        DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time=datetime.strptime('09:30', '%H:%M').time(),
+            end_time=datetime.strptime('10:00', '%H:%M').time(),
+            status='available',
+        )
+
+        url = reverse('doctor-availability-available')
+        response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': target_date.isoformat()})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(len(data) > 0)
+
+        for slot in data:
+            start = datetime.strptime(slot['start_time'][:5], '%H:%M')
+            end = datetime.strptime(slot['end_time'][:5], '%H:%M')
+            self.assertEqual(int((end - start).total_seconds() // 60), 20)
+
+        ordered = sorted(data, key=lambda item: item['start_time'])
+        for idx in range(1, len(ordered)):
+            prev_end = datetime.strptime(ordered[idx - 1]['end_time'][:5], '%H:%M')
+            curr_start = datetime.strptime(ordered[idx]['start_time'][:5], '%H:%M')
+            self.assertGreaterEqual(curr_start, prev_end)
+
+    def test_available_endpoint_does_not_create_slots_overlapping_booked_slot(self):
+        target_date = self._next_weekday()
+
+        self.doctor.available_from = datetime.strptime('09:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri'
+        self.doctor.slot_minutes = 20
+        self.doctor.save(update_fields=['available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
+
+        DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time=datetime.strptime('09:30', '%H:%M').time(),
+            end_time=datetime.strptime('10:00', '%H:%M').time(),
+            status='booked',
+        )
+
+        url = reverse('doctor-availability-available')
+        response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': target_date.isoformat()})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+
+        blocked_start = datetime.strptime('09:30', '%H:%M')
+        blocked_end = datetime.strptime('10:00', '%H:%M')
+
+        for slot in data:
+            start = datetime.strptime(slot['start_time'][:5], '%H:%M')
+            end = datetime.strptime(slot['end_time'][:5], '%H:%M')
+            self.assertFalse(start < blocked_end and end > blocked_start)

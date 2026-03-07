@@ -1,0 +1,65 @@
+# Git ignore patterns
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swp~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Database
+db.sqlite3
+*.db
+
+# Media and Static files
+media/
+staticfiles/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Celery
+celerybeat-schedule
+
+# Python
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# IDE specific
+*.sublime-workspace
+*.ctags
+
+# Backup files
+*.bak
+*.backup
+~*
+
+# MacOS
+.AppleDouble
+.LSOverride

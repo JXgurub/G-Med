@@ -1,0 +1,35 @@
+.clinic-doctors {
+  padding: 4rem 0;
+  background-color: var(--bg-white);
+  margin-bottom: 3rem;
+}
+
+.clinic-doctors h2 {
+  font-size: 2rem;
+  color: var(--text-dark);
+  margin-bottom: 0.5rem;
+  font-weight: 700;
+}
+
+.section-subtitle {
+  color: var(--text-light);
+  font-size: 1rem;
+  margin-bottom: 2.5rem;
+}
+
+.doctors-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 2rem;
+}
+
+@media (max-width: 768px) {
+  .clinic-doctors {
+    padding: 2rem 0;
+  }
+
+  .doctors-grid {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1.5rem;
+  }
+}
