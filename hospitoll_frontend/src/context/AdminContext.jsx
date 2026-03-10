@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useState } from 'react'
 import api, { authApi, clinicsApi, pharmaciesApi } from '../services/api'
 
 const adminContextUnavailable = async () => ({
@@ -43,9 +43,9 @@ export const AdminProvider = ({ children }) => {
   const [pharmacies, setPharmacies] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const parseItems = (payload) => payload?.results || payload || []
+  const parseItems = useCallback((payload) => payload?.results || payload || [], [])
 
-  const loadLists = async () => {
+  const loadLists = useCallback(async () => {
     const [clinicsResult, pharmaciesResult] = await Promise.allSettled([
       clinicsApi.getAll(),
       pharmaciesApi.getAll()
@@ -67,16 +67,16 @@ export const AdminProvider = ({ children }) => {
       clinicsOk: clinicsResult.status === 'fulfilled',
       pharmaciesOk: pharmaciesResult.status === 'fulfilled',
     }
-  }
+  }, [parseItems])
 
-  const refreshAdminData = async () => {
+  const refreshAdminData = useCallback(async () => {
     if (!admin) return
     try {
       await loadLists()
     } catch (error) {
       console.error('[AdminContext] refreshAdminData failed:', error)
     }
-  }
+  }, [admin, loadLists])
 
   const loadSession = async () => {
     const token = localStorage.getItem(ACCESS_TOKEN_KEY)
@@ -149,7 +149,8 @@ export const AdminProvider = ({ children }) => {
       await loadLists()
       return { success: true, admin: data.user }
     } catch (error) {
-      return { success: false, error: 'Email yoki parol noto\'g\'ri' }
+      const errorMsg = error?.response?.data?.detail || error?.message || 'Email yoki parol noto\'g\'ri'
+      return { success: false, error: errorMsg }
     }
   }
 

@@ -14,29 +14,32 @@ else
     exit 1
 fi
 
-echo "[1/6] Running production preflight checks..."
+echo "[1/8] Running production preflight checks..."
 bash "${ROOT_DIR}/scripts/prod-preflight.sh"
 
-echo "[2/6] Loading .env.production..."
+echo "[2/8] Loading .env.production..."
 set -a
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 set +a
 
-echo "[3/6] Building and starting containers..."
+echo "[3/8] Building and starting containers..."
 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 
-echo "[4/6] Running database migrations and static collection..."
+echo "[4/8] Restarting nginx to refresh backend upstream resolution..."
+"${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart nginx
+
+echo "[5/8] Running database migrations and static collection..."
 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T backend python manage.py migrate
 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T backend python manage.py collectstatic --noinput
 
-echo "[5/6] Running deployment security checks..."
+echo "[6/8] Running deployment security checks..."
 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T backend python manage.py check --deploy --tag security
 
-echo "[6/7] Current service status:"
+echo "[7/8] Current service status:"
 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps
 
-echo "[7/7] Telegram webhook setup (optional)..."
+echo "[8/8] Telegram webhook setup (optional)..."
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_WEBHOOK_SECRET:-}" ]]; then
     "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" exec -T backend \
         python manage.py telegram_set_webhook --base-url "https://${DOMAIN}"

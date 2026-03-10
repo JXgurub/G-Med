@@ -27,18 +27,12 @@
   margin-bottom: 2rem;
 }
 
-.logo-icon {
-  width: 56px;
-  height: 56px;
-  background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
-  border-radius: 0.75rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--bg-white);
-  font-weight: 700;
-  font-size: 1.5rem;
+.login-logo-image {
+  width: 68px;
+  height: 68px;
+  object-fit: contain;
   margin: 0 auto 1rem;
+  display: block;
 }
 
 .login-header h1 {

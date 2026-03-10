@@ -6,7 +6,41 @@ import useSmartAutoRefresh from '../hooks/useSmartAutoRefresh'
 import ChangePasswordModal from '../components/ChangePasswordModal'
 import SetPaymentAmountModal from '../components/SetPaymentAmountModal'
 import PasswordInput from '../components/PasswordInput'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import './AdminDashboard.css'
+
+const DEFAULT_PHONE_PREFIX = '+998'
+
+const generateClinicRegistrationNumber = () => {
+  const datePart = new Date().toISOString().slice(2, 10).replace(/-/g, '')
+  const randomPart = Math.floor(1000 + Math.random() * 9000)
+  return `CLN-${datePart}-${randomPart}`
+}
+
+const getDefaultClinicForm = () => ({
+  name: '',
+  ownerFirstName: '',
+  ownerLastName: '',
+  ownerPassportId: '',
+  email: '',
+  phone: DEFAULT_PHONE_PREFIX,
+  address: '',
+  registrationNumber: generateClinicRegistrationNumber(),
+  password: ''
+})
+
+const getDefaultPharmacyForm = () => ({
+  name: '',
+  ownerFirstName: '',
+  ownerLastName: '',
+  ownerEmail: '',
+  ownerPhone: DEFAULT_PHONE_PREFIX,
+  pharmacyEmail: '',
+  phone: DEFAULT_PHONE_PREFIX,
+  address: '',
+  registrationNumber: '',
+  password: ''
+})
 
 const AdminDashboard = () => {
   const navigate = useNavigate()
@@ -45,30 +79,8 @@ const AdminDashboard = () => {
   // Form state
   const [showAddClinic, setShowAddClinic] = useState(false)
   const [showAddPharmacy, setShowAddPharmacy] = useState(false)
-  const [clinicForm, setClinicForm] = useState({
-    name: '',
-    ownerFirstName: '',
-    ownerLastName: '',
-    ownerEmail: '',
-    ownerPhone: '',
-    clinicEmail: '',
-    phone: '',
-    address: '',
-    registrationNumber: '',
-    password: ''
-  })
-  const [pharmacyForm, setPharmacyForm] = useState({
-    name: '',
-    ownerFirstName: '',
-    ownerLastName: '',
-    ownerEmail: '',
-    ownerPhone: '',
-    pharmacyEmail: '',
-    phone: '',
-    address: '',
-    registrationNumber: '',
-    password: ''
-  })
+  const [clinicForm, setClinicForm] = useState(() => getDefaultClinicForm())
+  const [pharmacyForm, setPharmacyForm] = useState(() => getDefaultPharmacyForm())
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [activeTab, setActiveTab] = useState('clinics')
@@ -78,7 +90,7 @@ const AdminDashboard = () => {
   const [homeContactForm, setHomeContactForm] = useState({
     text: '',
     telegram_link: '',
-    phone_number: '',
+    phone_number: DEFAULT_PHONE_PREFIX,
     instagram_link: '',
     email_display: ''
   })
@@ -136,7 +148,7 @@ const AdminDashboard = () => {
         setHomeContactForm({
           text: data?.text || '',
           telegram_link: data?.telegram_link || '',
-          phone_number: data?.phone_number || '',
+          phone_number: data?.phone_number || DEFAULT_PHONE_PREFIX,
           instagram_link: data?.instagram_link || '',
           email_display: (data?.email_display || data?.email || '')
         })
@@ -267,11 +279,13 @@ const AdminDashboard = () => {
 
   const handleAddClinic = async (e) => {
     e.preventDefault()
+    const clinicEmail = normalizeEmailWithDefaultDomain(clinicForm.email)
     if (
       clinicForm.name &&
       clinicForm.ownerFirstName &&
       clinicForm.ownerLastName &&
-      clinicForm.ownerEmail &&
+      clinicForm.ownerPassportId &&
+      clinicEmail &&
       clinicForm.phone &&
       clinicForm.address &&
       clinicForm.registrationNumber &&
@@ -282,27 +296,17 @@ const AdminDashboard = () => {
           name: clinicForm.name,
           owner_first_name: clinicForm.ownerFirstName,
           owner_last_name: clinicForm.ownerLastName,
-          owner_email: clinicForm.ownerEmail,
-          owner_phone_number: clinicForm.ownerPhone,
+          owner_passport_id: clinicForm.ownerPassportId,
+          owner_email: clinicEmail,
+          owner_phone_number: clinicForm.phone,
           owner_password: clinicForm.password,
-          email: clinicForm.clinicEmail || clinicForm.ownerEmail,
+          email: clinicEmail,
           phone_number: clinicForm.phone,
           address: clinicForm.address,
           registration_number: clinicForm.registrationNumber,
           status: 'active'
         })
-        setClinicForm({
-          name: '',
-          ownerFirstName: '',
-          ownerLastName: '',
-          ownerEmail: '',
-          ownerPhone: '',
-          clinicEmail: '',
-          phone: '',
-          address: '',
-          registrationNumber: '',
-          password: ''
-        })
+        setClinicForm(getDefaultClinicForm())
         setShowAddClinic(false)
         alert('Klinika muvaffaqiyatli qo\'shildi! ✅')
       } catch (error) {
@@ -313,13 +317,37 @@ const AdminDashboard = () => {
     }
   }
 
+  const toggleClinicForm = () => {
+    if (!showAddClinic) {
+      setClinicForm((prev) => ({
+        ...prev,
+        phone: prev.phone || DEFAULT_PHONE_PREFIX,
+        registrationNumber: prev.registrationNumber || generateClinicRegistrationNumber(),
+      }))
+    }
+    setShowAddClinic((prev) => !prev)
+  }
+
+  const togglePharmacyForm = () => {
+    if (!showAddPharmacy) {
+      setPharmacyForm((prev) => ({
+        ...prev,
+        ownerPhone: prev.ownerPhone || DEFAULT_PHONE_PREFIX,
+        phone: prev.phone || DEFAULT_PHONE_PREFIX,
+      }))
+    }
+    setShowAddPharmacy((prev) => !prev)
+  }
+
   const handleAddPharmacy = async (e) => {
     e.preventDefault()
+    const ownerEmail = normalizeEmailWithDefaultDomain(pharmacyForm.ownerEmail)
+    const pharmacyEmail = normalizeEmailWithDefaultDomain(pharmacyForm.pharmacyEmail)
     if (
       pharmacyForm.name &&
       pharmacyForm.ownerFirstName &&
       pharmacyForm.ownerLastName &&
-      pharmacyForm.ownerEmail &&
+      ownerEmail &&
       pharmacyForm.phone &&
       pharmacyForm.address &&
       pharmacyForm.registrationNumber &&
@@ -330,29 +358,18 @@ const AdminDashboard = () => {
           name: pharmacyForm.name,
           owner_first_name: pharmacyForm.ownerFirstName,
           owner_last_name: pharmacyForm.ownerLastName,
-          owner_email: pharmacyForm.ownerEmail,
+          owner_email: ownerEmail,
           owner_phone_number: pharmacyForm.ownerPhone,
           owner_password: pharmacyForm.password,
-          email: pharmacyForm.pharmacyEmail || pharmacyForm.ownerEmail,
+          email: pharmacyEmail || ownerEmail,
           phone_number: pharmacyForm.phone,
           address: pharmacyForm.address,
           registration_number: pharmacyForm.registrationNumber,
           status: 'active'
         })
-        setPharmacyForm({
-          name: '',
-          ownerFirstName: '',
-          ownerLastName: '',
-          ownerEmail: '',
-          ownerPhone: '',
-          pharmacyEmail: '',
-          phone: '',
-          address: '',
-          registrationNumber: '',
-          password: ''
-        })
+        setPharmacyForm(getDefaultPharmacyForm())
         setShowAddPharmacy(false)
-        alert(`Dorixona muvaffaqiyatli qo'shildi! ✅\n\nKirish emaili: ${pharmacyForm.ownerEmail}`)
+        alert(`Dorixona muvaffaqiyatli qo'shildi! ✅\n\nKirish emaili: ${ownerEmail}`)
       } catch (error) {
         console.error('Dorixona qo\'shish xatosi:', error)
         const errorMsg = error.response?.data?.detail || error.message || 'Dorixona qo\'shishda xatolik yuz berdi'
@@ -370,7 +387,7 @@ const AdminDashboard = () => {
       formData.append('telegram_link', homeContactForm.telegram_link || '')
       formData.append('phone_number', homeContactForm.phone_number || '')
       formData.append('instagram_link', homeContactForm.instagram_link || '')
-      const emailValue = (homeContactForm.email_display || '').trim()
+      const emailValue = normalizeEmailWithDefaultDomain(homeContactForm.email_display)
       formData.append('email', emailValue)
       formData.append('email_display', emailValue)
 
@@ -757,7 +774,7 @@ const AdminDashboard = () => {
         {activeTab !== 'contact' && activeTab !== 'alerts' && (
           <button 
             className={`btn-add-clinic`}
-            onClick={() => activeTab === 'clinics' ? setShowAddClinic(!showAddClinic) : setShowAddPharmacy(!showAddPharmacy)}
+            onClick={() => activeTab === 'clinics' ? toggleClinicForm() : togglePharmacyForm()}
           >
             {activeTab === 'clinics' ? (showAddClinic ? '✕ Bekor' : '+ Klinika Qo\'shish') : (showAddPharmacy ? '✕ Bekor' : '+ Dorixona Qo\'shish')}
           </button>
@@ -796,12 +813,13 @@ const AdminDashboard = () => {
               <div className="form-row">
                 <div className="form-group">
                   <label>Matn</label>
-                  <textarea
+                    <label>Email</label>
                     placeholder="Bog'lanish bo'limi matni"
                     value={homeContactForm.text}
                     onChange={(e) => setHomeContactForm({ ...homeContactForm, text: e.target.value })}
-                    rows={4}
-                  />
+                      value={clinicForm.email}
+                      onChange={(e) => setClinicForm({ ...clinicForm, email: e.target.value })}
+                      required
                 </div>
               </div>
 
@@ -843,6 +861,7 @@ const AdminDashboard = () => {
                     placeholder="support@yourdomain.uz"
                     value={homeContactForm.email_display}
                     onChange={(e) => setHomeContactForm({ ...homeContactForm, email_display: e.target.value })}
+                    onBlur={(e) => setHomeContactForm({ ...homeContactForm, email_display: normalizeEmailWithDefaultDomain(e.target.value) })}
                   />
                 </div>
               </div>
@@ -1077,12 +1096,14 @@ const AdminDashboard = () => {
               />
             </div>
             <div className="form-group">
-              <label>Klinika email</label>
+              <label>Email</label>
               <input
                 type="email"
                 placeholder="clinic@example.uz"
-                value={clinicForm.clinicEmail}
-                onChange={(e) => setClinicForm({ ...clinicForm, clinicEmail: e.target.value })}
+                value={clinicForm.email}
+                onChange={(e) => setClinicForm({ ...clinicForm, email: e.target.value })}
+                onBlur={(e) => setClinicForm({ ...clinicForm, email: normalizeEmailWithDefaultDomain(e.target.value) })}
+                required
               />
             </div>
           </div>
@@ -1110,22 +1131,13 @@ const AdminDashboard = () => {
           </div>
           <div className="form-row">
             <div className="form-group">
-              <label>Egasi email</label>
+              <label>Egasi pasport ID</label>
               <input
-                type="email"
-                placeholder="owner@example.uz"
-                value={clinicForm.ownerEmail}
-                onChange={(e) => setClinicForm({ ...clinicForm, ownerEmail: e.target.value })}
+                type="text"
+                placeholder="AA1234567"
+                value={clinicForm.ownerPassportId}
+                onChange={(e) => setClinicForm({ ...clinicForm, ownerPassportId: e.target.value.replace(/\s+/g, '').toUpperCase() })}
                 required
-              />
-            </div>
-            <div className="form-group">
-              <label>Egasi telefon</label>
-              <input
-                type="tel"
-                placeholder="+998 90 123 45 67"
-                value={clinicForm.ownerPhone}
-                onChange={(e) => setClinicForm({ ...clinicForm, ownerPhone: e.target.value })}
               />
             </div>
           </div>
@@ -1134,7 +1146,7 @@ const AdminDashboard = () => {
               <label>Telefon</label>
               <input
                 type="tel"
-                placeholder="Telefon raqami"
+                placeholder="+998 90 123 45 67"
                 value={clinicForm.phone}
                 onChange={(e) => setClinicForm({ ...clinicForm, phone: e.target.value })}
                 required
@@ -1153,14 +1165,15 @@ const AdminDashboard = () => {
           </div>
           <div className="form-row">
             <div className="form-group">
-              <label>Ro'yxat raqami</label>
+              <label>Klinika raqami</label>
               <input
                 type="text"
-                placeholder="REG-001"
+                placeholder="CLN-..."
                 value={clinicForm.registrationNumber}
-                onChange={(e) => setClinicForm({ ...clinicForm, registrationNumber: e.target.value })}
+                readOnly
                 required
               />
+              <small style={{ color: '#6b7280' }}>Avtomatik yaratiladi va takrorlanmaydi.</small>
             </div>
             <div className="form-group">
               <label>Egasi parol</label>
@@ -1198,6 +1211,7 @@ const AdminDashboard = () => {
                 placeholder="pharmacy@example.uz"
                 value={pharmacyForm.pharmacyEmail}
                 onChange={(e) => setPharmacyForm({ ...pharmacyForm, pharmacyEmail: e.target.value })}
+                onBlur={(e) => setPharmacyForm({ ...pharmacyForm, pharmacyEmail: normalizeEmailWithDefaultDomain(e.target.value) })}
               />
             </div>
           </div>
@@ -1231,6 +1245,7 @@ const AdminDashboard = () => {
                 placeholder="owner@example.uz"
                 value={pharmacyForm.ownerEmail}
                 onChange={(e) => setPharmacyForm({ ...pharmacyForm, ownerEmail: e.target.value })}
+                onBlur={(e) => setPharmacyForm({ ...pharmacyForm, ownerEmail: normalizeEmailWithDefaultDomain(e.target.value) })}
                 required
               />
             </div>
@@ -1249,7 +1264,7 @@ const AdminDashboard = () => {
               <label>Telefon</label>
               <input
                 type="tel"
-                placeholder="Telefon raqami"
+                placeholder="+998 90 123 45 67"
                 value={pharmacyForm.phone}
                 onChange={(e) => setPharmacyForm({ ...pharmacyForm, phone: e.target.value })}
                 required
@@ -1303,6 +1318,7 @@ const AdminDashboard = () => {
               <thead>
                 <tr>
                   <th>Klinika</th>
+                  <th>Klinika raqami</th>
                   <th>Email</th>
                   <th>Egasi</th>
                   <th>Telefon</th>
@@ -1317,6 +1333,9 @@ const AdminDashboard = () => {
                   <tr key={clinic.id} className={`status-${clinic.status}`}>
                     <td className="clinic-name">
                       {clinic.name}
+                    </td>
+                    <td>
+                      <code>{clinic.registration_number || '—'}</code>
                     </td>
                     <td className="email-cell">
                       <a href={`mailto:${clinic.clinicEmail}`} title={clinic.clinicEmail}>

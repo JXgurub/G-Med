@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useClinic } from '../context/ClinicContext'
-import { clinicsApi, medicalApi } from '../services/api'
+import { clinicsApi, doctorsApi, medicalApi } from '../services/api'
 import useSmartAutoRefresh from '../hooks/useSmartAutoRefresh'
 import DashboardSidebar from '../components/DashboardSidebar'
 import PasswordInput from '../components/PasswordInput'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './ClinicOwnerDashboard.css'
 
@@ -59,6 +60,8 @@ const DEFAULT_WORKING_HOURS = {
   from: '09:00',
   to: '18:00'
 }
+
+const DEFAULT_PHONE_PREFIX = '+998'
 
 const normalizeTime = (value, fallback) => {
   const source = String(value || '').trim()
@@ -152,7 +155,7 @@ const ClinicOwnerDashboard = () => {
     firstName: '',
     lastName: '',
     email: '',
-    phone: '',
+    phone: DEFAULT_PHONE_PREFIX,
     password: '',
     compensationType: 'salary',
     compensationValue: '',
@@ -193,7 +196,7 @@ const ClinicOwnerDashboard = () => {
     name: '',
     description: '',
     address: '',
-    phone_number: '',
+    phone_number: DEFAULT_PHONE_PREFIX,
     email: '',
     website: '',
     working_hours: '09:00 - 18:00',
@@ -204,6 +207,9 @@ const ClinicOwnerDashboard = () => {
   const [staffMessageSending, setStaffMessageSending] = useState(false)
   const [staffMessageStatus, setStaffMessageStatus] = useState('')
   const [showStaffMessageModal, setShowStaffMessageModal] = useState(false)
+  const [specializationCreateLoading, setSpecializationCreateLoading] = useState(false)
+  const [specializationCreateMessage, setSpecializationCreateMessage] = useState('')
+  const [showSpecializationSuggestions, setShowSpecializationSuggestions] = useState(false)
 
   const dayOptions = [
     { key: 'Mon', label: 'Du' },
@@ -242,22 +248,33 @@ const ClinicOwnerDashboard = () => {
       if (!q) return true
       return spec.name.toLowerCase().includes(q)
     })
-    .slice(0, 6)
 
-  const addSpecializationFromInput = (inputValue) => {
-    const query = String(inputValue || '').trim().toLowerCase()
-    if (!query) return
-
-    const matched = (specializations || []).find(
+  const findMatchingSpecialization = (queryText) => {
+    const query = String(queryText || '').trim().toLowerCase()
+    if (!query) return null
+    return (specializations || []).find(
       (spec) => spec.name.toLowerCase() === query
     ) || (specializations || []).find(
       (spec) => spec.name.toLowerCase().includes(query)
     )
+  }
 
-    if (!matched) return
+  const buildSpecializationCode = (name) => {
+    const base = String(name || '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, '')
+      .slice(0, 8)
+    const suffix = Date.now().toString().slice(-4)
+    return `${base || 'SPEC'}${suffix}`
+  }
+
+  const addSpecializationFromInput = (inputValue) => {
+    const matched = findMatchingSpecialization(inputValue)
+
+    if (!matched) return false
     if (doctorForm.specialization_ids.includes(matched.id)) {
       setDoctorForm((prev) => ({ ...prev, specializationInput: '' }))
-      return
+      return true
     }
 
     setDoctorForm((prev) => ({
@@ -265,6 +282,56 @@ const ClinicOwnerDashboard = () => {
       specialization_ids: [...prev.specialization_ids, matched.id],
       specializationInput: ''
     }))
+    return true
+  }
+
+  const createSpecializationFromInput = async (inputValue) => {
+    const rawName = String(inputValue || '').trim()
+    if (!rawName) return
+
+    const existingMatch = findMatchingSpecialization(rawName)
+    if (existingMatch) {
+      addSpecializationFromInput(rawName)
+      return
+    }
+
+    const normalizedName = rawName.replace(/\s+/g, ' ')
+    setSpecializationCreateLoading(true)
+    setSpecializationCreateMessage('')
+
+    try {
+      const created = await doctorsApi.createSpecialization({
+        name: normalizedName,
+        code: buildSpecializationCode(normalizedName)
+      })
+
+      const refreshed = await fetchSpecializations()
+      const refreshedList = refreshed?.results || refreshed || []
+      const createdSpec = created?.id
+        ? created
+        : refreshedList.find((item) => String(item?.name || '').toLowerCase() === normalizedName.toLowerCase())
+
+      if (!createdSpec?.id) {
+        throw new Error('Ixtisoslik yaratildi, lekin ro\'yxatdan topilmadi.')
+      }
+
+      setDoctorForm((prev) => {
+        const alreadySelected = prev.specialization_ids.includes(createdSpec.id)
+        return {
+          ...prev,
+          specialization_ids: alreadySelected
+            ? prev.specialization_ids
+            : [...prev.specialization_ids, createdSpec.id],
+          specializationInput: ''
+        }
+      })
+      setSpecializationCreateMessage(`"${normalizedName}" qo'shildi.`)
+    } catch (error) {
+      const detail = error?.response?.data?.detail
+      setSpecializationCreateMessage(detail || 'Ixtisoslikni yaratib bo\'lmadi.')
+    } finally {
+      setSpecializationCreateLoading(false)
+    }
   }
 
   const removeSpecialization = (specId) => {
@@ -284,6 +351,17 @@ const ClinicOwnerDashboard = () => {
   const [clinicStatsUpdatedAt, setClinicStatsUpdatedAt] = useState(null)
 
   useEffect(() => {
+    if (!showAddDoctor) return
+    // Always refresh specializations when opening the doctor form.
+    fetchSpecializations()
+  }, [showAddDoctor])
+
+  useEffect(() => {
+    if (showAddDoctor) return
+    setShowSpecializationSuggestions(false)
+  }, [showAddDoctor])
+
+  useEffect(() => {
     // Allow sidebar route to open appointments stats without adding extra top tabs
     const path = location.pathname || ''
     if (path.includes('/clinic-dashboard/appointments')) {
@@ -301,7 +379,7 @@ const ClinicOwnerDashboard = () => {
       name: clinicOwner.name || clinicOwner.clinicName || '',
       description: clinicOwner.description || '',
       address: clinicOwner.address || clinicOwner.location || '',
-      phone_number: clinicOwner.phone_number || clinicOwner.clinicPhone || '',
+      phone_number: clinicOwner.phone_number || clinicOwner.clinicPhone || DEFAULT_PHONE_PREFIX,
       email: clinicOwner.email || '',
       website: clinicOwner.website || '',
       working_hours: clinicOwner.working_hours || '09:00 - 18:00',
@@ -329,7 +407,7 @@ const ClinicOwnerDashboard = () => {
         description: settingsForm.description,
         address: settingsForm.address,
         phone_number: settingsForm.phone_number,
-        email: settingsForm.email,
+        email: normalizeEmailWithDefaultDomain(settingsForm.email),
         website: settingsForm.website,
         working_hours: workingHoursValue,
         ...(settingsForm.owner_password ? { owner_password: settingsForm.owner_password } : {})
@@ -465,9 +543,18 @@ const ClinicOwnerDashboard = () => {
   const handleAddDoctor = async (e) => {
     e.preventDefault()
     setDoctorFormErrors({})
-    const pinfl = (doctorForm.pinfl || '').trim()
+    const normalizedDoctorEmail = normalizeEmailWithDefaultDomain(doctorForm.email)
+    const pinfl = String(doctorForm.pinfl || '').replace(/\D+/g, '')
     if (!pinfl) {
-      alert("PINFL kiritish majburiy.")
+      alert("JSHSHIR kiritish majburiy.")
+      return
+    }
+    if (pinfl.length !== String(doctorForm.pinfl || '').trim().length) {
+      alert("JSHSHIR faqat raqamlardan iborat bo'lishi kerak.")
+      return
+    }
+    if (pinfl.length !== 14) {
+      alert("JSHSHIR 14 ta raqamdan iborat bo'lishi kerak.")
       return
     }
 
@@ -482,7 +569,7 @@ const ClinicOwnerDashboard = () => {
     if (!isPinflOnlyRehire && (
       !doctorForm.firstName ||
       !doctorForm.lastName ||
-      !doctorForm.email ||
+      !normalizedDoctorEmail ||
       !doctorForm.phone ||
       !doctorForm.password ||
       !doctorForm.consultationFee ||
@@ -522,7 +609,7 @@ const ClinicOwnerDashboard = () => {
             pinfl,
             first_name: doctorForm.firstName,
             last_name: doctorForm.lastName,
-            email: doctorForm.email,
+            email: normalizedDoctorEmail,
             phone_number: doctorForm.phone,
             password: doctorForm.password,
             date_of_birth: doctorForm.dateOfBirth || null,
@@ -548,7 +635,7 @@ const ClinicOwnerDashboard = () => {
         firstName: '',
         lastName: '',
         email: '',
-        phone: '',
+        phone: DEFAULT_PHONE_PREFIX,
         password: '',
         compensationType: 'salary',
         compensationValue: '',
@@ -565,7 +652,7 @@ const ClinicOwnerDashboard = () => {
       setCompensationClearedOnFocus(false)
       setDoctorFormErrors({})
       setShowAddDoctor(false)
-      alert(isPinflOnlyRehire ? "Doktor PINFL bo'yicha klinikaga biriktirildi!" : "Doktor qo'shildi!")
+      alert(isPinflOnlyRehire ? "Doktor JSHSHIR bo'yicha klinikaga biriktirildi!" : "Doktor qo'shildi!")
     } catch (error) {
       const emailErrorRaw = error?.response?.data?.email
       const emailError = Array.isArray(emailErrorRaw)
@@ -1274,6 +1361,7 @@ const ClinicOwnerDashboard = () => {
                         type="email"
                         value={settingsForm.email}
                         onChange={(e) => setSettingsForm({ ...settingsForm, email: e.target.value })}
+                        onBlur={(e) => setSettingsForm({ ...settingsForm, email: normalizeEmailWithDefaultDomain(e.target.value) })}
                         required
                         disabled={settingsSaving}
                       />
@@ -1444,12 +1532,15 @@ const ClinicOwnerDashboard = () => {
                   <form className="add-doctor-form" onSubmit={handleAddDoctor}>
                     <div className="form-grid">
                       <div className="form-group">
-                        <label>PINFL</label>
+                        <label>JSHSHIR</label>
                         <input
                           type="text"
+                          inputMode="numeric"
+                          pattern="[0-9]*"
+                          maxLength={14}
                           placeholder="12345678901234"
                           value={doctorForm.pinfl}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, pinfl: e.target.value })}
+                          onChange={(e) => setDoctorForm({ ...doctorForm, pinfl: e.target.value.replace(/\D+/g, '') })}
                           required
                         />
                       </div>
@@ -1459,7 +1550,7 @@ const ClinicOwnerDashboard = () => {
                           type="text"
                           placeholder="AA1234567"
                           value={doctorForm.passportId}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, passportId: e.target.value })}
+                          onChange={(e) => setDoctorForm({ ...doctorForm, passportId: e.target.value.replace(/\s+/g, '').toUpperCase() })}
                         />
                       </div>
                       <div className="form-group">
@@ -1502,6 +1593,7 @@ const ClinicOwnerDashboard = () => {
                               setDoctorFormErrors((prev) => ({ ...prev, email: '' }))
                             }
                           }}
+                          onBlur={(e) => setDoctorForm({ ...doctorForm, email: normalizeEmailWithDefaultDomain(e.target.value) })}
                         />
                         {doctorFormErrors.email && (
                           <p className="form-field-error">{doctorFormErrors.email}</p>
@@ -1586,16 +1678,30 @@ const ClinicOwnerDashboard = () => {
                             type="text"
                             placeholder="Ixtisoslik nomini yozing (masalan: kard...)"
                             value={doctorForm.specializationInput}
-                            onChange={(e) => setDoctorForm({ ...doctorForm, specializationInput: e.target.value })}
+                            onFocus={() => {
+                              setShowSpecializationSuggestions(true)
+                              if (!(specializations || []).length) {
+                                fetchSpecializations()
+                              }
+                            }}
+                            onChange={(e) => {
+                              setDoctorForm({ ...doctorForm, specializationInput: e.target.value })
+                              if (specializationCreateMessage) {
+                                setSpecializationCreateMessage('')
+                              }
+                            }}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' || e.key === ',') {
                                 e.preventDefault()
                                 addSpecializationFromInput(doctorForm.specializationInput)
                               }
                             }}
-                            onBlur={() => addSpecializationFromInput(doctorForm.specializationInput)}
+                            onBlur={() => {
+                              addSpecializationFromInput(doctorForm.specializationInput)
+                              setTimeout(() => setShowSpecializationSuggestions(false), 120)
+                            }}
                           />
-                          {doctorForm.specializationInput.trim() && specializationSuggestions.length > 0 && (
+                          {showSpecializationSuggestions && specializationSuggestions.length > 0 && (
                             <div className="specialization-suggestions">
                               {specializationSuggestions.map((spec) => (
                                 <button
@@ -1615,6 +1721,24 @@ const ClinicOwnerDashboard = () => {
                                 </button>
                               ))}
                             </div>
+                          )}
+                          {doctorForm.specializationInput.trim() && specializationSuggestions.length === 0 && (
+                            <div className="spec-required-hint" style={{ marginTop: '8px' }}>
+                              Ro'yxatda topilmadi.
+                              {' '}
+                              <button
+                                type="button"
+                                className="btn-refresh-specs"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => createSpecializationFromInput(doctorForm.specializationInput)}
+                                disabled={specializationCreateLoading}
+                              >
+                                {specializationCreateLoading ? 'Yaratilmoqda...' : 'Yangi ixtisoslik qo\'shish'}
+                              </button>
+                            </div>
+                          )}
+                          {specializationCreateMessage && (
+                            <p className="spec-required-hint">{specializationCreateMessage}</p>
                           )}
                         </div>
 

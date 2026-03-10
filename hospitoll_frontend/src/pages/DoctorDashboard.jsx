@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useDoctor } from '../context/DoctorContext'
 import { clinicsApi, patientsApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './DoctorDashboard.css'
 
@@ -54,9 +55,11 @@ const createInitialQueueCancelConfirm = () => ({
   appointment: null,
 })
 
+const DEFAULT_PHONE_PREFIX = '+998'
+
 const createInitialPatientForm = () => ({
   fullName: '',
-  phone: '',
+  phone: DEFAULT_PHONE_PREFIX,
   passportId: '',
   complaint: '',
   diagnosis: '',
@@ -129,7 +132,7 @@ const DoctorDashboard = () => {
     firstName: '',
     lastName: '',
     email: '',
-    phone: '',
+    phone: DEFAULT_PHONE_PREFIX,
     bio: '',
     pinfl: '',
     passportId: '',
@@ -195,7 +198,7 @@ const DoctorDashboard = () => {
       firstName: doctor.firstName || '',
       lastName: doctor.lastName || '',
       email: doctor.email || '',
-      phone: doctor.phone || '',
+      phone: doctor.phone || DEFAULT_PHONE_PREFIX,
       bio: doctor.bio || '',
       pinfl: doctor.pinfl || '',
       passportId: doctor.passportId || '',
@@ -315,7 +318,7 @@ const DoctorDashboard = () => {
       const payload = {
         first_name: settingsForm.firstName,
         last_name: settingsForm.lastName,
-        email: settingsForm.email,
+        email: normalizeEmailWithDefaultDomain(settingsForm.email),
         phone_number: settingsForm.phone,
         bio: settingsForm.bio,
         license_number: settingsForm.licenseNumber,
@@ -397,7 +400,11 @@ const DoctorDashboard = () => {
     }
 
     try {
-      await addPatient(patientForm)
+      const patientPayload = {
+        ...patientForm,
+        email: normalizeEmailWithDefaultDomain(patientForm.email),
+      }
+      await addPatient(patientPayload)
       setPatientForm(createInitialPatientForm())
       setShowAddPatient(false)
       alert(`${patientForm.fullName} qo'shildi! ✅`)
@@ -616,6 +623,12 @@ const DoctorDashboard = () => {
   }
 
   const handleQueueDecision = async (appointment, decision) => {
+    const queueLeaderId = onlineAppointments?.[0]?.id
+    if ((decision === 'enter' || decision === 'wait') && queueLeaderId && appointment?.id !== queueLeaderId) {
+      alert('Avval navbatdagi 1-bemor bilan ishlang. Kerak bo\'lsa navbatni yangilang.')
+      return
+    }
+
     if (decision === 'cancel') {
       setQueueCancelConfirm({ open: true, appointment })
       return
@@ -958,7 +971,12 @@ const DoctorDashboard = () => {
                   </div>
                   <div className="doctor-settings-field">
                     <label>Email</label>
-                    <input type="email" value={settingsForm.email} onChange={(e) => setSettingsForm((prev) => ({ ...prev, email: e.target.value }))} />
+                    <input
+                      type="email"
+                      value={settingsForm.email}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, email: e.target.value }))}
+                      onBlur={(e) => setSettingsForm((prev) => ({ ...prev, email: normalizeEmailWithDefaultDomain(e.target.value) }))}
+                    />
                   </div>
                   <div className="doctor-settings-field">
                     <label>Telefon</label>
@@ -968,8 +986,10 @@ const DoctorDashboard = () => {
                     <label>PINFL</label>
                     <input
                       type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
                       value={settingsForm.pinfl}
-                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, pinfl: e.target.value }))}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, pinfl: e.target.value.replace(/\D+/g, '') }))}
                       disabled={Boolean(doctor.pinfl)}
                       placeholder={doctor.pinfl ? 'PINFL saqlangan' : 'PINFL kiriting'}
                     />
@@ -1201,10 +1221,13 @@ const DoctorDashboard = () => {
                       const timeLabel = scheduled.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })
                       const dateLabel = scheduled.toLocaleDateString('uz-UZ')
                       const isQueueLeader = index === 0
+                      const queueLabel = appointment.queue_position || index + 1
+                      const queueLocked = !isQueueLeader
                       return (
                         <div key={appointment.id} className="appointment-card">
                           <div className="appointment-info">
                             <h4>{appointment.patient_info?.fullName || 'Bemor'}</h4>
+                            <p>📌 Navbat raqami: #{queueLabel}</p>
                             <p>📋 {appointment.patient_info?.passportId || 'ID yo\'q'} • 📱 {appointment.patient_info?.phone || 'Telefon yo\'q'}</p>
                             <p>🗓 {dateLabel} • ⏰ {timeLabel}</p>
                             {appointment.reason && <p>📝 {appointment.reason}</p>}
@@ -1213,22 +1236,26 @@ const DoctorDashboard = () => {
                             <button
                               className="btn-accept"
                               onClick={() => handleAcceptAppointment(appointment)}
+                              disabled={queueLocked}
+                              title={queueLocked ? 'Faqat navbatdagi birinchi bemorni qabul qilish mumkin' : ''}
                             >
-                              Qabul qildim
+                              Qabulni boshlash
                             </button>
                             <button
                               className={`btn-enter ${queueDecisionLoading[`${appointment.id}:enter`] ? 'is-loading' : ''}`}
                               onClick={() => handleQueueDecision(appointment, 'enter')}
-                              disabled={Boolean(queueDecisionLoading[`${appointment.id}:enter`] || queueDecisionLoading[`${appointment.id}:wait`] || queueDecisionLoading[`${appointment.id}:cancel`])}
+                              disabled={Boolean(queueLocked || queueDecisionLoading[`${appointment.id}:enter`] || queueDecisionLoading[`${appointment.id}:wait`] || queueDecisionLoading[`${appointment.id}:cancel`])}
+                              title={queueLocked ? 'Faqat navbatdagi birinchi bemorni chaqirish mumkin' : ''}
                             >
-                              {queueDecisionLoading[`${appointment.id}:enter`] ? 'Yuborilmoqda...' : 'Kiring'}
+                              {queueDecisionLoading[`${appointment.id}:enter`] ? 'Yuborilmoqda...' : 'Kirishga chaqir'}
                             </button>
                             <button
                               className={`btn-wait ${queueDecisionLoading[`${appointment.id}:wait`] ? 'is-loading' : ''}`}
                               onClick={() => handleQueueDecision(appointment, 'wait')}
-                              disabled={Boolean(queueDecisionLoading[`${appointment.id}:wait`] || queueDecisionLoading[`${appointment.id}:enter`] || queueDecisionLoading[`${appointment.id}:cancel`])}
+                              disabled={Boolean(queueLocked || queueDecisionLoading[`${appointment.id}:wait`] || queueDecisionLoading[`${appointment.id}:enter`] || queueDecisionLoading[`${appointment.id}:cancel`])}
+                              title={queueLocked ? 'Faqat navbatdagi birinchi bemorga kutish beriladi' : ''}
                             >
-                              {queueDecisionLoading[`${appointment.id}:wait`] ? 'Hisoblanmoqda...' : 'Kuting'}
+                              {queueDecisionLoading[`${appointment.id}:wait`] ? 'Hisoblanmoqda...' : '15 daqiqa kuting'}
                             </button>
                             {isQueueLeader ? (
                               <button
@@ -1473,6 +1500,7 @@ const DoctorDashboard = () => {
                     placeholder="Email (ixtiyoriy)"
                     value={patientForm.email}
                     onChange={(e) => setPatientForm({ ...patientForm, email: e.target.value })}
+                    onBlur={(e) => setPatientForm({ ...patientForm, email: normalizeEmailWithDefaultDomain(e.target.value) })}
                   />
                 </div>
                 <div className="form-group">

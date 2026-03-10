@@ -13,6 +13,7 @@ import ClinicOwnerLogin from './pages/ClinicOwnerLogin'
 import ClinicOwnerDashboard from './pages/ClinicOwnerDashboard'
 import DirectionsPage from './pages/DirectionsPage'
 import DoctorLogin from './pages/DoctorLogin'
+import DoctorForgotPassword from './pages/DoctorForgotPassword'
 import DoctorDashboard from './pages/DoctorDashboard'
 import AdminLogin from './pages/AdminLogin'
 import AdminDashboard from './pages/AdminDashboard'
@@ -56,6 +57,7 @@ function App() {
                   <Route path="/clinic-dashboard/directions" element={<DirectionsPage />} />
                   <Route path="/clinic-dashboard/*" element={<ClinicOwnerDashboard />} />
                   <Route path="/doctor-login" element={<DoctorLogin />} />
+                  <Route path="/doctor-forgot-password" element={<DoctorForgotPassword />} />
                   <Route path="/doctor-dashboard" element={<DoctorDashboard />} />
                   <Route path="/admin-login" element={<AdminLogin />} />
                   <Route path="/admin-dashboard" element={<AdminDashboard />} />

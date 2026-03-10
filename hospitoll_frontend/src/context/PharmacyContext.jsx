@@ -28,6 +28,39 @@ const normalizePharmacy = (pharmacy) => ({
   logoUrl: resolveMediaUrl(pharmacy.logo),
 })
 
+const MAX_INVENTORY_PAGE_FETCH = 500
+
+const fetchAllInventoryRows = async (pharmacyId) => {
+  let page = 1
+  let allRows = []
+
+  while (page <= MAX_INVENTORY_PAGE_FETCH) {
+    const response = await pharmacyInventoryApi.getAll({ pharmacy: pharmacyId, page })
+
+    if (Array.isArray(response)) {
+      allRows = response
+      break
+    }
+
+    const pageRows = Array.isArray(response?.results) ? response.results : []
+    allRows = allRows.concat(pageRows)
+
+    const totalCount = Number(response?.count || 0)
+    const hasNext = Boolean(response?.next)
+    if (!hasNext || pageRows.length === 0 || (totalCount > 0 && allRows.length >= totalCount)) {
+      break
+    }
+
+    page += 1
+  }
+
+  if (page > MAX_INVENTORY_PAGE_FETCH) {
+    console.warn(`[PharmacyContext] Inventory fetch reached page limit (${MAX_INVENTORY_PAGE_FETCH})`)
+  }
+
+  return allRows
+}
+
 export const PharmacyProvider = ({ children }) => {
   const [pharmacies, setPharmacies] = useState([])
   const [currentPharmacy, setCurrentPharmacy] = useState(null)
@@ -36,8 +69,7 @@ export const PharmacyProvider = ({ children }) => {
 
   const loadPharmacyInventory = async (pharmacyId) => {
     try {
-      const inventory = await pharmacyInventoryApi.getAll({ pharmacy: pharmacyId })
-      const items = inventory?.results || inventory || []
+      const items = await fetchAllInventoryRows(pharmacyId)
       const mapped = items.map((item) => ({
         ...item,
         medicine_name: item.medicine_name || item.medicine_name_fallback,
@@ -233,7 +265,8 @@ export const PharmacyProvider = ({ children }) => {
     return medicines.find((m) => m.id === medicineId)
   }
 
-  const addMedicine = async (pharmacyId, medicineData) => {
+  const addMedicine = async (pharmacyId, medicineData, options = {}) => {
+    const { skipReload = false } = options
     const requestedName = (medicineData.name || '').trim()
     const existingMedicine = medicines.find(
       (med) => normalizeMedicineName(med.name) === normalizeMedicineName(requestedName)
@@ -244,7 +277,7 @@ export const PharmacyProvider = ({ children }) => {
         ...medicineData,
         name: requestedName,
         category: medicineData.category || existingMedicine.category,
-      })
+      }, { skipReload })
       return { mode: 'updated_existing', medicineId: existingMedicine.id }
     }
 
@@ -267,11 +300,14 @@ export const PharmacyProvider = ({ children }) => {
       is_available: true
     })
 
-    await loadPharmacyInventory(pharmacyId)
+    if (!skipReload) {
+      await loadPharmacyInventory(pharmacyId)
+    }
     return { mode: 'created', medicineId: inventoryItem.id }
   }
 
-  const updateMedicine = async (pharmacyId, medicineId, updates) => {
+  const updateMedicine = async (pharmacyId, medicineId, updates, options = {}) => {
+    const { skipReload = false } = options
     const inventoryId = medicineId
     const targetMedicine = medicines.find((med) => med.id === medicineId)
     if (!targetMedicine) {
@@ -288,12 +324,23 @@ export const PharmacyProvider = ({ children }) => {
       unit_price: parseInt(updates.price, 10)
     })
 
-    await loadPharmacyInventory(pharmacyId)
+    if (!skipReload) {
+      await loadPharmacyInventory(pharmacyId)
+    }
   }
 
   const deleteMedicine = async (pharmacyId, medicineId) => {
     await pharmacyInventoryApi.delete(medicineId)
     await loadPharmacyInventory(pharmacyId)
+  }
+
+  const clearAllMedicines = async (pharmacyId) => {
+    const result = await pharmacyInventoryApi.clearAll()
+    const deletedCount = Number(result?.deleted_count || 0)
+    const failedCount = 0
+
+    await loadPharmacyInventory(pharmacyId)
+    return { deletedCount, failedCount }
   }
 
   const uploadPharmacyLogo = async (file) => {
@@ -358,6 +405,7 @@ export const PharmacyProvider = ({ children }) => {
         addMedicine,
         updateMedicine,
         deleteMedicine,
+        clearAllMedicines,
         uploadPharmacyLogo,
         removePharmacyLogo,
         refreshCurrentPharmacyData

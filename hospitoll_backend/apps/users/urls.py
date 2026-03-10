@@ -9,6 +9,9 @@ from .views import (
     PasswordResetRequestView,
     PasswordResetVerifyView,
     PasswordResetConfirmView,
+    DoctorPasswordResetRequestView,
+    DoctorPasswordResetVerifyView,
+    DoctorPasswordResetConfirmView,
 )
 
 urlpatterns = [
@@ -20,4 +23,7 @@ urlpatterns = [
     path('password-reset/request/', PasswordResetRequestView.as_view(), name='password_reset_request'),
     path('password-reset/verify/', PasswordResetVerifyView.as_view(), name='password_reset_verify'),
     path('password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password_reset_confirm'),
+    path('doctor-password-reset/request/', DoctorPasswordResetRequestView.as_view(), name='doctor_password_reset_request'),
+    path('doctor-password-reset/verify/', DoctorPasswordResetVerifyView.as_view(), name='doctor_password_reset_verify'),
+    path('doctor-password-reset/confirm/', DoctorPasswordResetConfirmView.as_view(), name='doctor_password_reset_confirm'),
 ]

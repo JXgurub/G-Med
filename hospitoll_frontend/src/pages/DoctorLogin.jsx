@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDoctor } from '../context/DoctorContext'
 import PasswordInput from '../components/PasswordInput'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import './DoctorLogin.css'
 
 const DoctorLogin = () => {
@@ -17,7 +18,8 @@ const DoctorLogin = () => {
     setError('')
     setLoading(true)
 
-    const result = await loginDoctor(email, password)
+    const normalizedEmail = normalizeEmailWithDefaultDomain(email)
+    const result = await loginDoctor(normalizedEmail, password)
     if (result.success) {
       navigate('/doctor-dashboard')
     } else {
@@ -49,6 +51,7 @@ const DoctorLogin = () => {
                 placeholder="doctor@example.uz"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={(e) => setEmail(normalizeEmailWithDefaultDomain(e.target.value))}
                 disabled={loading}
                 autoFocus
               />
@@ -73,6 +76,15 @@ const DoctorLogin = () => {
               disabled={loading || !email || !password}
             >
               {loading ? 'Kirish...' : 'Kirish'}
+            </button>
+
+            <button
+              type="button"
+              className="btn-forgot"
+              onClick={() => navigate('/doctor-forgot-password')}
+              disabled={loading}
+            >
+              Parolni unutdingizmi?
             </button>
           </form>
 

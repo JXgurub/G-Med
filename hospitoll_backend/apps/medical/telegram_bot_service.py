@@ -11,9 +11,8 @@ from django.db import IntegrityError
 from django.db import models
 from django.utils import timezone
 
-from apps.doctors.models import DoctorAvailability
+from apps.doctors.models import Doctor, DoctorAvailability
 from apps.medical.models import Appointment, TelegramConversationState
-from apps.medical.schedule_utils import validate_doctor_booking_window
 from apps.medical.schedule_utils import validate_doctor_booking_window
 
 logger = logging.getLogger(__name__)
@@ -112,6 +111,10 @@ class TelegramBotService:
             self._handle_myappointments(ctx)
             return
 
+        if text.startswith("/doctorlink"):
+            self._handle_doctor_link(ctx)
+            return
+
         # Reschedule conversation state (awaiting date/time)
         state = (
             TelegramConversationState.objects.filter(
@@ -130,7 +133,65 @@ class TelegramBotService:
             ctx.chat_id,
             "Buyruqlar:\n"
             "• /myappointments — yaqin randevular\n"
+            "• /doctorlink <tel> <passport> <pinfl> — doktor akkauntni bog'lash\n"
             "Token bilan tasdiqlash uchun: /start &lt;telegram_token&gt;",
+        )
+
+    def _handle_doctor_link(self, ctx: TelegramMessageContext) -> None:
+        parts = ctx.text.split(maxsplit=3)
+        if len(parts) < 4:
+            self._require_client().send_message(
+                ctx.chat_id,
+                "Format: /doctorlink &lt;tel&gt; &lt;passport&gt; &lt;pinfl&gt;\n"
+                "Misol: /doctorlink +998901234567 AA1234567 12345678901234",
+            )
+            return
+
+        _, phone_raw, passport_raw, pinfl_raw = parts
+
+        def _digits_only(value: str) -> str:
+            return re.sub(r"\D+", "", str(value or ''))
+
+        phone_digits = _digits_only(phone_raw)
+        passport_digits = _digits_only(passport_raw)
+        pinfl_digits = _digits_only(pinfl_raw)
+
+        pinfl_clean = str(pinfl_raw or '').strip()
+        pinfl_digits_only = bool(pinfl_clean) and pinfl_clean.isdigit()
+
+        if len(phone_digits) < 9 or len(passport_digits) < 5 or len(pinfl_digits) < 10 or not pinfl_digits_only:
+            self._require_client().send_message(
+                ctx.chat_id,
+                "Kiritilgan ma'lumotlar noto'g'ri. PINFL faqat raqamlardan iborat bo'lishi kerak.",
+            )
+            return
+
+        doctor = None
+        candidates = Doctor.objects.select_related('user').filter(user__is_active=True, user__role='doctor', is_active=True)
+        for item in candidates:
+            stored_phone = _digits_only((item.user.phone_number or '').strip())
+            stored_passport = _digits_only((item.passport_id or '').strip())
+            stored_pinfl = _digits_only((item.pinfl or '').strip())
+            if not stored_phone or not stored_passport or not stored_pinfl:
+                continue
+            phone_ok = len(stored_phone) >= 9 and stored_phone[-9:] == phone_digits[-9:]
+            if phone_ok and stored_passport == passport_digits and stored_pinfl == pinfl_digits:
+                doctor = item
+                break
+
+        if not doctor:
+            self._require_client().send_message(
+                ctx.chat_id,
+                "Doktor ma'lumotlari topilmadi. Tel/Passport/PINFL ni tekshirib qayta urinib ko'ring.",
+            )
+            return
+
+        doctor.telegram_user_id = ctx.user_id
+        doctor.telegram_chat_id = ctx.chat_id
+        doctor.save(update_fields=['telegram_user_id', 'telegram_chat_id', 'updated_at'])
+        self._require_client().send_message(
+            ctx.chat_id,
+            "✅ Doktor akkauntingiz Telegram botga ulandi. Endi parol tiklash kodi shu yerga yuboriladi.",
         )
 
     def _handle_start(self, ctx: TelegramMessageContext, token: str) -> None:
@@ -367,7 +428,7 @@ class TelegramBotService:
 
     def _cancel_appointment_from_bot(self, telegram_user_id: int, chat_id: int, appointment_id: str, compress_queue: bool = False) -> None:
         with transaction.atomic():
-            appt = Appointment.objects.select_for_update().select_related("slot").filter(id=appointment_id).first()
+            appt = Appointment.objects.select_for_update().filter(id=appointment_id).first()
             if not appt or appt.telegram_user_id != telegram_user_id:
                 self._require_client().send_message(chat_id, "Randevu topilmadi yoki ruxsat yo‘q.")
                 return
@@ -751,7 +812,7 @@ class TelegramBotService:
         req_end = req_end_dt.time()
 
         with transaction.atomic():
-            appt = Appointment.objects.select_for_update().select_related("slot").get(id=appt.id)
+            appt = Appointment.objects.select_for_update().get(id=appt.id)
             try:
                 slot_obj, _ = DoctorAvailability.objects.get_or_create(
                     doctor=doctor,

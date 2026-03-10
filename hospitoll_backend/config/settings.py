@@ -44,6 +44,8 @@ INSTALLED_APPS = [
     'django_filters',
     'drf_spectacular',
     'channels',
+    'django_celery_beat',
+    'django_celery_results',
     
     # Local apps
     'apps.users',
@@ -176,6 +178,9 @@ REST_FRAMEWORK = {
         'user': '1200/hour',
         'auth': '20/minute',
         'password_reset': '5/hour',
+        'password_reset_request': '5/hour',
+        'password_reset_verify': '30/hour',
+        'password_reset_confirm': '20/hour',
     },
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
@@ -266,6 +271,7 @@ FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
 TELEGRAM_BOT_TOKEN = config('TELEGRAM_BOT_TOKEN', default='')
 TELEGRAM_BOT_USERNAME = config('TELEGRAM_BOT_USERNAME', default='hosptol_bot')
 TELEGRAM_WEBHOOK_SECRET = config('TELEGRAM_WEBHOOK_SECRET', default='')
+ADMIN_TELEGRAM_URL = config('ADMIN_TELEGRAM_URL', default='')
 
 # Celery Configuration
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')

@@ -109,6 +109,7 @@ const toDelimitedText = (rows, delimiter = ',') => rows
   .join('\n')
 
 const PharmacyOwnerDashboard = () => {
+  const DEFAULT_PHONE_PREFIX = '+998'
   const navigate = useNavigate()
   const {
     currentPharmacy,
@@ -118,6 +119,7 @@ const PharmacyOwnerDashboard = () => {
     addMedicine,
     updateMedicine,
     deleteMedicine,
+    clearAllMedicines,
     uploadPharmacyLogo,
     removePharmacyLogo,
     refreshCurrentPharmacyData
@@ -129,7 +131,7 @@ const PharmacyOwnerDashboard = () => {
   const [showPharmacyEdit, setShowPharmacyEdit] = useState(false)
   const [pharmacyInfo, setPharmacyInfo] = useState({
     address: '',
-    phone_number: '',
+    phone_number: DEFAULT_PHONE_PREFIX,
     working_hours: ''
   })
   const [updatingPharmacy, setUpdatingPharmacy] = useState(false)
@@ -154,6 +156,8 @@ const PharmacyOwnerDashboard = () => {
   const [medicineTransferMessage, setMedicineTransferMessage] = useState('')
   const [medicineTransferType, setMedicineTransferType] = useState('success')
   const [medicineImporting, setMedicineImporting] = useState(false)
+  const [pendingImportFile, setPendingImportFile] = useState(null)
+  const [bulkDeletingMedicines, setBulkDeletingMedicines] = useState(false)
   const [medicinesUpdatedAt, setMedicinesUpdatedAt] = useState(null)
   const logoInputRef = useRef(null)
   const logoActionWrapRef = useRef(null)
@@ -178,7 +182,7 @@ const PharmacyOwnerDashboard = () => {
     // Initialize pharmacy info
     setPharmacyInfo({
       address: currentPharmacy.address || '',
-      phone_number: currentPharmacy.phone_number || currentPharmacy.phone || '',
+      phone_number: currentPharmacy.phone_number || currentPharmacy.phone || DEFAULT_PHONE_PREFIX,
       working_hours: currentPharmacy.working_hours || '09:00 - 20:00'
     })
   }, [currentPharmacy, loading, navigate, pharmacyMedicines])
@@ -357,6 +361,33 @@ const PharmacyOwnerDashboard = () => {
     if (window.confirm('Rostlik olib tashlamoqchisiz?')) {
       deleteMedicine(currentPharmacy.id, medicineId)
       alert('Dori o\'chirildi! ✅')
+    }
+  }
+
+  const handleDeleteAllMedicines = async () => {
+    if (!currentPharmacy?.id) return
+    if (medicines.length === 0) {
+      alert('O\'chirish uchun dori topilmadi')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Rostdan ham barcha dorilarni o\'chirmoqchimisiz?\nJami: ${medicines.length} ta dori.`
+    )
+    if (!confirmed) return
+
+    setBulkDeletingMedicines(true)
+    try {
+      const result = await clearAllMedicines(currentPharmacy.id)
+      if (result.failedCount > 0) {
+        alert(`Qisman bajarildi: o\'chirildi ${result.deletedCount}, xatolik ${result.failedCount}.`)
+      } else {
+        alert(`Barcha dorilar o\'chirildi: ${result.deletedCount} ta ✅`)
+      }
+    } catch (error) {
+      alert('Barcha dorilarni o\'chirishda xatolik: ' + (error?.message || 'noma\'lum xatolik'))
+    } finally {
+      setBulkDeletingMedicines(false)
     }
   }
 
@@ -570,41 +601,69 @@ const PharmacyOwnerDashboard = () => {
     medicineImportInputRef.current?.click()
   }
 
-  const handleImportMedicines = async (event) => {
+  const parseImportedRowsFromFile = async (file) => {
+    const fileName = file.name.toLowerCase()
+    let rawRows = []
+
+    if (fileName.endsWith('.json')) {
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      if (Array.isArray(parsed)) {
+        rawRows = parsed
+      } else if (Array.isArray(parsed?.medicines)) {
+        rawRows = parsed.medicines
+      }
+    } else {
+      const XLSX = await import('xlsx')
+      const buffer = await file.arrayBuffer()
+      const workbook = XLSX.read(buffer, { type: 'array' })
+      const firstSheetName = workbook.SheetNames?.[0]
+      if (firstSheetName) {
+        const firstSheet = workbook.Sheets[firstSheetName]
+        rawRows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' })
+      }
+    }
+
+    const mappedRows = rawRows.map(mapImportedMedicineRow).filter(Boolean)
+    return { rawRows, mappedRows }
+  }
+
+  const handleImportFileSelected = async (event) => {
     const file = event.target.files?.[0]
     event.target.value = ''
 
     if (!file || !currentPharmacy?.id) return
 
-    setMedicineImporting(true)
-    setMedicineTransferMessage('')
-
     try {
-      const fileName = file.name.toLowerCase()
-      let rawRows = []
+      const { mappedRows } = await parseImportedRowsFromFile(file)
+      setPendingImportFile(file)
 
-      if (fileName.endsWith('.json')) {
-        const text = await file.text()
-        const parsed = JSON.parse(text)
-        if (Array.isArray(parsed)) {
-          rawRows = parsed
-        } else if (Array.isArray(parsed?.medicines)) {
-          rawRows = parsed.medicines
-        } else {
-          rawRows = []
-        }
-      } else {
-        const XLSX = await import('xlsx')
-        const buffer = await file.arrayBuffer()
-        const workbook = XLSX.read(buffer, { type: 'array' })
-        const firstSheetName = workbook.SheetNames?.[0]
-        if (firstSheetName) {
-          const firstSheet = workbook.Sheets[firstSheetName]
-          rawRows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' })
-        }
+      if (mappedRows.length === 0) {
+        setMedicineTransferType('error')
+        setMedicineTransferMessage('Fayl tanlandi, lekin yaroqli qator topilmadi. Ustunlar: name/narx/category/stock.')
+        return
       }
 
-      const mappedRows = rawRows.map(mapImportedMedicineRow).filter(Boolean)
+      setMedicineTransferType('success')
+      setMedicineTransferMessage(`Fayl tanlandi: ${file.name}. Saqlash tugmasini bossangiz ${mappedRows.length} ta qator import qilinadi.`)
+    } catch (error) {
+      setPendingImportFile(null)
+      setMedicineTransferType('error')
+      setMedicineTransferMessage(`Faylni o\'qishda xatolik: ${error?.message || 'noma\'lum xatolik'}`)
+    }
+  }
+
+  const handleImportMedicinesSave = async () => {
+    if (!pendingImportFile || !currentPharmacy?.id) {
+      setMedicineTransferType('error')
+      setMedicineTransferMessage('Avval import faylini tanlang.')
+      return
+    }
+
+    setMedicineImporting(true)
+
+    try {
+      const { rawRows, mappedRows } = await parseImportedRowsFromFile(pendingImportFile)
       if (mappedRows.length === 0) {
         setMedicineTransferType('error')
         setMedicineTransferMessage('Import uchun yaroqli qator topilmadi. Ustunlar: name/narx/category/stock.')
@@ -612,8 +671,14 @@ const PharmacyOwnerDashboard = () => {
       }
 
       const seen = new Set()
+      const existingNames = new Set(
+        medicines.map((medicine) => medicine.name.trim().toLowerCase())
+      )
+      const existingItems = []
+
       let importedCount = 0
       let skippedCount = rawRows.length - mappedRows.length
+      let existingCount = 0
       let failedCount = 0
 
       for (const medicine of mappedRows) {
@@ -624,9 +689,17 @@ const PharmacyOwnerDashboard = () => {
         }
         seen.add(key)
 
+        if (existingNames.has(key)) {
+          existingCount += 1
+          skippedCount += 1
+          existingItems.push(medicine.name)
+          continue
+        }
+
         try {
-          await addMedicine(currentPharmacy.id, medicine)
+          await addMedicine(currentPharmacy.id, medicine, { skipReload: true })
           importedCount += 1
+          existingNames.add(key)
         } catch (error) {
           failedCount += 1
           console.error('Medicine import row failed:', error)
@@ -634,8 +707,16 @@ const PharmacyOwnerDashboard = () => {
       }
 
       await refreshCurrentPharmacyData()
+      const existingPreview = existingItems.slice(0, 6).join(', ')
+      const existingSuffix = existingItems.length > 0
+        ? ` Mavjud dorilar: ${existingPreview}${existingItems.length > 6 ? ' ...' : ''}.`
+        : ''
+
       setMedicineTransferType(failedCount > 0 ? 'error' : 'success')
-      setMedicineTransferMessage(`Import yakunlandi: qo'shildi ${importedCount}, o'tkazib yuborildi ${skippedCount}, xatolik ${failedCount}.`)
+      setMedicineTransferMessage(
+        `Import yakunlandi: qo'shildi ${importedCount}, mavjud ${existingCount}, o'tkazib yuborildi ${skippedCount}, xatolik ${failedCount}.${existingSuffix}`
+      )
+      setPendingImportFile(null)
     } catch (error) {
       console.error('Medicine import error:', error)
       setMedicineTransferType('error')
@@ -938,15 +1019,26 @@ const PharmacyOwnerDashboard = () => {
                   onClick={openMedicinesImportPicker}
                   disabled={medicineImporting}
                 >
-                  {medicineImporting ? 'Import...' : 'Import'}
+                  Fayl tanlash
+                </button>
+                <button
+                  type="button"
+                  className="btn-transfer"
+                  onClick={handleImportMedicinesSave}
+                  disabled={medicineImporting || !pendingImportFile}
+                >
+                  {medicineImporting ? 'Saqlanmoqda...' : 'Saqlash'}
                 </button>
                 <input
                   ref={medicineImportInputRef}
                   type="file"
                   accept=".xlsx,.xls,.csv,.tsv,.json"
-                  onChange={handleImportMedicines}
+                  onChange={handleImportFileSelected}
                   hidden
                 />
+                {pendingImportFile && (
+                  <span className="medicine-import-file">{pendingImportFile.name}</span>
+                )}
               </div>
               <button
                 className="btn-add"
@@ -957,6 +1049,14 @@ const PharmacyOwnerDashboard = () => {
                 }}
               >
                 {showAddForm ? '✕ Bekor qilish' : '+ Yangi dori qo\'shish'}
+              </button>
+              <button
+                type="button"
+                className="btn-transfer btn-transfer-danger"
+                onClick={handleDeleteAllMedicines}
+                disabled={bulkDeletingMedicines || medicines.length === 0}
+              >
+                {bulkDeletingMedicines ? 'O\'chirilmoqda...' : 'Barchasini o\'chirish'}
               </button>
             </div>
           </div>

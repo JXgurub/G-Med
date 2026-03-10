@@ -21,7 +21,7 @@ const ClinicDetailPage = () => {
     firstName: '',
     lastName: '',
     passportId: '',
-    phone: ''
+    phone: '+998'
   })
   const [bookingLoading, setBookingLoading] = useState(false)
   const [bookingMessage, setBookingMessage] = useState(null)

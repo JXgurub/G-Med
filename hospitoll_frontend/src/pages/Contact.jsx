@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { siteSettingsApi } from '../services/api'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import './Contact.css'
 
 const Contact = () => {
@@ -9,7 +10,7 @@ const Contact = () => {
   const [submitStatus, setSubmitStatus] = useState(null)
   const [lead, setLead] = useState({
     name: '',
-    phone_number: '',
+    phone_number: '+998',
     email: '',
     message: ''
   })
@@ -47,10 +48,10 @@ const Contact = () => {
       await siteSettingsApi.createContactLead({
         name: lead.name,
         phone_number: lead.phone_number,
-        email: lead.email,
+        email: normalizeEmailWithDefaultDomain(lead.email),
         message: lead.message,
       })
-      setLead({ name: '', phone_number: '', email: '', message: '' })
+      setLead({ name: '', phone_number: '+998', email: '', message: '' })
       setSubmitStatus({ type: 'success', message: "So'rovingiz yuborildi. Tez orada bog'lanamiz ✅" })
     } catch (error) {
       const msg =
@@ -215,6 +216,7 @@ const Contact = () => {
                     type="email"
                     value={lead.email}
                     onChange={(e) => setLead({ ...lead, email: e.target.value })}
+                    onBlur={(e) => setLead({ ...lead, email: normalizeEmailWithDefaultDomain(e.target.value) })}
                     placeholder="you@company.uz"
                     autoComplete="email"
                   />

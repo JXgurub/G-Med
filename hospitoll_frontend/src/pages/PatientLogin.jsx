@@ -7,7 +7,7 @@ import './PatientLogin.css'
 const PatientLogin = () => {
   const navigate = useNavigate()
   const { loginPatient } = usePatient()
-  const [passportId, setPassportId] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('+998')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -18,7 +18,7 @@ const PatientLogin = () => {
     setLoading(true)
 
     try {
-      const result = await loginPatient(passportId, password)
+      const result = await loginPatient(phoneNumber, password)
       if (result.success) {
         navigate('/patient')
       } else {
@@ -37,17 +37,17 @@ const PatientLogin = () => {
         <div className="patient-login-header">
           <div className="login-badge">Bemor kirishi</div>
           <h1>Bemor sahifasiga kirish</h1>
-          <p>Pasport ID va parol orqali</p>
+          <p>Telefon raqam va parol orqali</p>
         </div>
 
         <form className="patient-login-form" onSubmit={handleSubmit}>
           <label className="patient-login-field">
-            <span>Pasport ID</span>
+            <span>Telefon raqam</span>
             <input
-              type="text"
-              value={passportId}
-              onChange={(e) => setPassportId(e.target.value.replace(/\s+/g, '').toUpperCase())}
-              placeholder="AA1234567"
+              type="tel"
+              value={phoneNumber}
+              onChange={(e) => setPhoneNumber(e.target.value.replace(/\s+/g, ''))}
+              placeholder="+998901234567"
               required
             />
           </label>
@@ -80,7 +80,7 @@ const PatientLogin = () => {
 
         <div className="patient-login-footer">
           <div className="demo-card">
-            <p>Bemor hisobidan foydalanish uchun shifokor sizga pasport ID va parol beradi</p>
+            <p>Bemor hisobidan foydalanish uchun shifokor sizga telefon raqam va parol beradi</p>
           </div>
         </div>
       </div>

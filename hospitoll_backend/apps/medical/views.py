@@ -299,6 +299,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         status_filter = self._queue_active_statuses()
         shifted_records: list[dict[str, Any]] = []
+        queue_updated_count = 0
+        selected_new_local = None
         now_local = timezone.localtime().replace(second=0, microsecond=0)
         queue_step_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
         if queue_step_minutes not in (15, 20, 30):
@@ -308,7 +310,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             with transaction.atomic():
                 target = (
                     Appointment.objects.select_for_update()
-                    .select_related('slot')
                     .filter(id=appointment.id, doctor=doctor)
                     .first()
                 )
@@ -341,15 +342,18 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     new_local = queue_cursor
 
                     update_fields = ['updated_at']
+                    row_changed = False
                     if item.queue_position != next_pos:
                         item.queue_position = next_pos
                         update_fields.append('queue_position')
+                        row_changed = True
                     next_pos += 1
 
                     if new_local != current_local:
                         delta_minutes = int((new_local - current_local).total_seconds() // 60)
                         item.scheduled_date = new_local
                         update_fields.append('scheduled_date')
+                        row_changed = True
                         shifted_records.append(
                             {
                                 'id': str(item.id),
@@ -361,6 +365,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                         )
 
                     item.save(update_fields=update_fields)
+                    if row_changed:
+                        queue_updated_count += 1
                     queue_cursor = new_local + timedelta(minutes=queue_step_minutes)
 
                 appointment = target
@@ -368,7 +374,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             appointment_date = timezone.localtime(appointment.scheduled_date).date()
             extra_delay_minutes = 15 if decision == 'wait' else 0
             queue_cursor = now_local + timedelta(minutes=extra_delay_minutes)
-            selected_new_local = None
 
             with transaction.atomic():
                 queue_items = list(
@@ -384,12 +389,48 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 if not any(item.id == appointment.id for item in queue_items):
                     return Response({'detail': 'Qabul bugungi faol navbatda topilmadi.'}, status=status.HTTP_400_BAD_REQUEST)
 
-                for item in queue_items:
+                # Backend safety: only queue leader can be entered or deferred.
+                queue_leader = queue_items[0] if queue_items else None
+                if queue_leader and queue_leader.id != appointment.id:
+                    return Response(
+                        {'detail': 'Faqat navbatdagi 1-bemor uchun ushbu amalni bajarish mumkin.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                target_item = next(item for item in queue_items if item.id == appointment.id)
+                remaining_items = [item for item in queue_items if item.id != appointment.id]
+
+                if decision == 'enter':
+                    ordered_items = [target_item, *remaining_items]
+                else:
+                    # wait: move selected patient one step back, then recalculate ETA.
+                    old_index = next((idx for idx, item in enumerate(queue_items) if item.id == target_item.id), 0)
+                    new_index = min(old_index + 1, len(remaining_items))
+                    ordered_items = [
+                        *remaining_items[:new_index],
+                        target_item,
+                        *remaining_items[new_index:],
+                    ]
+
+                min_wait_local = now_local + timedelta(minutes=15)
+                for next_pos, item in enumerate(ordered_items, start=1):
                     current_local = timezone.localtime(item.scheduled_date).replace(second=0, microsecond=0)
+                    base_local = current_local if current_local > queue_cursor else queue_cursor
+
                     if decision == 'enter' and item.id == appointment.id:
                         new_local = queue_cursor
+                    elif decision == 'wait' and item.id == appointment.id:
+                        new_local = base_local if base_local > min_wait_local else min_wait_local
                     else:
-                        new_local = current_local if current_local > queue_cursor else queue_cursor
+                        new_local = base_local
+
+                    update_fields = ['updated_at']
+                    row_changed = False
+
+                    if item.queue_position != next_pos:
+                        item.queue_position = next_pos
+                        update_fields.append('queue_position')
+                        row_changed = True
 
                     if item.id == appointment.id:
                         selected_new_local = new_local
@@ -397,7 +438,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     if new_local != current_local:
                         delta_minutes = int((new_local - current_local).total_seconds() // 60)
                         item.scheduled_date = new_local
-                        item.save(update_fields=['scheduled_date', 'updated_at'])
+                        update_fields.append('scheduled_date')
+                        row_changed = True
                         shifted_records.append(
                             {
                                 'id': str(item.id),
@@ -407,6 +449,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                                 'delta_minutes': delta_minutes,
                             }
                         )
+
+                    item.save(update_fields=update_fields)
+                    if row_changed:
+                        queue_updated_count += 1
 
                     queue_cursor = new_local + timedelta(minutes=queue_step_minutes)
 
@@ -478,7 +524,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return Response(
             {
                 'decision': decision,
-                'queue_updated': len(shifted_records),
+                'queue_updated': queue_updated_count,
                 'notified_count': notified_count,
             },
             status=status.HTTP_200_OK,

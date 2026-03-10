@@ -295,49 +295,6 @@ const Home = () => {
         </div>
       </section>
 
-      {/* Why Choose Us Section */}
-      <section className="why-section">
-        <div className="container">
-          <h2 className="section-title-center">Nega Bizni Tanlashadi?</h2>
-          <p className="section-subtitle">Biz bilan hamkorlikning afzalliklari</p>
-          
-          <div className="why-grid">
-            <div className="why-card">
-              <div className="why-image">
-                <div className="why-badge">10+</div>
-              </div>
-              <h3>Yillik Tajriba</h3>
-              <p>Ko'p yillik tajriba</p>
-            </div>
-
-            <div className="why-card">
-              <div className="why-image">
-                <div className="why-icon">
-                  <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
-                    <path d="M30 55C43.8071 55 55 43.8071 55 30C55 16.1929 43.8071 5 30 5C16.1929 5 5 16.1929 5 30C5 43.8071 16.1929 55 30 55Z" stroke="#1e6fd7" strokeWidth="3"/>
-                    <path d="M30 15v15l10 10" stroke="#1e6fd7" strokeWidth="3" strokeLinecap="round"/>
-                  </svg>
-                </div>
-              </div>
-              <h3>Texnik Qo'llab Quvvatlash</h3>
-              <p>24/7 xizmat ko'rsatish</p>
-            </div>
-
-            <div className="why-card">
-              <div className="why-image">
-                <div className="why-icon">
-                  <svg width="60" height="60" viewBox="0 0 60 60" fill="none">
-                    <path d="M30 5L35 20L50 25L35 30L30 45L25 30L10 25L25 20L30 5Z" stroke="#64b334" strokeWidth="3" strokeLinejoin="round"/>
-                  </svg>
-                </div>
-              </div>
-              <h3>Kafolat va Servis</h3>
-              <p>Ishonchli kafolatlar</p>
-            </div>
-          </div>
-        </div>
-      </section>
-
       {/* Contact Section */}
       <section className="home-contact-section">
         <div className="container">

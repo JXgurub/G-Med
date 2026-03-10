@@ -1263,6 +1263,34 @@ class QueueDecisionTests(MedicalApiTestCase):
         self.assertTrue(any('Navbat sizga keldi' in text for text in first_patient_messages))
         self.assertFalse(any('Navbat vaqtingiz yangilandi' in text for text in first_patient_messages))
 
+    def test_enter_decision_rejects_non_leader_appointment(self):
+        # Queue leader is appt1, so enter on appt2 must be rejected.
+        url = reverse('appointment-queue-decision', args=[self.appt2.id])
+        response = self.client.post(url, {'decision': 'enter'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = self.body(response)
+        self.assertIn('1-bemor', str(response_json.get('detail', '')))
+
+        self.appt1.refresh_from_db()
+        self.appt2.refresh_from_db()
+        self.assertEqual(self.appt1.queue_position, 1)
+        self.assertEqual(self.appt2.queue_position, 2)
+
+    def test_wait_decision_rejects_non_leader_appointment(self):
+        # Queue leader is appt1, so wait on appt2 must be rejected.
+        url = reverse('appointment-queue-decision', args=[self.appt2.id])
+        response = self.client.post(url, {'decision': 'wait'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = self.body(response)
+        self.assertIn('1-bemor', str(response_json.get('detail', '')))
+
+        self.appt1.refresh_from_db()
+        self.appt2.refresh_from_db()
+        self.assertEqual(self.appt1.queue_position, 1)
+        self.assertEqual(self.appt2.queue_position, 2)
+
     def test_cancel_decision_cancels_target_and_compresses_queue(self):
         self.patient3_user = CustomUser.objects.create_user(
             username='patient_queue_3',

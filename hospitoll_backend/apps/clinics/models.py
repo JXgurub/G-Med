@@ -31,6 +31,14 @@ class Clinic(models.Model):
         limit_choices_to={'role': 'clinic'},
         help_text=_("Klinika egasi")
     )
+    owner_passport_id = models.CharField(
+        _('owner passport id'),
+        max_length=50,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_("Klinika egasining pasport yoki ID raqami")
+    )
     name = models.CharField(
         _('clinic name'),
         max_length=255,

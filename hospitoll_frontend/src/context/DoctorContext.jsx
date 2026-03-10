@@ -257,7 +257,7 @@ export const DoctorProvider = ({ children }) => {
     try {
       // Backend provides a dedicated endpoint for today's queue
       const items = await medicalApi.getTodaysAppointments()
-      const excludedStatuses = new Set(['cancelled', 'completed', 'no_show'])
+      const excludedStatuses = new Set(['pending_telegram_confirmation', 'cancelled', 'completed', 'no_show'])
       const todays = (items || []).filter((item) => !excludedStatuses.has(item.status))
       const patientIds = [...new Set(todays.map((item) => item.patient))]
       const patientMap = {}
@@ -277,8 +277,22 @@ export const DoctorProvider = ({ children }) => {
         }
       }))
 
+      const getQueuePosition = (item) => {
+        const numeric = Number(item?.queue_position)
+        return Number.isFinite(numeric) && numeric > 0 ? numeric : Number.MAX_SAFE_INTEGER
+      }
+
       const mapped = todays
-        .sort((a, b) => new Date(a.scheduled_date) - new Date(b.scheduled_date))
+        .sort((a, b) => {
+          const aPos = getQueuePosition(a)
+          const bPos = getQueuePosition(b)
+          if (aPos !== bPos) return aPos - bPos
+
+          const timeDiff = new Date(a.scheduled_date) - new Date(b.scheduled_date)
+          if (timeDiff !== 0) return timeDiff
+
+          return new Date(a.created_at) - new Date(b.created_at)
+        })
         .map((item) => ({
         ...item,
         patient_info: patientMap[item.patient] || item.patient_info || { fullName: 'Bemor', passportId: '', phone: '' }

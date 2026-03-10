@@ -124,3 +124,32 @@ class PasswordResetCode(models.Model):
     @property
     def is_expired(self):
         return timezone.now() >= self.expires_at
+
+
+class CodeVerificationLockState(models.Model):
+    CHANNEL_PATIENT_RESET = 'patient_password_reset'
+    CHANNEL_DOCTOR_RESET = 'doctor_password_reset'
+
+    CHANNEL_CHOICES = (
+        (CHANNEL_PATIENT_RESET, 'Patient password reset'),
+        (CHANNEL_DOCTOR_RESET, 'Doctor password reset'),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE, related_name='code_verification_lock_states')
+    channel = models.CharField(max_length=64, choices=CHANNEL_CHOICES)
+    lock_stage = models.PositiveSmallIntegerField(default=1)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    blocked_until = models.DateTimeField(blank=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('user', 'channel')
+        indexes = [
+            models.Index(fields=['channel', 'blocked_until']),
+            models.Index(fields=['user', 'channel']),
+        ]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.channel}:stage={self.lock_stage}"

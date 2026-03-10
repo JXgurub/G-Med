@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <defs>
+    <linearGradient id="gStroke" x1="86" y1="86" x2="426" y2="426" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#95D46A"/>
+      <stop offset="0.5" stop-color="#35B38A"/>
+      <stop offset="1" stop-color="#2C7DD1"/>
+    </linearGradient>
+    <linearGradient id="plusFill" x1="190" y1="190" x2="322" y2="322" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#35B38A"/>
+      <stop offset="1" stop-color="#2C7DD1"/>
+    </linearGradient>
+  </defs>
+
+  <path d="M382 123H257C182.44 123 122 183.44 122 258C122 332.56 182.44 393 257 393H328C334.63 393 340 387.63 340 381V330C340 323.37 334.63 318 328 318H257C223.86 318 197 291.14 197 258C197 224.86 223.86 198 257 198H382C388.63 198 394 192.63 394 186V135C394 128.37 388.63 123 382 123Z" fill="url(#gStroke)"/>
+
+  <path d="M130 268C141.73 338.57 202.85 393 277 393H307L243 329H257C208.32 329 167.39 303.24 147.27 268H130Z" fill="#1F9866"/>
+
+  <path d="M382 389H306L357 338H382C388.63 338 394 343.37 394 350V377C394 383.63 388.63 389 382 389Z" fill="#2C7DD1"/>
+
+  <rect x="227" y="183" width="58" height="150" rx="10" fill="url(#plusFill)"/>
+  <rect x="181" y="229" width="150" height="58" rx="10" fill="url(#plusFill)"/>
+
+  <path d="M382 123H257C182.44 123 122 183.44 122 258" stroke="url(#gStroke)" stroke-width="16" stroke-linecap="round"/>
+</svg>

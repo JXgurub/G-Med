@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAdmin } from '../context/AdminContext'
 import PasswordInput from '../components/PasswordInput'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import './AdminLogin.css'
 
 const AdminLogin = () => {
@@ -17,7 +18,8 @@ const AdminLogin = () => {
     setError('')
     setLoading(true)
 
-    const result = await loginAdmin(email, password)
+    const normalizedEmail = normalizeEmailWithDefaultDomain(email)
+    const result = await loginAdmin(normalizedEmail, password)
     if (result.success) {
       navigate('/admin-dashboard')
     } else {
@@ -53,6 +55,7 @@ const AdminLogin = () => {
                 placeholder="admin@example.uz"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={(e) => setEmail(normalizeEmailWithDefaultDomain(e.target.value))}
                 disabled={loading}
                 autoFocus
               />

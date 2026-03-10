@@ -177,10 +177,10 @@ export const PatientProvider = ({ children }) => {
     }
   }
 
-  const loginPatient = async (passportId, password) => {
+  const loginPatient = async (phoneNumber, password) => {
     try {
       const response = await authApi.patientLogin({ 
-        passport_id: passportId, 
+        phone_number: phoneNumber,
         password 
       })
 
@@ -199,7 +199,7 @@ export const PatientProvider = ({ children }) => {
       return { success: true }
     } catch (error) {
       console.error('Login error:', error)
-      return { success: false, error: 'Pasport ID yoki parol noto\'g\'ri' }
+      return { success: false, error: 'Telefon raqam yoki parol noto\'g\'ri' }
     }
   }
 

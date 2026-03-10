@@ -75,7 +75,7 @@ def auto_cancel_unconfirmed_appointment(appointment_id: str) -> dict:
 
     try:
         with transaction.atomic():
-            appt = Appointment.objects.select_for_update().select_related('slot').filter(id=appointment_id).first()
+            appt = Appointment.objects.select_for_update().filter(id=appointment_id).first()
             if not appt:
                 return {'status': 'missing', 'appointment_id': appointment_id}
 

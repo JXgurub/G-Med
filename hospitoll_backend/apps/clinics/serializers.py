@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.utils.text import slugify
 from django.db import transaction
+from uuid import uuid4
 
 from apps.users.models import CustomUser
 from .models import Clinic, ClinicDepartment, ClinicService
@@ -21,6 +22,7 @@ class ClinicSerializer(serializers.ModelSerializer):
             'id',
             'owner',
             'owner_email',
+            'owner_passport_id',
             'owner_name',
             'name',
             'slug',
@@ -75,8 +77,10 @@ class ClinicCreateSerializer(serializers.ModelSerializer):
     owner_password = serializers.CharField(write_only=True)
     owner_first_name = serializers.CharField(write_only=True)
     owner_last_name = serializers.CharField(write_only=True)
+    owner_passport_id = serializers.CharField(write_only=True, required=True, allow_blank=False)
     owner_phone_number = serializers.CharField(write_only=True, required=False, allow_blank=True)
     slug = serializers.CharField(required=False, allow_blank=True)
+    registration_number = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = Clinic
@@ -86,6 +90,7 @@ class ClinicCreateSerializer(serializers.ModelSerializer):
             'owner_password',
             'owner_first_name',
             'owner_last_name',
+            'owner_passport_id',
             'owner_phone_number',
             'name',
             'slug',
@@ -112,13 +117,38 @@ class ClinicCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Bu slug allaqachon mavjud.")
         return value
 
+    def validate_owner_passport_id(self, value):
+        normalized = ''.join(str(value or '').strip().upper().split())
+        if len(normalized) < 5:
+            raise serializers.ValidationError("Egasi pasport ID noto'g'ri.")
+        return normalized
+
+    def validate_registration_number(self, value):
+        normalized = (value or '').strip().upper()
+        if not normalized:
+            return ''
+        if Clinic.objects.filter(registration_number=normalized).exists():
+            raise serializers.ValidationError("Bu klinika raqami allaqachon mavjud.")
+        return normalized
+
+    def _generate_unique_clinic_number(self):
+        # UUID-based suffix minimizes collisions while keeping code short and readable.
+        while True:
+            candidate = f"CLN-{uuid4().hex[:10].upper()}"
+            if not Clinic.objects.filter(registration_number=candidate).exists():
+                return candidate
+
     @transaction.atomic
     def create(self, validated_data):
         owner_email = validated_data.pop('owner_email')
         owner_password = validated_data.pop('owner_password')
         owner_first_name = validated_data.pop('owner_first_name')
         owner_last_name = validated_data.pop('owner_last_name')
+        owner_passport_id = validated_data.pop('owner_passport_id')
         owner_phone_number = validated_data.pop('owner_phone_number', '')
+        registration_number = (validated_data.get('registration_number') or '').strip().upper()
+        validated_data['registration_number'] = registration_number or self._generate_unique_clinic_number()
+        validated_data['owner_passport_id'] = owner_passport_id
 
         slug = validated_data.get('slug')
         if not slug:

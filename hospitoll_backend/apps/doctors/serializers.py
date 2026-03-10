@@ -2,6 +2,8 @@ from rest_framework import serializers
 from django.db import transaction
 from django.utils import timezone
 from django.utils.timezone import localdate
+from django.db.models import Value
+from django.db.models.functions import Upper, Replace
 from datetime import datetime, timedelta
 import re
 from uuid import uuid4
@@ -10,6 +12,7 @@ from apps.users.models import CustomUser
 from apps.users.serializers import UserSerializer
 from .models import Doctor, Specialization, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization
 from apps.medical.models import Appointment, MedicalRecord
+from apps.patients.models import Patient
 from apps.patients.models import PatientDoctorRating
 
 
@@ -274,8 +277,14 @@ class DoctorCreateSerializer(serializers.ModelSerializer):
         return (value or '').strip()
 
     def validate_pinfl(self, value):
-        normalized = re.sub(r"\s+", "", str(value or '').strip().upper())
-        return normalized or None
+        normalized = str(value or '').strip()
+        if not normalized:
+            return None
+        if not normalized.isdigit():
+            raise serializers.ValidationError("PINFL faqat raqamlardan iborat bo'lishi kerak.")
+        if len(normalized) != 14:
+            raise serializers.ValidationError("JSHSHIR 14 ta raqamdan iborat bo'lishi kerak.")
+        return normalized
 
     def validate_specialization_ids(self, value):
         if value is None:
@@ -285,7 +294,19 @@ class DoctorCreateSerializer(serializers.ModelSerializer):
     def validate_passport_id(self, value):
         if value is None:
             return None
-        normalized = str(value).strip().upper()
+        normalized = re.sub(r"\s+", "", str(value).strip().upper())
+        if normalized and (
+            Patient.objects.annotate(
+                national_norm=Replace(
+                    Replace(Upper('national_id'), Value(' '), Value('')),
+                    Value('\t'),
+                    Value(''),
+                )
+            )
+            .filter(national_norm=normalized)
+            .exists()
+        ):
+            raise serializers.ValidationError("Bu pasport/ID bazadagi boshqa odamga tegishli.")
         return normalized or None
 
     def _find_existing_doctor_by_identity(self, pinfl, passport_id):
@@ -485,9 +506,13 @@ class DoctorSelfUpdateSerializer(serializers.ModelSerializer):
         ]
 
     def validate_pinfl(self, value):
-        normalized = re.sub(r"\s+", "", str(value or '').strip().upper())
+        normalized = str(value or '').strip()
         if not normalized:
             return None
+        if not normalized.isdigit():
+            raise serializers.ValidationError("PINFL faqat raqamlardan iborat bo'lishi kerak.")
+        if len(normalized) != 14:
+            raise serializers.ValidationError("JSHSHIR 14 ta raqamdan iborat bo'lishi kerak.")
         instance = getattr(self, 'instance', None)
         if instance and instance.pinfl and instance.pinfl != normalized:
             raise serializers.ValidationError("PINFL bir marta saqlangach o'zgartirib bo'lmaydi.")

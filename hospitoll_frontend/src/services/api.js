@@ -318,9 +318,12 @@ export const authApi = {
   refresh: (token) => api.post('/users/token/refresh/', { refresh: token }),
   getProfile: () => api.get('/users/profile/'),
   changePassword: (current_password, new_password) => api.post('/users/change-password/', { current_password, new_password }),
-  patientPasswordResetRequest: (email, passport_id) => api.post('/users/password-reset/request/', { email, ...(passport_id ? { passport_id } : {}) }),
-  patientPasswordResetVerify: (email, code, passport_id) => api.post('/users/password-reset/verify/', { email, code, ...(passport_id ? { passport_id } : {}) }),
+  patientPasswordResetRequest: (phone_number, passport_id) => api.post('/users/password-reset/request/', { phone_number, ...(passport_id ? { passport_id } : {}) }),
+  patientPasswordResetVerify: (phone_number, code, passport_id) => api.post('/users/password-reset/verify/', { phone_number, code, ...(passport_id ? { passport_id } : {}) }),
   patientPasswordResetConfirm: (token, new_password) => api.post('/users/password-reset/confirm/', { token, new_password }),
+  doctorPasswordResetRequest: (passport_id, birth_date, pinfl) => api.post('/users/doctor-password-reset/request/', { passport_id, birth_date, pinfl }),
+  doctorPasswordResetVerify: (passport_id, birth_date, pinfl, code) => api.post('/users/doctor-password-reset/verify/', { passport_id, birth_date, pinfl, code }),
+  doctorPasswordResetConfirm: (token, new_password, new_email) => api.post('/users/doctor-password-reset/confirm/', { token, new_password, ...(new_email ? { new_email } : {}) }),
 }
 
 // Clinic API endpoints
@@ -375,6 +378,7 @@ export const doctorsApi = {
   addRating: (data) => api.post('/doctors/ratings/', data),
   updateRating: (id, data) => api.patch(`/doctors/ratings/${id}/`, data),
   getSpecializations: () => api.get('/doctors/specializations/'),
+  createSpecialization: (data) => api.post('/doctors/specializations/', data),
   getMySpecializations: () => api.get('/doctors/specialty-prices/my_specializations/'),
   updateSpecialtyPrice: (specialtyPriceId, data) => api.patch(`/doctors/specialty-prices/${specialtyPriceId}/`, data),
   getAvailability: (params) => api.get('/doctors/availability/available/', params),
@@ -414,6 +418,7 @@ export const pharmacyInventoryApi = {
   create: (data) => api.post('/pharmacies/inventory/', data),
   update: (id, data) => api.patch(`/pharmacies/inventory/${id}/`, data),
   delete: (id) => api.delete(`/pharmacies/inventory/${id}/`),
+  clearAll: () => api.delete('/pharmacies/inventory/clear-all/'),
 }
 
 // Medical API endpoints

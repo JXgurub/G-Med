@@ -23,6 +23,28 @@ from .serializers import (
 from core.error_logging import ErrorLogger
 
 
+DEFAULT_SPECIALIZATIONS = [
+    ('Kardiologiya', 'CARDIO'),
+    ('Nevrologiya', 'NEURO'),
+    ('Pediatriya', 'PEDI'),
+    ('Terapiya', 'THERAPY'),
+    ('Ginekologiya', 'GYNE'),
+    ('Urologiya', 'URO'),
+    ('Dermatologiya', 'DERMA'),
+    ('Otorinolaringologiya', 'ENT'),
+    ('Oftalmologiya', 'OPHTH'),
+    ('Travmatologiya', 'TRAUMA'),
+    ('Ortopediya', 'ORTHO'),
+    ('Endokrinologiya', 'ENDO'),
+    ('Gastroenterologiya', 'GASTRO'),
+    ('Pulmonologiya', 'PULMO'),
+    ('Nefrologiya', 'NEPHRO'),
+    ('Reabilitatsiya', 'REHAB'),
+    ('Onkologiya', 'ONCO'),
+    ('Psixiatriya', 'PSYCH'),
+]
+
+
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.select_related('user', 'clinic').prefetch_related('specializations')
     filterset_fields = ['clinic', 'is_active']
@@ -449,9 +471,38 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
 
 class SpecializationViewSet(viewsets.ModelViewSet):
-    queryset = Specialization.objects.all()
+    queryset = Specialization.objects.filter(is_active=True).order_by('name')
     serializer_class = SpecializationSerializer
-    permission_classes = [permissions.AllowAny]
+
+    def _ensure_default_specializations(self):
+        if Specialization.objects.exists():
+            return
+
+        for name, code in DEFAULT_SPECIALIZATIONS:
+            Specialization.objects.get_or_create(
+                code=code,
+                defaults={
+                    'name': name,
+                    'description': 'Auto-seeded default specialization',
+                    'is_active': True,
+                }
+            )
+
+    def get_permissions(self):
+        if self.action in ['list', 'retrieve']:
+            return [permissions.AllowAny()]
+        return [permissions.IsAuthenticated()]
+
+    def list(self, request, *args, **kwargs):
+        self._ensure_default_specializations()
+        return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+        if not (request.user.is_clinic or request.user.is_superuser or request.user.is_staff):
+            return Response({'detail': 'Faqat klinika yoki admin ixtisoslik qo\'sha oladi.'}, status=status.HTTP_403_FORBIDDEN)
+        return super().create(request, *args, **kwargs)
 
 
 class DoctorAvailabilityViewSet(viewsets.ModelViewSet):

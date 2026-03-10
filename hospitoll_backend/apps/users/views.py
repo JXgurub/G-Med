@@ -2,11 +2,10 @@ import secrets
 
 from datetime import timedelta
 import logging
-import sys
 import re
+from typing import Any, cast
 
 from django.conf import settings
-from django.core.mail import send_mail
 from django.core import signing
 from django.utils import timezone
 from django.contrib.auth.hashers import make_password
@@ -27,8 +26,17 @@ from .serializers import (
     PasswordResetVerifySerializer,
     PasswordResetConfirmSerializer,
     ChangePasswordSerializer,
+    DoctorPasswordResetRequestSerializer,
+    DoctorPasswordResetVerifySerializer,
+    DoctorPasswordResetConfirmSerializer,
 )
 from .models import CustomUser, PasswordResetCode
+from .throttles import (
+    LoginScopedRateThrottle,
+    PasswordResetConfirmThrottle,
+    PasswordResetRequestThrottle,
+    PasswordResetVerifyThrottle,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,14 +49,35 @@ def _normalize_passport_id(value: str) -> str:
     return re.sub(r"\s+", "", value)
 
 
+def _normalize_phone_number(value: str) -> str:
+    if not value:
+        return ''
+    return re.sub(r"\D+", "", str(value))
+
+
+def _phones_match(provided: str, stored: str) -> bool:
+    provided_norm = _normalize_phone_number(provided)
+    stored_norm = _normalize_phone_number(stored)
+
+    if not provided_norm or not stored_norm:
+        return False
+
+    if provided_norm == stored_norm:
+        return True
+
+    return len(provided_norm) >= 9 and len(stored_norm) >= 9 and provided_norm[-9:] == stored_norm[-9:]
+
+
 class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
     throttle_scope = 'auth'
+    throttle_classes = [LoginScopedRateThrottle]
 
 
 class PatientTokenObtainView(TokenObtainPairView):
     serializer_class = PatientTokenObtainSerializer
     throttle_scope = 'auth'
+    throttle_classes = [LoginScopedRateThrottle]
 
 
 class ProfileView(APIView):
@@ -64,8 +93,9 @@ class ChangePasswordView(APIView):
     def post(self, request):
         serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
+        validated_data = cast(dict[str, Any], serializer.validated_data)
 
-        request.user.set_password(serializer.validated_data['new_password'])
+        request.user.set_password(str(validated_data['new_password']))
         request.user.save(update_fields=['password'])
 
         return Response({'detail': 'Parol muvaffaqiyatli yangilandi.'}, status=status.HTTP_200_OK)
@@ -73,107 +103,81 @@ class ChangePasswordView(APIView):
 
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
-    throttle_scope = 'password_reset'
+    throttle_classes = [PasswordResetRequestThrottle]
 
     def post(self, request):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        validated_data = cast(dict[str, Any], serializer.validated_data)
 
-        passport_id_raw = serializer.validated_data.get('passport_id') or ''
-        passport_id = _normalize_passport_id(passport_id_raw)
-        email = serializer.validated_data['email']
-        user = None
+        passport_id = _normalize_passport_id(str(validated_data.get('passport_id') or ''))
+        phone_number = str(validated_data.get('phone_number') or '')
 
-        if passport_id:
-            from apps.patients.models import Patient
+        from apps.patients.models import Patient
 
-            # Compare normalized forms (ignore whitespace and case).
-            patient = (
-                Patient.objects.select_related('user')
-                .annotate(
-                    national_norm=Replace(
-                        Replace(Upper('national_id'), Value(' '), Value('')),
-                        Value('\t'),
-                        Value(''),
-                    )
+        patient = (
+            Patient.objects.select_related('user')
+            .annotate(
+                national_norm=Replace(
+                    Replace(Upper('national_id'), Value(' '), Value('')),
+                    Value('\t'),
+                    Value(''),
                 )
-                .filter(national_norm=passport_id)
-                .first()
             )
-            maybe_user = patient.user if patient else None
+            .filter(national_norm=passport_id)
+            .first()
+        )
+        user = patient.user if patient else None
 
-            if maybe_user:
-                # Email must match the patient's account email.
-                if ((maybe_user.email or '').strip().lower() != (email or '').strip().lower()):
-                    return Response({'detail': "Pasport ID va email mos emas."}, status=status.HTTP_400_BAD_REQUEST)
-                user = maybe_user
-        else:
-            user = CustomUser.objects.filter(email__iexact=email).first()
-
-        if user and (not user.is_active or user.role != 'patient'):
-            user = None
-
-        # If passport_id is provided, we can safely be explicit about "not found" because
-        # the caller is providing multiple identifiers.
-        if passport_id and not user:
-            logger.warning("Password reset not found for provided passport/email pair")
+        if not patient or not user or not user.is_active or user.role != 'patient':
+            logger.warning("Password reset not found for provided passport/phone pair")
             return Response({'detail': "Bunday foydalanuvchi bazada yo'q."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Always return success-ish response to avoid user enumeration.
-        if not user:
-            return Response({'detail': "Agar email to'g'ri bo'lsa, tasdiqlash kodi yuborildi."}, status=status.HTTP_200_OK)
+        stored_phone = (patient.phone_number or user.phone_number or '').strip()
+        if not _phones_match(phone_number, stored_phone):
+            return Response({'detail': "Pasport ID va telefon raqam mos emas."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Generate 6-digit one-time code.
+        # Generate 6-digit one-time code and store hashed version.
         code = f"{secrets.randbelow(1000000):06d}"
         expires_at = timezone.now() + timedelta(minutes=10)
-        reset = PasswordResetCode.objects.create(
+        PasswordResetCode.objects.create(
             user=user,
             code_hash=make_password(code),
             expires_at=expires_at,
         )
 
-        if getattr(settings, 'DEBUG', False):
-            banner = (
-                "\n" + ("=" * 72) +
-                "\nG-MED | PASSWORD RESET OTP" +
-                (f"\nPASSPORT: {passport_id}" if passport_id else "") +
-                f"\nEMAIL   : {user.email}" +
-                f"\nCODE    : {code}" +
-                f"\nEXPIRES : {expires_at.isoformat()}" +
-                "\n" + ("=" * 72) + "\n"
-            )
-            print(banner, flush=True)
-            try:
-                sys.stderr.write(banner)
-                sys.stderr.flush()
-            except Exception:
-                pass
-            logger.warning(banner)
-        else:
-            logger.info('Password reset OTP generated and emailed')
-
-        subject = 'G-MED: Parolni tiklash kodi'
-        message = (
-            f"Assalomu alaykum!\n\n"
-            f"Parolni tiklash uchun bir martalik kod: {code}\n"
-            f"Kod 10 daqiqa amal qiladi.\n\n"
-            f"Agar siz bu so'rovni yubormagan bo'lsangiz, xabarni e'tiborsiz qoldiring."
-        )
-        from_email = getattr(settings, 'DEFAULT_FROM_EMAIL', None) or 'noreply@gmed.uz'
+        # Deliver OTP via Telegram chat linked by previous Telegram-confirmed appointment.
         try:
-            send_mail(subject, message, from_email, [user.email], fail_silently=False)
-        except Exception as e:
-            # Email might not be configured in dev/staging. Keep the reset code so the user
-            # can continue using the OTP shown in the server console.
-            detail = "Email yuborilmadi, kod server terminaliga chiqarildi."
-            if getattr(settings, 'DEBUG', False):
-                detail = f"{detail} ({type(e).__name__}: {str(e)})"
-            response_data = {'detail': detail}
-            if getattr(settings, 'DEBUG', False):
-                response_data['debug_code'] = code
-            return Response(response_data, status=status.HTTP_200_OK)
+            from apps.medical.models import Appointment
+            from apps.medical.telegram_bot_service import TelegramBotService
 
-        response_data = {'detail': "Kod emailingizga yuborildi."}
+            chat_id = (
+                Appointment.objects.filter(patient=patient, telegram_chat_id__isnull=False)
+                .exclude(telegram_chat_id=0)
+                .order_by('-telegram_confirmed_at', '-updated_at')
+                .values_list('telegram_chat_id', flat=True)
+                .first()
+            )
+            if not chat_id:
+                return Response(
+                    {'detail': "Bu bemor Telegram botga ulanmagan. Avval bot orqali tasdiqlangan navbat bo'lishi kerak."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            bot = TelegramBotService()
+            client = bot._require_client()
+            client.send_message(
+                int(chat_id),
+                "🔐 G-MED parolni tiklash kodi\n\n"
+                f"Kod: <b>{code}</b>\n"
+                "Kod 10 daqiqa amal qiladi.\n"
+                "Agar bu so'rov sizniki bo'lmasa, xabarni e'tiborsiz qoldiring.",
+            )
+        except Exception:
+            logger.exception('Password reset OTP could not be sent to Telegram')
+            return Response({'detail': 'Kodni Telegram orqali yuborib bo`lmadi. Keyinroq urinib ko`ring.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        response_data = {'detail': "Kod Telegram botga yuborildi."}
         if getattr(settings, 'DEBUG', False):
             response_data['debug_code'] = code
         return Response(response_data, status=status.HTTP_200_OK)
@@ -181,12 +185,13 @@ class PasswordResetRequestView(APIView):
 
 class PasswordResetVerifyView(APIView):
     permission_classes = [AllowAny]
-    throttle_scope = 'password_reset'
+    throttle_classes = [PasswordResetVerifyThrottle]
 
     def post(self, request):
         serializer = PasswordResetVerifySerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        reset = serializer.validated_data['reset']
+        validated_data = cast(dict[str, Any], serializer.validated_data)
+        reset = cast(PasswordResetCode, validated_data['reset'])
 
         token = signing.dumps(
             {'reset_id': str(reset.id)},
@@ -198,14 +203,15 @@ class PasswordResetVerifyView(APIView):
 
 class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
-    throttle_scope = 'password_reset'
+    throttle_classes = [PasswordResetConfirmThrottle]
 
     def post(self, request):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        validated_data = cast(dict[str, Any], serializer.validated_data)
 
-        token = serializer.validated_data['token']
-        new_password = serializer.validated_data['new_password']
+        token = str(validated_data['token'])
+        new_password = str(validated_data['new_password'])
 
         try:
             payload = signing.loads(token, salt='gmed-password-reset', max_age=600)
@@ -230,3 +236,126 @@ class PasswordResetConfirmView(APIView):
         reset.save(update_fields=['used_at'])
 
         return Response({'detail': 'Parol muvaffaqiyatli yangilandi.'}, status=status.HTTP_200_OK)
+
+
+class DoctorPasswordResetRequestView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [PasswordResetRequestThrottle]
+
+    def post(self, request):
+        serializer = DoctorPasswordResetRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = cast(dict[str, Any], serializer.validated_data)
+
+        doctor = validated_data['doctor']
+        user = validated_data['user']
+
+        code = f"{secrets.randbelow(1000000):06d}"
+        expires_at = timezone.now() + timedelta(minutes=2)
+        PasswordResetCode.objects.create(
+            user=user,
+            code_hash=make_password(code),
+            expires_at=expires_at,
+        )
+
+        chat_id = getattr(doctor, 'telegram_chat_id', None)
+        if not chat_id:
+            bot_username = getattr(settings, 'TELEGRAM_BOT_USERNAME', '') or 'hosptol_bot'
+            return Response(
+                {
+                    'detail': (
+                        "Doktor Telegram botga ulanmagan. Avval botda /doctorlink buyrug'i bilan ulanib oling."
+                    ),
+                    'bot_link': f"https://t.me/{bot_username}",
+                    'link_hint': "Botga kirib: /doctorlink <tel> <passport> <pinfl> yuboring.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            from apps.medical.telegram_bot_service import TelegramBotService
+
+            bot = TelegramBotService()
+            client = bot._require_client()
+            client.send_message(
+                int(chat_id),
+                "🔐 G-MED doktor parol tiklash kodi\n\n"
+                f"Kod: <b>{code}</b>\n"
+                "Kod 2 daqiqa amal qiladi.\n"
+                "Agar bu so'rov sizniki bo'lmasa, xabarni e'tiborsiz qoldiring.",
+            )
+        except Exception:
+            logger.exception('Doctor password reset OTP could not be sent to Telegram')
+            return Response({'detail': 'Kodni Telegram orqali yuborib bo`lmadi. Keyinroq urinib ko`ring.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        response_data = {'detail': "Kod Telegram botga yuborildi.", 'expires_in': 120}
+        if getattr(settings, 'DEBUG', False):
+            response_data['debug_code'] = code
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class DoctorPasswordResetVerifyView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [PasswordResetVerifyThrottle]
+
+    def post(self, request):
+        serializer = DoctorPasswordResetVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = cast(dict[str, Any], serializer.validated_data)
+        reset = cast(PasswordResetCode, validated_data['reset'])
+
+        token = signing.dumps(
+            {'reset_id': str(reset.id)},
+            salt='gmed-doctor-password-reset',
+        )
+
+        return Response({'token': token, 'expires_in': 120}, status=status.HTTP_200_OK)
+
+
+class DoctorPasswordResetConfirmView(APIView):
+    permission_classes = [AllowAny]
+    throttle_classes = [PasswordResetConfirmThrottle]
+
+    def post(self, request):
+        serializer = DoctorPasswordResetConfirmSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = cast(dict[str, Any], serializer.validated_data)
+
+        token = str(validated_data['token'])
+        new_password = str(validated_data['new_password'])
+        new_email = str(validated_data.get('new_email') or '').strip().lower()
+
+        try:
+            payload = signing.loads(token, salt='gmed-doctor-password-reset', max_age=120)
+        except signing.SignatureExpired:
+            return Response({'detail': 'Kod muddati tugagan. Qayta so\'rov yuboring.'}, status=status.HTTP_400_BAD_REQUEST)
+        except signing.BadSignature:
+            return Response({'detail': 'Token noto\'g\'ri.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        reset_id = payload.get('reset_id')
+        reset = PasswordResetCode.objects.select_related('user').filter(id=reset_id).first()
+        if not reset:
+            return Response({'detail': 'Kod topilmadi.'}, status=status.HTTP_400_BAD_REQUEST)
+        if reset.used_at is not None:
+            return Response({'detail': 'Kod allaqachon ishlatilgan.'}, status=status.HTTP_400_BAD_REQUEST)
+        if reset.is_expired:
+            return Response({'detail': 'Kod muddati tugagan.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = reset.user
+        if user.role != 'doctor':
+            return Response({'detail': 'Faqat doktor uchun.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_email and CustomUser.objects.filter(email__iexact=new_email).exclude(id=user.id).exists():
+            return Response({'detail': 'Ushbu email band.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        update_fields = ['password']
+        if new_email and user.email != new_email:
+            user.email = new_email
+            update_fields.append('email')
+
+        user.set_password(new_password)
+        user.save(update_fields=update_fields)
+        reset.used_at = timezone.now()
+        reset.save(update_fields=['used_at'])
+
+        return Response({'detail': 'Email va parol muvaffaqiyatli yangilandi.'}, status=status.HTTP_200_OK)

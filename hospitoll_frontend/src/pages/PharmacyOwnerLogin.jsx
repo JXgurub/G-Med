@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePharmacy } from '../context/PharmacyContext'
 import PasswordInput from '../components/PasswordInput'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import './PharmacyOwnerLogin.css'
 
 const PharmacyOwnerLogin = () => {
@@ -17,7 +18,8 @@ const PharmacyOwnerLogin = () => {
     setError('')
     setLoading(true)
 
-    const result = await loginPharmacy(email, password)
+    const normalizedEmail = normalizeEmailWithDefaultDomain(email)
+    const result = await loginPharmacy(normalizedEmail, password)
     if (result.success) {
       navigate('/pharmacy-owner-dashboard')
     } else {
@@ -49,6 +51,7 @@ const PharmacyOwnerLogin = () => {
                 placeholder="pharmacy@example.uz"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={(e) => setEmail(normalizeEmailWithDefaultDomain(e.target.value))}
                 disabled={loading}
                 autoFocus
               />

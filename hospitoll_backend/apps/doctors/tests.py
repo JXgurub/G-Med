@@ -7,6 +7,7 @@ from typing import Any, cast
 from apps.users.models import CustomUser
 from apps.clinics.models import Clinic
 from apps.doctors.models import Doctor, Specialization, DoctorAvailability
+from apps.patients.models import Patient
 
 
 class DoctorEmploymentLifecycleTests(APITestCase):
@@ -315,6 +316,98 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.assertEqual(float(cast(Any, created.compensation_value)), 25.0)
         self.assertEqual(str(created.lunch_break_start)[:5], '12:00')
         self.assertEqual(str(created.lunch_break_end)[:5], '13:00')
+
+    def test_create_doctor_rejects_non_numeric_pinfl(self):
+        self.auth_as(self.owner_a)
+        create_url = reverse('doctor-list')
+        specialization = Specialization.objects.create(name='Nevrolog', code='NEUR')
+
+        payload = {
+            'pinfl': '1234ABCD5678',
+            'first_name': 'Yangi',
+            'last_name': 'Doktor',
+            'email': 'pinfl.invalid@example.com',
+            'phone_number': '+998901231111',
+            'password': 'Pass12345!',
+            'consultation_fee': '60000',
+            'specialization_ids': [str(specialization.id)],
+            'available_from': '09:00',
+            'available_until': '18:00',
+            'working_days': 'Mon,Tue,Wed,Thu,Fri',
+        }
+
+        response = self.client.post(create_url, payload, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertIn('pinfl', response_json)
+        self.assertIn('faqat raqamlardan iborat', str(response_json['pinfl']).lower())
+
+    def test_create_doctor_rejects_non_14_digit_jshshir(self):
+        self.auth_as(self.owner_a)
+        create_url = reverse('doctor-list')
+        specialization = Specialization.objects.create(name='Endokrinolog', code='ENDO')
+
+        payload = {
+            'pinfl': '1234567890123',
+            'first_name': 'Yangi',
+            'last_name': 'Doktor',
+            'email': 'pinfl.short@example.com',
+            'phone_number': '+998901231112',
+            'password': 'Pass12345!',
+            'consultation_fee': '60000',
+            'specialization_ids': [str(specialization.id)],
+            'available_from': '09:00',
+            'available_until': '18:00',
+            'working_days': 'Mon,Tue,Wed,Thu,Fri',
+        }
+
+        response = self.client.post(create_url, payload, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertIn('pinfl', response_json)
+        self.assertIn('14', str(response_json['pinfl']))
+
+    def test_create_doctor_rejects_passport_id_used_by_patient(self):
+        patient_user = CustomUser.objects.create_user(
+            username='patient-passport-owner',
+            email='patient.passport.owner@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Patient',
+            last_name='Owner',
+        )
+        Patient.objects.create(
+            user=patient_user,
+            national_id='AA1234567',
+        )
+
+        self.auth_as(self.owner_a)
+        create_url = reverse('doctor-list')
+        specialization = Specialization.objects.create(name='Pulmonolog', code='PULM')
+
+        payload = {
+            'pinfl': '11112222333344',
+            'first_name': 'Yangi',
+            'last_name': 'Doktor',
+            'email': 'passport.conflict@example.com',
+            'phone_number': '+998901231113',
+            'password': 'Pass12345!',
+            'passport_id': 'AA1234567',
+            'consultation_fee': '60000',
+            'specialization_ids': [str(specialization.id)],
+            'available_from': '09:00',
+            'available_until': '18:00',
+            'working_days': 'Mon,Tue,Wed,Thu,Fri',
+        }
+
+        response = self.client.post(create_url, payload, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertIn('passport_id', response_json)
+        self.assertIn('boshqa odamga tegishli', str(response_json['passport_id']).lower())
 
     def test_clinic_owner_can_update_doctor_lunch_schedule(self):
         self.auth_as(self.owner_a)

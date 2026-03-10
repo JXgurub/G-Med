@@ -25,6 +25,14 @@ export const isValidEmail = (email) => {
   return regex.test(email)
 }
 
+// Auto-complete email domain when user enters only local-part.
+export const normalizeEmailWithDefaultDomain = (value, defaultDomain = 'gmail.com') => {
+  const clean = String(value || '').trim()
+  if (!clean) return ''
+  if (clean.includes('@')) return clean
+  return `${clean}@${defaultDomain}`
+}
+
 // Get user role from token or storage
 export const getUserRole = () => {
   // TODO: Implement actual role retrieval from auth token

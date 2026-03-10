@@ -123,10 +123,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: >
-      sh -c "python manage.py migrate &&
-             python manage.py collectstatic --noinput &&
-             gunicorn config.asgi:application -c gunicorn.conf.py"
+    command: gunicorn config.asgi:application -c gunicorn.conf.py
     mem_limit: 900m
     cpus: 1.00
     logging:
@@ -186,6 +183,8 @@ services:
              --concurrency=${CELERY_WORKER_CONCURRENCY:-2}
              --max-tasks-per-child=${CELERY_WORKER_MAX_TASKS_PER_CHILD:-200}
              --prefetch-multiplier=${CELERY_WORKER_PREFETCH_MULTIPLIER:-1}"
+    healthcheck:
+      disable: true
     mem_limit: 700m
     cpus: 0.80
     logging:
@@ -238,6 +237,8 @@ services:
       redis:
         condition: service_healthy
     command: celery -A config beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    healthcheck:
+      disable: true
     mem_limit: 256m
     cpus: 0.30
     logging:

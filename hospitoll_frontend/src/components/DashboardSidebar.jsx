@@ -69,7 +69,7 @@ const DashboardSidebar = () => {
     <div className={`dashboard-sidebar ${isOpen ? 'open' : 'collapsed'}`}>
       <div className="sidebar-header">
         <div className="sidebar-logo">
-          <div className="logo-icon">G</div>
+          <img src="/gmed-logo.svg" alt="G-MED logo" className="sidebar-logo-image" />
           {isOpen && <h2>G-MED</h2>}
         </div>
         <button

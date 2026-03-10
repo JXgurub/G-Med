@@ -140,6 +140,19 @@ class Doctor(models.Model):
         db_index=True,
         help_text=_("Doktorning pasport yoki ID raqami")
     )
+    telegram_user_id = models.BigIntegerField(
+        _('telegram user id'),
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=_('Doktor Telegram user id (password reset OTP uchun)')
+    )
+    telegram_chat_id = models.BigIntegerField(
+        _('telegram chat id'),
+        null=True,
+        blank=True,
+        help_text=_('Doktor Telegram chat id (password reset OTP uchun)')
+    )
     COMPENSATION_TYPE_CHOICES = (
         ('salary', _('Salary')),
         ('percent', _('Percent')),

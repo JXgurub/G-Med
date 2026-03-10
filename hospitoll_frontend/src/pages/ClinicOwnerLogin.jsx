@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useClinic } from '../context/ClinicContext'
 import PasswordInput from '../components/PasswordInput'
+import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import './ClinicOwnerLogin.css'
 
 const ClinicOwnerLogin = () => {
@@ -17,7 +18,8 @@ const ClinicOwnerLogin = () => {
     setError('')
     setLoading(true)
 
-    const result = await loginClinicOwner(email, password)
+    const normalizedEmail = normalizeEmailWithDefaultDomain(email)
+    const result = await loginClinicOwner(normalizedEmail, password)
     if (result.success) {
       navigate('/clinic-dashboard')
     } else {
@@ -35,7 +37,7 @@ const ClinicOwnerLogin = () => {
       <div className="login-container">
         <div className="login-card">
           <div className="login-header">
-            <div className="logo-icon">G</div>
+            <img src="/gmed-logo.svg" alt="G-MED logo" className="login-logo-image" />
             <h1>Klinika Egasi Portali</h1>
             <p>O'z klinikangizga kirishingiz</p>
           </div>
@@ -49,6 +51,7 @@ const ClinicOwnerLogin = () => {
                 placeholder="clinic@example.uz"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                onBlur={(e) => setEmail(normalizeEmailWithDefaultDomain(e.target.value))}
                 disabled={loading}
                 autoComplete="email"
                 autoFocus
