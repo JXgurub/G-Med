@@ -25,14 +25,14 @@ const DashboardSidebar = () => {
     },
     {
       id: 'directions',
-      label: 'Yo\'nalishlar',
+      label: 'Xizmatlar',
       icon: (
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
           <path d="M10 2L2 6v4c0 5 3 8 8 10 5-2 8-5 8-10V6l-8-4z" stroke="currentColor" strokeWidth="1.5" fill="none"/>
           <path d="M10 7v6M7 10h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
         </svg>
       ),
-      href: '/clinic-dashboard/directions'
+      href: '/clinic-dashboard/services'
     },
     {
       id: 'appointments',
@@ -49,6 +49,18 @@ const DashboardSidebar = () => {
         </svg>
       ),
       href: '/clinic-dashboard/appointments'
+    },
+    {
+      id: 'former-doctors',
+      label: 'Ishdan olinganlar',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.5"/>
+          <path d="M6.5 6.5L13.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          <path d="M13.5 6.5L6.5 13.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+        </svg>
+      ),
+      href: '/clinic-dashboard/former-doctors'
     },
     {
       id: 'settings',

@@ -1,10 +1,24 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePharmacy } from '../context/PharmacyContext'
-import { pharmaciesApi } from '../services/api'
+import { useNotifications } from '../hooks/useWebSocket'
+import { pharmaciesApi, medicinesApi } from '../services/api'
 import useSmartAutoRefresh from '../hooks/useSmartAutoRefresh'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './PharmacyOwnerDashboard.css'
+
+const DEFAULT_MEDICINE_FORM = {
+  name: '',
+  dosageForm: 'tabletka',
+  expiryDate: '',
+  countryOfOrigin: '',
+  price: '',
+  category: 'Boshqa',
+  stock: '1'
+}
+
+const MEDICINE_APPEARANCE_OPTIONS = ['tabletka', 'sirop', 'kapsula', 'svecha', 'ampula', 'kukon']
+const MEDICINE_COUNTRY_OPTIONS = ["O'zbekiston", 'Rossiya', 'Vetnam', 'Boshqa']
 
 const downloadBlob = (content, filename, mimeType) => {
   const blob = new Blob([content], { type: mimeType })
@@ -55,6 +69,96 @@ const parsePriceValue = (value) => {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+const normalizeCountryOption = (value) => {
+  const country = String(value || '').trim()
+  const normalized = country.toLowerCase()
+  if (!normalized) return ''
+
+  const aliases = {
+    "o'zbekiston": "O'zbekiston",
+    'ozbekiston': "O'zbekiston",
+    'uzbekistan': "O'zbekiston",
+    'rossiya': 'Rossiya',
+    'rassiya': 'Rossiya',
+    'russia': 'Rossiya',
+    'vetnam': 'Vetnam',
+    'vietnam': 'Vetnam',
+    'boshqa': 'Boshqa',
+    'other': 'Boshqa',
+  }
+
+  if (aliases[normalized]) {
+    return aliases[normalized]
+  }
+  if (MEDICINE_COUNTRY_OPTIONS.includes(country)) {
+    return country
+  }
+  return 'Boshqa'
+}
+
+const buildMedicineDisplayName = (name, strength = '') => {
+  const cleanName = String(name || '').trim()
+  const cleanStrength = String(strength || '').trim()
+
+  if (!cleanStrength) return cleanName
+  if (cleanName.toLowerCase().includes(cleanStrength.toLowerCase())) {
+    return cleanName
+  }
+  return `${cleanName} ${cleanStrength}`.trim()
+}
+
+const normalizeExpiryDateValue = (value) => {
+  if (value == null || value === '') return ''
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const excelEpoch = new Date(Date.UTC(1899, 11, 30))
+    const nextDate = new Date(excelEpoch.getTime() + Math.round(value) * 86400000)
+    return String(nextDate.getUTCFullYear())
+  }
+
+  const text = String(value).trim()
+  if (!text) return ''
+  if (/^\d{4}$/.test(text)) return text
+  const direct = text.match(/^\d{4}-\d{2}-\d{2}$/)
+  if (direct) return text.slice(0, 4)
+
+  const parsed = new Date(text)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return String(parsed.getFullYear())
+}
+
+const formatDateLabel = (value) => {
+  return normalizeExpiryDateValue(value) || '—'
+}
+
+const normalizeMedicineLabel = (value) => String(value || '').trim().toLowerCase()
+
+const buildMedicineIdentityKey = (value = {}) => {
+  const name = normalizeMedicineLabel(buildMedicineDisplayName(value.name, value.strength || value.medicine_strength))
+  const dosageForm = normalizeMedicineLabel(value.dosageForm || value.appearance || value.dosage_form)
+  const category = normalizeMedicineLabel(value.category)
+  const country = normalizeMedicineLabel(value.countryOfOrigin || value.country_of_origin)
+  return `${name}__${dosageForm}__${category}__${country}`
+}
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+const getMedicineNameSuggestionScore = (medicineName, query) => {
+  const normalizedMedicineName = normalizeMedicineLabel(medicineName)
+  const normalizedQuery = normalizeMedicineLabel(query)
+
+  if (!normalizedMedicineName || !normalizedQuery) return 0
+  if (normalizedMedicineName === normalizedQuery) return 100
+  if (normalizedMedicineName.startsWith(normalizedQuery)) return 80
+  if (normalizedMedicineName.includes(normalizedQuery)) return 60
+
+  const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean)
+  if (queryTokens.length > 0 && queryTokens.every((token) => normalizedMedicineName.includes(token))) {
+    return 40
+  }
+
+  return 0
+}
+
 const mapImportedMedicineRow = (row) => {
   const normalized = {}
   Object.entries(row || {}).forEach(([key, value]) => {
@@ -77,6 +181,41 @@ const mapImportedMedicineRow = (row) => {
     ?? 'Boshqa'
   ).trim() || 'Boshqa'
 
+  const strength = String(
+    normalized.strength
+    ?? normalized.dose
+    ?? normalized.dosage
+    ?? normalized.dozasi
+    ?? ''
+  ).trim()
+  const fullName = buildMedicineDisplayName(name, strength)
+
+  const dosageForm = String(
+    normalized.dosage_form
+    ?? normalized.appearance
+    ?? normalized.korinishi
+    ?? normalized.korinishi
+    ?? normalized.form
+    ?? 'tabletka'
+  ).trim().toLowerCase() || 'tabletka'
+
+  const countryOfOrigin = normalizeCountryOption(String(
+    normalized.country_of_origin
+    ?? normalized.country
+    ?? normalized.ishlab_chiqarilgan_davlat
+    ?? normalized.davlat
+    ?? ''
+  ).trim())
+
+  const expiryDate = normalizeExpiryDateValue(
+    normalized.expiry_year
+    ?? normalized.year
+    ?? normalized.expiry_date
+    ?? normalized.expiry
+    ?? normalized.yaroqlik_muddati
+    ?? normalized.yaroqlilik_muddati
+  )
+
   const price = parsePriceValue(
     normalized.price
     ?? normalized.narx
@@ -95,7 +234,16 @@ const mapImportedMedicineRow = (row) => {
     return null
   }
 
-  return { name, category, price, stock }
+  return {
+    name: fullName,
+    strength: '',
+    dosageForm,
+    countryOfOrigin,
+    expiryDate,
+    category,
+    price,
+    stock,
+  }
 }
 
 const toDelimitedText = (rows, delimiter = ',') => rows
@@ -110,6 +258,7 @@ const toDelimitedText = (rows, delimiter = ',') => rows
 
 const PharmacyOwnerDashboard = () => {
   const DEFAULT_PHONE_PREFIX = '+998'
+  const currentYear = new Date().getFullYear()
   const navigate = useNavigate()
   const {
     currentPharmacy,
@@ -142,11 +291,14 @@ const PharmacyOwnerDashboard = () => {
     totalRevenue: 0
   })
   const [formData, setFormData] = useState({
-    name: '',
-    price: '',
-    category: 'Boshqa',
-    stock: '1'
+    ...DEFAULT_MEDICINE_FORM
   })
+  const [medicineBase, setMedicineBase] = useState([])
+  const [medicineBaseLoading, setMedicineBaseLoading] = useState(false)
+  const [medicineNameAlerts, setMedicineNameAlerts] = useState([])
+  const [medicineNameAlertsLoading, setMedicineNameAlertsLoading] = useState(false)
+  const [correctionDrafts, setCorrectionDrafts] = useState({})
+  const [correctionSavingId, setCorrectionSavingId] = useState(null)
   const [priceClearedOnFocus, setPriceClearedOnFocus] = useState(false)
   const [medicineSearch, setMedicineSearch] = useState('')
   const [selectedLogoFile, setSelectedLogoFile] = useState(null)
@@ -156,12 +308,15 @@ const PharmacyOwnerDashboard = () => {
   const [medicineTransferMessage, setMedicineTransferMessage] = useState('')
   const [medicineTransferType, setMedicineTransferType] = useState('success')
   const [medicineImporting, setMedicineImporting] = useState(false)
+  const [medicineImportProgress, setMedicineImportProgress] = useState(0)
   const [pendingImportFile, setPendingImportFile] = useState(null)
+  const [confirmingAllNameAlerts, setConfirmingAllNameAlerts] = useState(false)
   const [bulkDeletingMedicines, setBulkDeletingMedicines] = useState(false)
   const [medicinesUpdatedAt, setMedicinesUpdatedAt] = useState(null)
   const logoInputRef = useRef(null)
   const logoActionWrapRef = useRef(null)
   const medicineImportInputRef = useRef(null)
+  const medicineMessageTimerRef = useRef(null)
 
   useEffect(() => {
     // Don't redirect while loading
@@ -186,6 +341,72 @@ const PharmacyOwnerDashboard = () => {
       working_hours: currentPharmacy.working_hours || '09:00 - 20:00'
     })
   }, [currentPharmacy, loading, navigate, pharmacyMedicines])
+
+  useEffect(() => {
+    if (!currentPharmacy?.id) {
+      setMedicineBase([])
+      return
+    }
+
+    let cancelled = false
+
+    const loadMedicineBase = async () => {
+      setMedicineBaseLoading(true)
+      try {
+        let page = 1
+        const all = []
+
+        while (page <= 100) {
+          const response = await medicinesApi.getAll({ page })
+
+          if (Array.isArray(response)) {
+            all.push(...response)
+            break
+          }
+
+          const rows = Array.isArray(response?.results) ? response.results : []
+          all.push(...rows)
+
+          if (!response?.next || rows.length === 0) {
+            break
+          }
+
+          page += 1
+        }
+
+        if (cancelled) return
+
+        const mapped = all.map((item) => ({
+          id: item.id,
+          name: buildMedicineDisplayName(item.name || '', item.strength || ''),
+          strength: item.strength || '',
+          dosageForm: item.dosage_form || 'tabletka',
+          countryOfOrigin: normalizeCountryOption(item.country_of_origin || ''),
+          category: item.category || item.description || 'Boshqa',
+          genericName: item.generic_name || '',
+          atcCode: item.atc_code || '',
+          manufacturer: item.manufacturer || '',
+          description: item.description || '',
+        }))
+
+        setMedicineBase(mapped)
+      } catch (error) {
+        if (!cancelled) {
+          setMedicineBase([])
+        }
+      } finally {
+        if (!cancelled) {
+          setMedicineBaseLoading(false)
+        }
+      }
+    }
+
+    loadMedicineBase()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentPharmacy?.id])
 
   // Sync medicines whenever pharmacyMedicines changes
   useEffect(() => {
@@ -276,6 +497,83 @@ const PharmacyOwnerDashboard = () => {
     }
   }, [showLogoMenu])
 
+  useEffect(() => () => {
+    if (medicineMessageTimerRef.current) {
+      window.clearTimeout(medicineMessageTimerRef.current)
+    }
+  }, [])
+
+  const showTemporaryMedicineMessage = useCallback((message, type = 'success') => {
+    setMedicineTransferType(type)
+    setMedicineTransferMessage(message)
+
+    if (medicineMessageTimerRef.current) {
+      window.clearTimeout(medicineMessageTimerRef.current)
+    }
+
+    medicineMessageTimerRef.current = window.setTimeout(() => {
+      setMedicineTransferMessage('')
+      medicineMessageTimerRef.current = null
+    }, 5000)
+  }, [])
+
+  const loadMedicineNameAlerts = useCallback(async ({ silent = false } = {}) => {
+    if (!currentPharmacy?.id) {
+      setMedicineNameAlerts([])
+      return
+    }
+
+    if (!silent) {
+      setMedicineNameAlertsLoading(true)
+    }
+
+    try {
+      const response = await medicinesApi.getNameAlerts()
+      const rows = Array.isArray(response) ? response : (Array.isArray(response?.results) ? response.results : [])
+      setMedicineNameAlerts(rows)
+    } catch (error) {
+      if (!silent) {
+        setMedicineTransferType('error')
+        setMedicineTransferMessage('Dori nomi bo\'yicha xabarlarni yuklashda xatolik yuz berdi.')
+      }
+      setMedicineNameAlerts([])
+    } finally {
+      if (!silent) {
+        setMedicineNameAlertsLoading(false)
+      }
+    }
+  }, [currentPharmacy?.id])
+
+  useEffect(() => {
+    loadMedicineNameAlerts()
+  }, [loadMedicineNameAlerts])
+
+  const handleMedicineNotification = useCallback(async (event) => {
+    const notificationType = event?.data?.notification_type
+    const payload = event?.data?.payload || {}
+
+    if (notificationType === 'medicine_name_verification_created') {
+      showTemporaryMedicineMessage(
+        payload?.message || `${payload?.original_name || 'Yangi dori'} bo'yicha tekshiruv xabari keldi.`
+      )
+      await loadMedicineNameAlerts({ silent: true })
+      return
+    }
+
+    if (notificationType === 'medicine_name_verification_resolved') {
+      const resolutionType = payload?.resolution_type
+      showTemporaryMedicineMessage(
+        resolutionType === 'kept_original'
+          ? `${payload?.original_name || 'Dori'} nomi shu holatda qoldi.`
+          : `${payload?.original_name || 'Dori'} nomi ${payload?.corrected_name || "to'g'rilandi"} qilib yangilandi.`
+      )
+      await loadMedicineNameAlerts({ silent: true })
+      await refreshCurrentPharmacyData()
+    }
+  }, [loadMedicineNameAlerts, refreshCurrentPharmacyData, showTemporaryMedicineMessage])
+
+  useNotifications(currentPharmacy?.owner, handleMedicineNotification)
+
   const refreshPharmacyDashboard = useCallback(async () => {
     if (!currentPharmacy?.id) return
     if (showAddForm || showPharmacyEdit || logoSaving || updatingPharmacy) return
@@ -305,11 +603,49 @@ const PharmacyOwnerDashboard = () => {
     return null
   }
 
+  const findMatchingMedicineBase = (medicineLike) => {
+    const key = buildMedicineIdentityKey(medicineLike)
+    if (!key || key.startsWith('___')) return null
+    return medicineBase.find((item) => buildMedicineIdentityKey(item) === key) || null
+  }
+
+  const runImportOperationWithRetry = async (operation, label = '') => {
+    const maxAttempts = 4
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await operation()
+      } catch (error) {
+        const isThrottle = error?.response?.status === 429
+        if (!isThrottle || attempt === maxAttempts) {
+          throw error
+        }
+
+        const detail = String(error?.response?.data?.detail || error?.message || '')
+        const retryAfterMatch = detail.match(/available in\s+(\d+)\s+second/i)
+        const retryAfterSeconds = retryAfterMatch ? Number.parseInt(retryAfterMatch[1], 10) : null
+        const fallbackSeconds = Math.min(12, attempt * 3)
+        const waitSeconds = Number.isFinite(retryAfterSeconds)
+          ? Math.max(2, Math.min(15, retryAfterSeconds))
+          : fallbackSeconds
+
+        setMedicineTransferType('error')
+        setMedicineTransferMessage(
+          `So'rov limiti vaqtincha to'ldi${label ? ` (${label})` : ''}. ${waitSeconds} soniyadan keyin qayta urinilmoqda (${attempt}/${maxAttempts}).`
+        )
+        await wait(waitSeconds * 1000)
+      }
+    }
+
+    return null
+  }
+
   const handleAddMedicine = async (e) => {
     e.preventDefault()
     const priceValue = parseCurrencyInput(formData.price)
-    if (!formData.name || !priceValue) {
-      alert('Dori nomi va narxini kiriting')
+    const expiryYear = normalizeExpiryDateValue(formData.expiryDate)
+    if (!formData.name || !formData.dosageForm || !expiryYear || !formData.countryOfOrigin || !priceValue) {
+      alert('Dori nomi, ko\'rinishi, yaroqlilik yili, ishlab chiqarilgan davlat va narxini kiriting')
       return
     }
 
@@ -317,6 +653,9 @@ const PharmacyOwnerDashboard = () => {
       if (editingId) {
         await updateMedicine(currentPharmacy.id, editingId, {
           name: formData.name,
+          dosageForm: formData.dosageForm,
+          countryOfOrigin: formData.countryOfOrigin,
+          expiryDate: expiryYear,
           price: priceValue,
           category: formData.category,
           stock: formData.stock === 'out' ? 0 : parseInt(formData.stock)
@@ -324,19 +663,29 @@ const PharmacyOwnerDashboard = () => {
         setEditingId(null)
         alert('Dori yangilandi! ✅')
       } else {
+        const matchedGlobalMedicine = findMatchingMedicineBase({
+          ...formData,
+          expiryDate: expiryYear,
+        })
+
         const result = await addMedicine(currentPharmacy.id, {
           ...formData,
+          expiryDate: expiryYear,
           price: priceValue,
           stock: formData.stock === 'out' ? 0 : parseInt(formData.stock)
+        }, {
+          preferredMedicineId: matchedGlobalMedicine?.id || null,
         })
         if (result?.mode === 'updated_existing') {
           alert('Bu dori allaqachon mavjud edi — mavjud yozuv yangilandi ✅')
+        } else if (result?.nameVerificationAlertCreated) {
+          alert('Dori qo\'shildi. Nomi bazada topilmadi, boshqa dorixonalarga xabar yuborildi ✅')
         } else {
           alert('Dori qo\'shildi! ✅')
         }
       }
 
-      setFormData({ name: '', price: '', category: 'Boshqa', stock: '1' })
+      setFormData({ ...DEFAULT_MEDICINE_FORM })
       setPriceClearedOnFocus(false)
       setShowAddForm(false)
     } catch (error) {
@@ -347,7 +696,10 @@ const PharmacyOwnerDashboard = () => {
 
   const handleEdit = (medicine) => {
     setFormData({
-      name: medicine.name,
+      name: buildMedicineDisplayName(medicine.name, medicine.strength),
+      dosageForm: medicine.dosageForm || medicine.appearance || 'tabletka',
+      expiryDate: normalizeExpiryDateValue(medicine.expiryDate) || '',
+      countryOfOrigin: normalizeCountryOption(medicine.countryOfOrigin) || '',
       price: formatCurrencyInput(medicine.price),
       category: medicine.category,
       stock: medicine.stock === 0 ? 'out' : medicine.stock.toString()
@@ -491,9 +843,134 @@ const PharmacyOwnerDashboard = () => {
   const normalizedMedicineSearch = medicineSearch.trim().toLowerCase()
   const filteredMedicines = normalizedMedicineSearch
     ? medicines.filter((medicine) =>
-        `${medicine.name} ${medicine.category}`.toLowerCase().includes(normalizedMedicineSearch)
+        `${buildMedicineDisplayName(medicine.name, medicine.strength)} ${medicine.dosageForm || medicine.appearance || ''} ${medicine.countryOfOrigin || ''} ${medicine.category}`.toLowerCase().includes(normalizedMedicineSearch)
       )
     : medicines
+
+  const filteredMedicineBase = normalizedMedicineSearch
+    ? medicineBase.filter((medicine) =>
+        `${buildMedicineDisplayName(medicine.name, medicine.strength)} ${medicine.dosageForm || ''} ${medicine.countryOfOrigin || ''} ${medicine.category || ''}`.toLowerCase().includes(normalizedMedicineSearch)
+      )
+    : []
+
+  const normalizedTypedMedicineName = normalizeMedicineLabel(formData.name)
+  const medicineNameSuggestions = normalizedTypedMedicineName
+    ? medicineBase
+        .map((medicine) => ({
+          medicine,
+          score: getMedicineNameSuggestionScore(medicine.name, normalizedTypedMedicineName),
+        }))
+        .filter((item) => item.score > 0)
+        .sort((left, right) => {
+          if (right.score !== left.score) {
+            return right.score - left.score
+          }
+          return String(left.medicine.name || '').localeCompare(String(right.medicine.name || ''), 'uz')
+        })
+        .slice(0, 5)
+        .map((item) => item.medicine)
+    : []
+  const exactMedicineNameFound = Boolean(
+    normalizedTypedMedicineName && medicineBase.some((medicine) => normalizeMedicineLabel(medicine.name) === normalizedTypedMedicineName)
+  )
+
+  const applyMedicineBaseTemplate = (medicine) => {
+    setEditingId(null)
+    setFormData((prev) => ({
+      ...prev,
+      name: buildMedicineDisplayName(medicine.name, medicine.strength) || '',
+      dosageForm: medicine.dosageForm || 'tabletka',
+      countryOfOrigin: normalizeCountryOption(medicine.countryOfOrigin) || prev.countryOfOrigin,
+      category: medicine.category || prev.category || 'Boshqa',
+    }))
+  }
+
+  const handleConfirmNameAlert = async (alertId) => {
+    setCorrectionSavingId(alertId)
+    try {
+      const result = await medicinesApi.confirmNameAlert(alertId)
+      await loadMedicineNameAlerts({ silent: true })
+      if (result?.resolved) {
+        showTemporaryMedicineMessage(
+          result?.resolution_type === 'kept_original'
+            ? 'Ko\'pchilik ovoziga ko\'ra nom shu holatda qoldi.'
+            : `Ko\'pchilik ovoziga ko\'ra nom ${result?.corrected_name || 'yangilandi'}.`
+        )
+      } else {
+        showTemporaryMedicineMessage('"To\'g\'ri kiritilgan" ovozi qabul qilindi.')
+      }
+      await refreshCurrentPharmacyData()
+    } catch (error) {
+      showTemporaryMedicineMessage(
+        error?.message || 'Tasdiqlashda xatolik yuz berdi.',
+        'error'
+      )
+    } finally {
+      setCorrectionSavingId(null)
+    }
+  }
+
+  const handleConfirmAllNameAlerts = async () => {
+    if (medicineNameAlerts.length === 0) {
+      return
+    }
+
+    const confirmed = window.confirm(
+      `${medicineNameAlerts.length} ta xabarning barchasiga "To'g'ri kiritilgan" deb ovoz bermoqchimisiz?`
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setConfirmingAllNameAlerts(true)
+    try {
+      const result = await medicinesApi.confirmAllNameAlerts()
+      await loadMedicineNameAlerts({ silent: true })
+      await refreshCurrentPharmacyData()
+      showTemporaryMedicineMessage(
+        `Barchasi tasdiqlandi: ${result?.processed_count || 0} ta ovoz, ${result?.resolved_count || 0} ta yakunlandi.`
+      )
+    } catch (error) {
+      showTemporaryMedicineMessage(
+        error?.message || 'Barchasini tasdiqlashda xatolik yuz berdi.',
+        'error'
+      )
+    } finally {
+      setConfirmingAllNameAlerts(false)
+    }
+  }
+
+  const handleCorrectNameAlert = async (alertId) => {
+    const correctedName = String(correctionDrafts[alertId] || '').trim()
+    if (!correctedName) {
+      alert('To\'g\'ri dori nomini doza bilan birga kiriting')
+      return
+    }
+
+    setCorrectionSavingId(alertId)
+    try {
+      const result = await medicinesApi.correctNameAlert(alertId, { name: correctedName })
+      setCorrectionDrafts((prev) => {
+        const nextState = { ...prev }
+        delete nextState[alertId]
+        return nextState
+      })
+      await loadMedicineNameAlerts({ silent: true })
+      showTemporaryMedicineMessage(
+        result?.resolved
+          ? `Ko\'pchilik ovoziga ko\'ra dori nomi: ${result?.corrected_name || correctedName}`
+          : 'Nom o\'zgartirish varianti qabul qilindi.'
+      )
+      await refreshCurrentPharmacyData()
+    } catch (error) {
+      showTemporaryMedicineMessage(
+        error?.message || 'Dori nomini to\'g\'rilashda xatolik yuz berdi.',
+        'error'
+      )
+    } finally {
+      setCorrectionSavingId(null)
+    }
+  }
 
   const formatDateTimeLabel = (value) => {
     if (!value) return '—'
@@ -514,7 +991,10 @@ const PharmacyOwnerDashboard = () => {
     const generatedAtLabel = formatDateTimeLabel(generatedAt)
     const items = medicines.map((medicine) => ({
       medicine_id: medicine.id,
-      name: medicine.name,
+      name: buildMedicineDisplayName(medicine.name, medicine.strength),
+      dosage_form: medicine.dosageForm || medicine.appearance || '',
+      expiry_year: normalizeExpiryDateValue(medicine.expiryDate) || '',
+      country_of_origin: normalizeCountryOption(medicine.countryOfOrigin) || 'Boshqa',
       category: medicine.category || 'Boshqa',
       price: Number(medicine.price || 0),
       stock: Number(medicine.stock || 0),
@@ -579,10 +1059,13 @@ const PharmacyOwnerDashboard = () => {
       ['address', payload.pharmacy.address],
       ['currency', 'UZS'],
       [],
-      ['medicine_id', 'name', 'category', 'price', 'stock', 'availability'],
+      ['medicine_id', 'name', 'dosage_form', 'expiry_year', 'country_of_origin', 'category', 'price', 'stock', 'availability'],
       ...payload.items.map((item) => [
         item.medicine_id,
         item.name,
+        item.dosage_form,
+        item.expiry_year,
+        item.country_of_origin,
         item.category,
         item.price,
         item.stock,
@@ -634,13 +1117,15 @@ const PharmacyOwnerDashboard = () => {
 
     if (!file || !currentPharmacy?.id) return
 
+    setMedicineImportProgress(0)
+
     try {
       const { mappedRows } = await parseImportedRowsFromFile(file)
       setPendingImportFile(file)
 
       if (mappedRows.length === 0) {
         setMedicineTransferType('error')
-        setMedicineTransferMessage('Fayl tanlandi, lekin yaroqli qator topilmadi. Ustunlar: name/narx/category/stock.')
+        setMedicineTransferMessage('Fayl tanlandi, lekin yaroqli qator topilmadi. Ustunlar: name/dosage_form/expiry_year/country/category/price/stock.')
         return
       }
 
@@ -661,18 +1146,23 @@ const PharmacyOwnerDashboard = () => {
     }
 
     setMedicineImporting(true)
+    setMedicineImportProgress(2)
 
     try {
       const { rawRows, mappedRows } = await parseImportedRowsFromFile(pendingImportFile)
       if (mappedRows.length === 0) {
         setMedicineTransferType('error')
-        setMedicineTransferMessage('Import uchun yaroqli qator topilmadi. Ustunlar: name/narx/category/stock.')
+        setMedicineTransferMessage('Import uchun yaroqli qator topilmadi. Ustunlar: name/dosage_form/expiry_year/country/category/price/stock.')
+        setMedicineImportProgress(0)
         return
       }
 
+      setMedicineImportProgress(8)
+
       const seen = new Set()
-      const existingNames = new Set(
-        medicines.map((medicine) => medicine.name.trim().toLowerCase())
+      const existingKeys = new Set(medicines.map((medicine) => buildMedicineIdentityKey(medicine)))
+      const medicineBaseByIdentity = new Map(
+        medicineBase.map((item) => [buildMedicineIdentityKey(item), item]).filter(([identity]) => Boolean(identity))
       )
       const existingItems = []
 
@@ -681,32 +1171,52 @@ const PharmacyOwnerDashboard = () => {
       let existingCount = 0
       let failedCount = 0
 
-      for (const medicine of mappedRows) {
-        const key = medicine.name.trim().toLowerCase()
+      for (let index = 0; index < mappedRows.length; index += 1) {
+        const medicine = mappedRows[index]
+        const key = buildMedicineIdentityKey(medicine)
+
         if (seen.has(key)) {
           skippedCount += 1
+          const progress = 8 + Math.round(((index + 1) / mappedRows.length) * 84)
+          setMedicineImportProgress(Math.min(92, progress))
           continue
         }
         seen.add(key)
 
-        if (existingNames.has(key)) {
+        if (existingKeys.has(key)) {
           existingCount += 1
           skippedCount += 1
-          existingItems.push(medicine.name)
+          existingItems.push(buildMedicineDisplayName(medicine.name, medicine.strength))
+          const progress = 8 + Math.round(((index + 1) / mappedRows.length) * 84)
+          setMedicineImportProgress(Math.min(92, progress))
           continue
         }
 
+        const matchedGlobalMedicine = medicineBaseByIdentity.get(key)
+
         try {
-          await addMedicine(currentPharmacy.id, medicine, { skipReload: true })
+          await runImportOperationWithRetry(
+            () => addMedicine(currentPharmacy.id, medicine, {
+              skipReload: true,
+              preferredMedicineId: matchedGlobalMedicine?.id || null,
+            }),
+            buildMedicineDisplayName(medicine.name, medicine.strength)
+          )
           importedCount += 1
-          existingNames.add(key)
+          existingKeys.add(key)
         } catch (error) {
           failedCount += 1
           console.error('Medicine import row failed:', error)
         }
+
+        const progress = 8 + Math.round(((index + 1) / mappedRows.length) * 84)
+        setMedicineImportProgress(Math.min(92, progress))
       }
 
+      setMedicineImportProgress(96)
       await refreshCurrentPharmacyData()
+      setMedicineImportProgress(100)
+
       const existingPreview = existingItems.slice(0, 6).join(', ')
       const existingSuffix = existingItems.length > 0
         ? ` Mavjud dorilar: ${existingPreview}${existingItems.length > 6 ? ' ...' : ''}.`
@@ -721,6 +1231,7 @@ const PharmacyOwnerDashboard = () => {
       console.error('Medicine import error:', error)
       setMedicineTransferType('error')
       setMedicineTransferMessage(`Importda xatolik: ${error?.message || 'noma\'lum xatolik'}`)
+      setMedicineImportProgress(0)
     } finally {
       setMedicineImporting(false)
     }
@@ -1045,7 +1556,7 @@ const PharmacyOwnerDashboard = () => {
                 onClick={() => {
                   setShowAddForm(!showAddForm)
                   setEditingId(null)
-                  setFormData({ name: '', price: '', category: 'Boshqa', stock: '1' })
+                  setFormData({ ...DEFAULT_MEDICINE_FORM })
                 }}
               >
                 {showAddForm ? '✕ Bekor qilish' : '+ Yangi dori qo\'shish'}
@@ -1067,46 +1578,149 @@ const PharmacyOwnerDashboard = () => {
             </div>
           )}
 
+          {medicineImporting && (
+            <div className="medicine-import-progress">
+              <div className="medicine-import-progress-meta">
+                <span>Import jarayoni</span>
+                <strong>{medicineImportProgress}%</strong>
+              </div>
+              <div className="medicine-import-progress-track">
+                <div
+                  className="medicine-import-progress-fill"
+                  style={{ width: `${Math.max(0, Math.min(100, medicineImportProgress))}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {(medicineNameAlertsLoading || medicineNameAlerts.length > 0) && (
+            <div className="medicine-alerts-panel">
+              <div className="medicine-alerts-header">
+                <div>
+                  <h3>Nomni tekshirish xabarlari</h3>
+                  <p>
+                    {medicineNameAlertsLoading
+                      ? 'Yuklanmoqda...'
+                      : `${medicineNameAlerts.length} ta boshqa dorixonadan kelgan xabar`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="medicine-alerts-confirm-all"
+                  onClick={handleConfirmAllNameAlerts}
+                  disabled={
+                    confirmingAllNameAlerts
+                    || medicineNameAlertsLoading
+                    || medicineNameAlerts.length === 0
+                  }
+                >
+                  {confirmingAllNameAlerts ? 'Saqlanmoqda...' : "Barchasi to'g'ri kiritilgan"}
+                </button>
+              </div>
+
+              {medicineNameAlerts.map((alertItem) => (
+                <div key={alertItem.id} className="medicine-alert-card">
+                  <div className="medicine-alert-card-head">
+                    <div>
+                      <strong>{alertItem.original_name || 'Noma\'lum dori'}</strong>
+                      <span>{alertItem.reported_by_pharmacy_name || 'Dorixona noma\'lum'}</span>
+                    </div>
+                    <span className="medicine-alert-badge">Tekshirish kerak</span>
+                  </div>
+
+                  <p className="medicine-alert-message">{alertItem.message}</p>
+
+                  <div className="medicine-alert-meta">
+                    <span>{alertItem.dosage_form || 'Ko\'rinishi yo\'q'}</span>
+                    <span>{alertItem.country_of_origin || 'Davlat kiritilmagan'}</span>
+                    <span>{alertItem.confirm_count || 0} ta to'g'ri</span>
+                    <span>{alertItem.leading_correction_name ? `${alertItem.leading_correction_name} (${alertItem.leading_correction_count || 0})` : 'O\'zgartirish yo\'q'}</span>
+                    <span>{alertItem.remaining_vote_count || 0} ta ovoz qolgan</span>
+                  </div>
+
+                  {alertItem.current_user_vote_type && (
+                    <p className="medicine-alert-message">
+                      Sizning ovozingiz: {alertItem.current_user_vote_type === 'confirm'
+                        ? 'To\'g\'ri kiritilgan'
+                        : (alertItem.current_user_corrected_name || 'Nom o\'zgartirish')}
+                    </p>
+                  )}
+
+                  <div className="medicine-alert-correction">
+                    <input
+                      type="text"
+                      placeholder="To'g'ri dori nomini doza bilan yozing"
+                      value={correctionDrafts[alertItem.id] || ''}
+                      onChange={(e) => setCorrectionDrafts((prev) => ({
+                        ...prev,
+                        [alertItem.id]: e.target.value,
+                      }))}
+                    />
+                    <button
+                      type="button"
+                      className="medicine-alert-correct-btn medicine-alert-confirm-btn"
+                      onClick={() => handleConfirmNameAlert(alertItem.id)}
+                      disabled={correctionSavingId === alertItem.id}
+                    >
+                      {correctionSavingId === alertItem.id ? 'Saqlanmoqda...' : "To'g'ri kiritilgan"}
+                    </button>
+                    <button
+                      type="button"
+                      className="medicine-alert-correct-btn"
+                      onClick={() => handleCorrectNameAlert(alertItem.id)}
+                      disabled={correctionSavingId === alertItem.id}
+                    >
+                      {correctionSavingId === alertItem.id ? 'Saqlanmoqda...' : "To'g'irlash"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {showAddForm && (
             <form className="add-medicine-form" onSubmit={handleAddMedicine}>
               <div className="add-form-search">
-                <label>Mavjud dorilar ichidan qidirish</label>
+                <label>Dorilar bazasidan qidirish</label>
                 <div className="search-input-wrap">
                   <span className="search-icon">🔎</span>
                   <input
                     type="text"
-                    placeholder="Nom yoki kategoriya bo'yicha qidiring..."
+                    placeholder="Nom, doza, ko'rinish yoki kategoriya bo'yicha qidiring..."
                     value={medicineSearch}
                     onChange={(e) => setMedicineSearch(e.target.value)}
                   />
                 </div>
+                <p className="medicine-base-meta">
+                  Bazada: {medicineBase.length} ta dori {medicineBaseLoading ? '(yuklanmoqda...)' : ''}
+                </p>
 
                 {normalizedMedicineSearch && (
                   <div className="search-preview-list">
-                    {filteredMedicines.slice(0, 4).map((medicine) => (
+                    {filteredMedicineBase.slice(0, 6).map((medicine) => (
                       <button
                         key={`search-${medicine.id}`}
                         type="button"
                         className="search-preview-item"
-                        onClick={() => handleEdit(medicine)}
+                        onClick={() => applyMedicineBaseTemplate(medicine)}
                       >
                         <div>
-                          <strong>{medicine.name}</strong>
-                          <span>{medicine.category} • {medicine.price.toLocaleString()} so'm</span>
+                          <strong>{buildMedicineDisplayName(medicine.name, medicine.strength)}</strong>
+                          <span>{medicine.dosageForm || 'tabletka'} • {medicine.countryOfOrigin || 'Davlat kiritilmagan'} • {medicine.category}</span>
                         </div>
-                        <span className="search-preview-action">Tahrirlash</span>
+                        <span className="search-preview-action">Formaga qo'yish</span>
                       </button>
                     ))}
 
-                    {filteredMedicines.length === 0 && (
-                      <p className="search-preview-empty">Bu so'rov bo'yicha dori topilmadi</p>
+                    {filteredMedicineBase.length === 0 && (
+                      <p className="search-preview-empty">Bu so'rov bo'yicha bazada dori topilmadi</p>
                     )}
                   </div>
                 )}
               </div>
 
               <div className="form-group">
-                <label>Dori nomi</label>
+                <label>Dori nomi va dozasi</label>
                 <input
                   type="text"
                   placeholder="masalan: Aspirin 500mg"
@@ -1114,6 +1728,78 @@ const PharmacyOwnerDashboard = () => {
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   required
                 />
+
+                {normalizedTypedMedicineName && (
+                  <div className="medicine-name-suggestions">
+                    <div className="medicine-name-suggestions-title">Nom bo'yicha tavsiyalar</div>
+
+                    {medicineNameSuggestions.length > 0 ? (
+                      medicineNameSuggestions.map((medicine) => (
+                        <button
+                          key={`name-suggestion-${medicine.id}`}
+                          type="button"
+                          className="medicine-name-suggestion-item"
+                          onClick={() => applyMedicineBaseTemplate(medicine)}
+                        >
+                          <strong>{buildMedicineDisplayName(medicine.name, medicine.strength)}</strong>
+                          <span>{medicine.dosageForm || 'tabletka'} • {medicine.countryOfOrigin || 'Davlat kiritilmagan'}</span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="medicine-name-suggestion-empty">
+                        Bazada aynan shu nom topilmadi. Shu nom bilan qo'shsangiz, boshqa dorixonalarga xabar yuboriladi.
+                      </p>
+                    )}
+
+                    {!exactMedicineNameFound && medicineNameSuggestions.length > 0 && (
+                      <p className="medicine-name-suggestion-hint">
+                        O'xshash nomlar topildi. Xato yozilmaganini tekshirib oling.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Ko'rinishi</label>
+                  <select
+                    value={formData.dosageForm}
+                    onChange={(e) => setFormData({ ...formData, dosageForm: e.target.value })}
+                  >
+                    {MEDICINE_APPEARANCE_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label>Yaroqlilik yili</label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={currentYear}
+                    max={currentYear + 50}
+                    placeholder={`${currentYear + 1}`}
+                    value={formData.expiryDate}
+                    onChange={(e) => setFormData({ ...formData, expiryDate: String(e.target.value || '').replace(/\D+/g, '').slice(0, 4) })}
+                    required
+                  />
+                </div>
+
+                <div className="form-group">
+                  <label>Ishlab chiqarilgan davlat</label>
+                  <select
+                    value={formData.countryOfOrigin}
+                    onChange={(e) => setFormData({ ...formData, countryOfOrigin: e.target.value })}
+                    required
+                  >
+                    <option value="">Davlatni tanlang</option>
+                    {MEDICINE_COUNTRY_OPTIONS.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div className="form-row">
@@ -1177,7 +1863,7 @@ const PharmacyOwnerDashboard = () => {
                 <div key={medicine.id} className={`medicine-card ${medicine.stock === 0 ? 'out-of-stock' : ''}`}>
                   <div className="medicine-header">
                     <div>
-                      <h3>{medicine.name}</h3>
+                      <h3>{buildMedicineDisplayName(medicine.name, medicine.strength)}</h3>
                       <p className="category">{medicine.category}</p>
                     </div>
                     <span className={`stock-badge ${medicine.stock === 0 ? 'out' : 'available'}`}>
@@ -1186,6 +1872,18 @@ const PharmacyOwnerDashboard = () => {
                   </div>
 
                   <div className="medicine-details">
+                    <div className="detail">
+                      <span className="label">Ko'rinishi:</span>
+                      <span className="value">{medicine.dosageForm || medicine.appearance || '—'}</span>
+                    </div>
+                    <div className="detail">
+                      <span className="label">Davlat:</span>
+                      <span className="value">{medicine.countryOfOrigin || '—'}</span>
+                    </div>
+                    <div className="detail">
+                      <span className="label">Yaroqlilik:</span>
+                      <span className="value">{formatDateLabel(medicine.expiryDate)}</span>
+                    </div>
                     <div className="detail">
                       <span className="label">Narxi:</span>
                       <span className="value price">{medicine.price.toLocaleString()} so'm</span>

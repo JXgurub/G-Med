@@ -6,9 +6,13 @@ from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.utils.timezone import localdate, localtime
 from django.db import transaction
+from django.db.models import Q
+from django.db.models import Value
+from django.db.models.functions import Upper, Replace
 from datetime import datetime, timedelta
+import re
 
-from .models import Doctor, Specialization, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization
+from .models import Doctor, Specialization, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization, DoctorEmployment
 from apps.patients.models import PatientDoctorRating
 from .serializers import (
     DoctorSerializer,
@@ -48,6 +52,13 @@ DEFAULT_SPECIALIZATIONS = [
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.select_related('user', 'clinic').prefetch_related('specializations')
     filterset_fields = ['clinic', 'is_active']
+
+    @staticmethod
+    def _is_truthy_query_param(value):
+        return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
+
+    def _include_former_requested(self):
+        return self._is_truthy_query_param(self.request.query_params.get('include_former'))
 
     def _build_schedule_slots_for_date(self, doctor, target_date):
         """Return expected (start_time, end_time) slot tuples for a specific date based on doctor's schedule."""
@@ -125,6 +136,44 @@ class DoctorViewSet(viewsets.ModelViewSet):
             return [permissions.IsAuthenticated()]
         return [permissions.IsAuthenticated()]
 
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        scope_clinic_id = self.request.query_params.get('clinic')
+        if scope_clinic_id:
+            context['scope_clinic_id'] = str(scope_clinic_id)
+        return context
+
+    def list(self, request, *args, **kwargs):
+        include_former = self._include_former_requested()
+        scope_clinic_id = request.query_params.get('clinic')
+
+        if include_former and scope_clinic_id:
+            if not request.user.is_authenticated or not request.user.is_clinic:
+                return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+
+            owner_clinic = getattr(request.user, 'clinic', None)
+            if not owner_clinic or str(owner_clinic.id) != str(scope_clinic_id):
+                return Response({'detail': 'Faqat o\'z klinikangiz ma\'lumotlarini ko\'rishingiz mumkin.'}, status=status.HTTP_403_FORBIDDEN)
+
+            former_doctor_ids = DoctorEmployment.objects.filter(
+                clinic_id=scope_clinic_id,
+                ended_at__isnull=False,
+            ).values_list('doctor_id', flat=True)
+
+            queryset = self.get_queryset().filter(
+                Q(clinic_id=scope_clinic_id) | Q(id__in=former_doctor_ids)
+            ).distinct().order_by('-updated_at')
+
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                serializer = self.get_serializer(page, many=True)
+                return self.get_paginated_response(serializer.data)
+
+            serializer = self.get_serializer(queryset, many=True)
+            return Response(serializer.data)
+
+        return super().list(request, *args, **kwargs)
+
     def create(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
@@ -143,6 +192,163 @@ class DoctorViewSet(viewsets.ModelViewSet):
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=False, methods=['post'], url_path='identity-check')
+    def identity_check(self, request):
+        if not request.user.is_authenticated:
+            return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+        if not (request.user.is_clinic or request.user.is_superuser or request.user.is_staff):
+            return Response({'detail': 'Faqat klinika egasi tekshirishi mumkin.'}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = request.data or {}
+
+        pinfl_raw = str(payload.get('pinfl') or '').strip()
+        passport_raw = str(payload.get('passport_id') or '').strip()
+        first_name = str(payload.get('first_name') or '').strip().lower()
+        last_name = str(payload.get('last_name') or '').strip().lower()
+        email = str(payload.get('email') or '').strip().lower()
+        birth_date = str(payload.get('date_of_birth') or '').strip()
+
+        field_errors = {}
+
+        pinfl = str(pinfl_raw or '')
+        if pinfl and not pinfl.isdigit():
+            field_errors['pinfl'] = "JSHSHIR faqat raqamlardan iborat bo'lishi kerak."
+        if pinfl and len(pinfl) != 14:
+            field_errors['pinfl'] = "JSHSHIR 14 ta raqamdan iborat bo'lishi kerak."
+
+        passport_id = re.sub(r"\s+", "", passport_raw).upper() if passport_raw else ''
+
+        if field_errors:
+            return Response({
+                'status': 'invalid_identity',
+                'message': 'JSHSHIR yoki Pasport/ID noto\'g\'ri kiritilgan.',
+                'field_errors': field_errors,
+                'can_submit': False,
+            }, status=status.HTTP_200_OK)
+
+        if not pinfl and not passport_id:
+            return Response({
+                'status': 'insufficient_identity',
+                'message': 'JSHSHIR yoki Pasport/ID kiriting.',
+                'can_submit': False,
+            }, status=status.HTTP_200_OK)
+
+        clinic = None
+        if request.user.is_clinic:
+            clinic = getattr(request.user, 'clinic', None)
+
+        existing_by_pinfl = Doctor.objects.select_related('user', 'clinic').filter(pinfl=pinfl).first() if pinfl else None
+        existing_by_passport = None
+        if passport_id:
+            existing_by_passport = (
+                Doctor.objects.select_related('user', 'clinic')
+                .annotate(
+                    passport_norm=Replace(
+                        Replace(Upper('passport_id'), Value(' '), Value('')),
+                        Value('\t'),
+                        Value(''),
+                    )
+                )
+                .filter(passport_norm=passport_id)
+                .first()
+            )
+
+        if existing_by_pinfl and existing_by_passport and existing_by_pinfl.id != existing_by_passport.id:
+            return Response({
+                'status': 'identity_conflict',
+                'message': "Kiritilgan JSHSHIR va Pasport/ID turli doktorlarga tegishli.",
+                'field_errors': {
+                    'pinfl': "JSHSHIR boshqa doktorga tegishli.",
+                    'passport_id': "Pasport/ID boshqa doktorga tegishli.",
+                },
+                'can_submit': False,
+            }, status=status.HTTP_200_OK)
+
+        existing_doctor = existing_by_pinfl or existing_by_passport
+        if not existing_doctor:
+            return Response({
+                'status': 'new_doctor_allowed',
+                'message': 'JSHSHIR/Pasport bazada topilmadi. Yangi doktor qo\'shishingiz mumkin.',
+                'can_submit': True,
+                'is_existing_doctor': False,
+            }, status=status.HTTP_200_OK)
+
+        current_clinic_id = str(clinic.id) if clinic else ''
+        doctor_clinic_id = str(existing_doctor.clinic_id) if existing_doctor.clinic_id else ''
+
+        if existing_doctor.is_active and doctor_clinic_id and current_clinic_id and doctor_clinic_id != current_clinic_id:
+            return Response({
+                'status': 'blocked_other_clinic',
+                'message': 'Bu doktor boshqa klinikada ishlayapdi.',
+                'can_submit': False,
+                'is_existing_doctor': True,
+            }, status=status.HTTP_200_OK)
+
+        if existing_doctor.is_active and doctor_clinic_id and current_clinic_id and doctor_clinic_id == current_clinic_id:
+            return Response({
+                'status': 'already_in_clinic',
+                'message': 'Bu doktor sizning klinikangizda allaqachon faol.',
+                'can_submit': False,
+                'is_existing_doctor': True,
+            }, status=status.HTTP_200_OK)
+
+        if (not existing_doctor.is_active) and doctor_clinic_id and current_clinic_id and doctor_clinic_id != current_clinic_id:
+            return Response({
+                'status': 'blocked_other_clinic',
+                'message': 'Bu doktor boshqa klinikaga biriktirilgan, avval bo\'shatilishi kerak.',
+                'can_submit': False,
+                'is_existing_doctor': True,
+            }, status=status.HTTP_200_OK)
+
+        required_profile_fields = {
+            'first_name': first_name,
+            'last_name': last_name,
+            'email': email,
+            'date_of_birth': birth_date,
+        }
+        missing = [name for name, val in required_profile_fields.items() if not val]
+        if missing:
+            return Response({
+                'status': 'needs_full_profile',
+                'message': 'Bazadagi doktorni ishga olish uchun to\'liq ma\'lumot kiriting.',
+                'field_errors': {name: 'Ushbu maydonni to\'ldiring.' for name in missing},
+                'can_submit': False,
+                'is_existing_doctor': True,
+            }, status=status.HTTP_200_OK)
+
+        mismatch_errors = {}
+        if first_name != str(existing_doctor.user.first_name or '').strip().lower():
+            mismatch_errors['first_name'] = "Ism bazadagi doktor ma'lumotiga mos emas."
+        if last_name != str(existing_doctor.user.last_name or '').strip().lower():
+            mismatch_errors['last_name'] = "Familiya bazadagi doktor ma'lumotiga mos emas."
+        if email != str(existing_doctor.user.email or '').strip().lower():
+            mismatch_errors['email'] = "Email bazadagi doktor ma'lumotiga mos emas."
+        existing_birth_date = existing_doctor.date_of_birth.isoformat() if existing_doctor.date_of_birth else ''
+        if existing_birth_date and birth_date != existing_birth_date:
+            mismatch_errors['date_of_birth'] = "Tug'ilgan sana bazadagi doktor ma'lumotiga mos emas."
+
+        if mismatch_errors:
+            return Response({
+                'status': 'identity_mismatch',
+                'message': 'Kiritilgan ma\'lumotlar bazadagi doktor bilan mos emas.',
+                'field_errors': mismatch_errors,
+                'can_submit': False,
+                'is_existing_doctor': True,
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            'status': 'eligible_rehire',
+            'message': 'Doktor bazada topildi va ma\'lumotlar mos. Ishga olish mumkin.',
+            'can_submit': True,
+            'is_existing_doctor': True,
+            'doctor': {
+                'id': str(existing_doctor.id),
+                'full_name': f"{existing_doctor.user.first_name} {existing_doctor.user.last_name}".strip(),
+                'passport_id': existing_doctor.passport_id,
+                'pinfl': existing_doctor.pinfl,
+            },
+        }, status=status.HTTP_200_OK)
 
     def destroy(self, request, *args, **kwargs):
         return Response(
@@ -201,6 +407,10 @@ class DoctorViewSet(viewsets.ModelViewSet):
             self.perform_update(serializer)
 
             updated_instance = serializer.instance
+            compensation_changed = (
+                'compensation_type' in serializer.validated_data
+                or 'compensation_value' in serializer.validated_data
+            )
             schedule_changed = (
                 old_schedule['available_from'] != updated_instance.available_from
                 or old_schedule['available_until'] != updated_instance.available_until
@@ -209,6 +419,18 @@ class DoctorViewSet(viewsets.ModelViewSet):
                 or old_schedule['working_days'] != updated_instance.working_days
                 or old_schedule['slot_minutes'] != updated_instance.slot_minutes
             )
+
+            if compensation_changed and updated_instance.clinic_id:
+                active_employment = DoctorEmployment.objects.filter(
+                    doctor=updated_instance,
+                    clinic=updated_instance.clinic,
+                    ended_at__isnull=True,
+                ).order_by('-started_at').first()
+
+                if active_employment:
+                    active_employment.compensation_type = updated_instance.compensation_type or 'salary'
+                    active_employment.compensation_value = updated_instance.compensation_value
+                    active_employment.save(update_fields=['compensation_type', 'compensation_value', 'updated_at'])
 
             if schedule_changed:
                 try:
@@ -401,6 +623,31 @@ class DoctorViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Faqat o\'z klinikangiz doktorini bo\'shata olasiz.'}, status=status.HTTP_403_FORBIDDEN)
 
         now = timezone.now()
+        clinic = doctor.clinic
+
+        active_employment = DoctorEmployment.objects.filter(
+            doctor=doctor,
+            clinic=clinic,
+            ended_at__isnull=True,
+        ).order_by('-started_at').first()
+
+        if active_employment:
+            active_employment.ended_at = now
+            active_employment.terminated_by = request.user
+            active_employment.compensation_type = doctor.compensation_type or 'salary'
+            active_employment.compensation_value = doctor.compensation_value
+            active_employment.save(update_fields=['ended_at', 'terminated_by', 'compensation_type', 'compensation_value', 'updated_at'])
+        else:
+            DoctorEmployment.objects.create(
+                doctor=doctor,
+                clinic=clinic,
+                started_at=doctor.created_at or now,
+                ended_at=now,
+                terminated_by=request.user,
+                compensation_type=doctor.compensation_type or 'salary',
+                compensation_value=doctor.compensation_value,
+            )
+
         doctor.is_checked_in = False
         doctor.checked_out_at = now
         doctor.is_active = False

@@ -1,11 +1,13 @@
 import logging
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
 import requests
 from django.conf import settings
+from django.contrib.auth.hashers import make_password
 from django.db import transaction
 from django.db import IntegrityError
 from django.db import models
@@ -14,6 +16,7 @@ from django.utils import timezone
 from apps.doctors.models import Doctor, DoctorAvailability
 from apps.medical.models import Appointment, TelegramConversationState
 from apps.medical.schedule_utils import validate_doctor_booking_window
+from apps.users.models import ClinicResetTelegramSession, DoctorResetTelegramSession, PatientResetTelegramSession, PharmacyResetTelegramSession, PasswordResetCode
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +202,22 @@ class TelegramBotService:
             self._require_client().send_message(ctx.chat_id, "Token topilmadi. Linkdagi /start &lt;token&gt; ni qayta bosing.")
             return
 
+        if token.startswith('dr_'):
+            self._handle_doctor_reset_start(ctx, token[3:])
+            return
+
+        if token.startswith('cl_'):
+            self._handle_clinic_reset_start(ctx, token[3:])
+            return
+
+        if token.startswith('ph_'):
+            self._handle_pharmacy_reset_start(ctx, token[3:])
+            return
+
+        if token.startswith('pt_'):
+            self._handle_patient_reset_start(ctx, token[3:])
+            return
+
         try:
             # token is UUID
             appointment = Appointment.objects.select_related("doctor", "clinic", "patient").get(telegram_token=token)
@@ -251,6 +270,234 @@ class TelegramBotService:
         self._require_client().send_message(
             ctx.chat_id,
             f"✅ Tasdiqlandi!\n\n👤 {patient_name}\n📍 {clinic_name}\n👨‍⚕️ {doctor_name}\n🕒 {when}\n\n/myappointments orqali boshqaring.",
+        )
+
+    def _handle_doctor_reset_start(self, ctx: TelegramMessageContext, token: str) -> None:
+        try:
+            session = (
+                DoctorResetTelegramSession.objects.select_related('doctor', 'user')
+                .get(token=token)
+            )
+        except DoctorResetTelegramSession.DoesNotExist:
+            self._require_client().send_message(ctx.chat_id, "Doktor reset token topilmadi yoki ishlatilgan.")
+            return
+
+        if session.is_expired:
+            self._require_client().send_message(ctx.chat_id, "Doktor reset token muddati tugagan. Qayta so'rov yuboring.")
+            return
+
+        now = timezone.now()
+        with transaction.atomic():
+            session = DoctorResetTelegramSession.objects.select_for_update().select_related('doctor', 'user').get(id=session.id)
+            if session.telegram_user_id and session.telegram_user_id != ctx.user_id:
+                self._require_client().send_message(ctx.chat_id, "Bu token boshqa Telegram akkauntga bog'langan.")
+                return
+
+            session.telegram_user_id = ctx.user_id
+            session.telegram_chat_id = ctx.chat_id
+            session.linked_at = now
+            session.expires_at = now + timedelta(hours=1)
+            session.save(update_fields=['telegram_user_id', 'telegram_chat_id', 'linked_at', 'expires_at', 'updated_at'])
+
+            doctor = session.doctor
+            doctor.telegram_user_id = ctx.user_id
+            doctor.telegram_chat_id = ctx.chat_id
+            doctor.save(update_fields=['telegram_user_id', 'telegram_chat_id', 'updated_at'])
+
+            # New OTP is generated at bot-link time, because stored reset codes are hashed and cannot be re-sent.
+            code = f"{secrets.randbelow(1000000):06d}"
+            PasswordResetCode.objects.create(
+                user=session.user,
+                code_hash=make_password(code),
+                expires_at=now + timedelta(minutes=2),
+            )
+
+        doctor_name = session.user.get_full_name() or session.user.email
+        phone = (session.user.phone_number or '').strip() or "-"
+        passport = (session.doctor.passport_id or '').strip() or "-"
+
+        self._require_client().send_message(
+            ctx.chat_id,
+            "✅ Doktor reset token ulandi.\n"
+            f"👤 Doktor: {doctor_name}\n"
+            f"📱 Tel: {phone}\n"
+            f"🪪 Passport: {passport}\n\n"
+            "Eslatma: bu bot sizga 1 soat davomida yordam beradi.",
+        )
+        self._require_client().send_message(
+            ctx.chat_id,
+            "🔐 G-MED doktor parol tiklash kodi\n\n"
+            f"Kod: <b>{code}</b>\n"
+            "Kod 2 daqiqa amal qiladi.\n"
+            "Agar bu so'rov sizniki bo'lmasa, xabarni e'tiborsiz qoldiring.",
+        )
+
+    def _handle_clinic_reset_start(self, ctx: TelegramMessageContext, token: str) -> None:
+        try:
+            session = (
+                ClinicResetTelegramSession.objects.select_related('clinic', 'user')
+                .get(token=token)
+            )
+        except ClinicResetTelegramSession.DoesNotExist:
+            self._require_client().send_message(ctx.chat_id, "Klinika reset token topilmadi yoki ishlatilgan.")
+            return
+
+        if session.is_expired:
+            self._require_client().send_message(ctx.chat_id, "Klinika reset token muddati tugagan. Qayta so'rov yuboring.")
+            return
+
+        now = timezone.now()
+        with transaction.atomic():
+            session = ClinicResetTelegramSession.objects.select_for_update().select_related('clinic', 'user').get(id=session.id)
+            if session.telegram_user_id and session.telegram_user_id != ctx.user_id:
+                self._require_client().send_message(ctx.chat_id, "Bu token boshqa Telegram akkauntga bog'langan.")
+                return
+
+            session.telegram_user_id = ctx.user_id
+            session.telegram_chat_id = ctx.chat_id
+            session.linked_at = now
+            session.expires_at = now + timedelta(hours=1)
+            session.save(update_fields=['telegram_user_id', 'telegram_chat_id', 'linked_at', 'expires_at', 'updated_at'])
+
+            code = f"{secrets.randbelow(1000000):06d}"
+            PasswordResetCode.objects.create(
+                user=session.user,
+                code_hash=make_password(code),
+                expires_at=now + timedelta(minutes=2),
+            )
+
+        owner_name = session.user.get_full_name() or session.user.email
+        owner_phone = (session.user.phone_number or '').strip() or "-"
+        clinic_number = (session.clinic.registration_number or '').strip() or "-"
+        passport = (session.clinic.owner_passport_id or '').strip() or "-"
+
+        self._require_client().send_message(
+            ctx.chat_id,
+            "✅ Klinika reset token ulandi.\n"
+            f"🏥 Klinika: {session.clinic.name}\n"
+            f"🔢 Klinika raqami: {clinic_number}\n"
+            f"👤 Egasi: {owner_name}\n"
+            f"📱 Tel: {owner_phone}\n"
+            f"🪪 Passport: {passport}\n\n"
+            "Eslatma: bu bot sizga 1 soat davomida yordam beradi.",
+        )
+        self._require_client().send_message(
+            ctx.chat_id,
+            "🔐 G-MED klinika parol tiklash kodi\n\n"
+            f"Kod: <b>{code}</b>\n"
+            "Kod 2 daqiqa amal qiladi.\n"
+            "Agar bu so'rov sizniki bo'lmasa, xabarni e'tiborsiz qoldiring.",
+        )
+
+    def _handle_patient_reset_start(self, ctx: TelegramMessageContext, token: str) -> None:
+        try:
+            session = (
+                PatientResetTelegramSession.objects.select_related('patient', 'user')
+                .get(token=token)
+            )
+        except PatientResetTelegramSession.DoesNotExist:
+            self._require_client().send_message(ctx.chat_id, "Bemor reset token topilmadi yoki ishlatilgan.")
+            return
+
+        if session.is_expired:
+            self._require_client().send_message(ctx.chat_id, "Bemor reset token muddati tugagan. Qayta so'rov yuboring.")
+            return
+
+        now = timezone.now()
+        with transaction.atomic():
+            session = PatientResetTelegramSession.objects.select_for_update().select_related('patient', 'user').get(id=session.id)
+            if session.telegram_user_id and session.telegram_user_id != ctx.user_id:
+                self._require_client().send_message(ctx.chat_id, "Bu token boshqa Telegram akkauntga bog'langan.")
+                return
+
+            session.telegram_user_id = ctx.user_id
+            session.telegram_chat_id = ctx.chat_id
+            session.linked_at = now
+            session.expires_at = now + timedelta(hours=1)
+            session.save(update_fields=['telegram_user_id', 'telegram_chat_id', 'linked_at', 'expires_at', 'updated_at'])
+
+            code = f"{secrets.randbelow(1000000):06d}"
+            PasswordResetCode.objects.create(
+                user=session.user,
+                code_hash=make_password(code),
+                expires_at=now + timedelta(minutes=2),
+            )
+
+        patient_name = session.user.get_full_name() or session.user.email
+        patient_phone = (session.patient.phone_number or session.user.phone_number or '').strip() or "-"
+        passport = (session.patient.national_id or '').strip() or "-"
+
+        self._require_client().send_message(
+            ctx.chat_id,
+            "✅ Bemor reset token ulandi.\n"
+            f"👤 Bemor: {patient_name}\n"
+            f"📱 Tel: {patient_phone}\n"
+            f"🪪 Passport: {passport}\n\n"
+            "Eslatma: bu bot sizga 1 soat davomida yordam beradi.",
+        )
+        self._require_client().send_message(
+            ctx.chat_id,
+            "🔐 G-MED bemor parol tiklash kodi\n\n"
+            f"Kod: <b>{code}</b>\n"
+            "Kod 2 daqiqa amal qiladi.\n"
+            "Agar bu so'rov sizniki bo'lmasa, xabarni e'tiborsiz qoldiring.",
+        )
+
+    def _handle_pharmacy_reset_start(self, ctx: TelegramMessageContext, token: str) -> None:
+        try:
+            session = (
+                PharmacyResetTelegramSession.objects.select_related('pharmacy', 'user')
+                .get(token=token)
+            )
+        except PharmacyResetTelegramSession.DoesNotExist:
+            self._require_client().send_message(ctx.chat_id, "Dorixona reset token topilmadi yoki ishlatilgan.")
+            return
+
+        if session.is_expired:
+            self._require_client().send_message(ctx.chat_id, "Dorixona reset token muddati tugagan. Qayta so'rov yuboring.")
+            return
+
+        now = timezone.now()
+        with transaction.atomic():
+            session = PharmacyResetTelegramSession.objects.select_for_update().select_related('pharmacy', 'user').get(id=session.id)
+            if session.telegram_user_id and session.telegram_user_id != ctx.user_id:
+                self._require_client().send_message(ctx.chat_id, "Bu token boshqa Telegram akkauntga bog'langan.")
+                return
+
+            session.telegram_user_id = ctx.user_id
+            session.telegram_chat_id = ctx.chat_id
+            session.linked_at = now
+            session.expires_at = now + timedelta(hours=1)
+            session.save(update_fields=['telegram_user_id', 'telegram_chat_id', 'linked_at', 'expires_at', 'updated_at'])
+
+            code = f"{secrets.randbelow(1000000):06d}"
+            PasswordResetCode.objects.create(
+                user=session.user,
+                code_hash=make_password(code),
+                expires_at=now + timedelta(minutes=2),
+            )
+
+        owner_name = session.user.get_full_name() or session.user.email
+        owner_phone = (session.user.phone_number or '').strip() or "-"
+        pharmacy_number = (session.pharmacy.registration_number or '').strip() or "-"
+        passport = (session.pharmacy.owner_passport_id or '').strip() or "-"
+
+        self._require_client().send_message(
+            ctx.chat_id,
+            "✅ Dorixona reset token ulandi.\n"
+            f"💊 Dorixona: {session.pharmacy.name}\n"
+            f"🔢 Dorixona raqami: {pharmacy_number}\n"
+            f"👤 Egasi: {owner_name}\n"
+            f"📱 Tel: {owner_phone}\n"
+            f"🪪 Passport: {passport}\n\n"
+            "Eslatma: bu bot sizga 1 soat davomida yordam beradi.",
+        )
+        self._require_client().send_message(
+            ctx.chat_id,
+            "🔐 G-MED dorixona parol tiklash kodi\n\n"
+            f"Kod: <b>{code}</b>\n"
+            "Kod 2 daqiqa amal qiladi.\n"
+            "Agar bu so'rov sizniki bo'lmasa, xabarni e'tiborsiz qoldiring.",
         )
 
     def _handle_myappointments(self, ctx: TelegramMessageContext) -> None:

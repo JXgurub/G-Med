@@ -333,6 +333,89 @@ class Doctor(models.Model):
         super().save(*args, **kwargs)
 
 
+class DoctorEmployment(models.Model):
+    """Tracks which clinic a doctor worked at and when the employment ended."""
+
+    id = models.UUIDField(
+        primary_key=True,
+        default=uuid4,
+        editable=False
+    )
+    doctor = models.ForeignKey(
+        Doctor,
+        on_delete=models.CASCADE,
+        related_name='employment_history'
+    )
+    clinic = models.ForeignKey(
+        'clinics.Clinic',
+        on_delete=models.CASCADE,
+        related_name='doctor_employments'
+    )
+    started_at = models.DateTimeField(
+        _('started at'),
+        default=timezone.now,
+        db_index=True
+    )
+    ended_at = models.DateTimeField(
+        _('ended at'),
+        null=True,
+        blank=True,
+        db_index=True
+    )
+    terminated_by = models.ForeignKey(
+        'users.CustomUser',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='terminated_doctor_employments'
+    )
+    compensation_type = models.CharField(
+        _('compensation type'),
+        max_length=20,
+        choices=Doctor.COMPENSATION_TYPE_CHOICES,
+        default='salary',
+        help_text=_('Employment pay model snapshot for historical reporting')
+    )
+    compensation_value = models.DecimalField(
+        _('compensation value'),
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text=_('Employment pay value snapshot for historical reporting')
+    )
+    created_at = models.DateTimeField(
+        _('created at'),
+        auto_now_add=True
+    )
+    updated_at = models.DateTimeField(
+        _('updated at'),
+        auto_now=True
+    )
+
+    class Meta:
+        ordering = ['-started_at']
+        verbose_name = _('Doctor Employment')
+        verbose_name_plural = _('Doctor Employments')
+        constraints = [
+            models.UniqueConstraint(
+                fields=['doctor'],
+                condition=models.Q(ended_at__isnull=True),
+                name='unique_active_employment_per_doctor'
+            )
+        ]
+        indexes = [
+            models.Index(fields=['doctor', 'clinic']),
+            models.Index(fields=['clinic', '-started_at']),
+            models.Index(fields=['doctor', 'ended_at']),
+        ]
+
+    def __str__(self):
+        status = 'active' if self.ended_at is None else f"ended {self.ended_at.date()}"
+        return f"{self.doctor.user.get_full_name()} @ {self.clinic.name} ({status})"
+
+
 class DoctorSpecialization(models.Model):
     """
     Junction model for Doctor and Specialization with pricing

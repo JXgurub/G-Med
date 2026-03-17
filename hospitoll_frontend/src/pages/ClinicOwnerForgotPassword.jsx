@@ -8,7 +8,7 @@ import './DoctorForgotPassword.css'
 const ADMIN_TELEGRAM_URL = 'https://t.me/G_Med_group'
 const CODE_MAX_SECONDS = 120
 const BOT_LINK_HIDE_SECONDS = 3600
-const BOT_LINK_HIDE_STORAGE_KEY = 'doctor_reset_bot_link_hidden_until'
+const BOT_LINK_HIDE_STORAGE_KEY = 'clinic_reset_bot_link_hidden_until'
 
 const onlyDigits = (value) => String(value || '').replace(/\D+/g, '')
 
@@ -29,13 +29,13 @@ const formatDuration = (seconds) => {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
 }
 
-const DoctorForgotPassword = () => {
+const ClinicOwnerForgotPassword = () => {
   const navigate = useNavigate()
   const [step, setStep] = useState('identity') // identity | code | new_password
 
+  const [clinicNumber, setClinicNumber] = useState('')
   const [passportId, setPassportId] = useState('')
-  const [birthDate, setBirthDate] = useState('')
-  const [pinfl, setPinfl] = useState('')
+  const [phoneNumber, setPhoneNumber] = useState('')
   const [code, setCode] = useState('')
   const [token, setToken] = useState('')
   const [newEmail, setNewEmail] = useState('')
@@ -109,17 +109,17 @@ const DoctorForgotPassword = () => {
   const canSubmit = useMemo(() => {
     if (loading || resendLoading) return false
     if (step === 'identity') {
-      return onlyDigits(passportId).length >= 5 && Boolean(birthDate) && onlyDigits(pinfl).length === 14
+      return Boolean(clinicNumber.trim() && onlyDigits(passportId).length >= 5 && onlyDigits(phoneNumber).length >= 9)
     }
     if (step === 'code') {
-      if (!passportId || !birthDate || !pinfl || token !== '' || lockState.blockedSeconds > 0) return false
+      if (!clinicNumber || !passportId || !phoneNumber || token !== '' || lockState.blockedSeconds > 0) return false
       return isCodeExpired ? true : Boolean(code)
     }
     if (step === 'new_password') {
       return Boolean(token && newPassword && confirmPassword)
     }
     return false
-  }, [step, loading, resendLoading, passportId, birthDate, pinfl, code, token, newPassword, confirmPassword, lockState.blockedSeconds, isCodeExpired])
+  }, [step, loading, resendLoading, clinicNumber, passportId, phoneNumber, code, token, newPassword, confirmPassword, lockState.blockedSeconds, isCodeExpired])
 
   const handleOpenBot = () => {
     if (!botLink) return
@@ -130,13 +130,13 @@ const DoctorForgotPassword = () => {
   }
 
   const handleResendCode = async () => {
-    if (!passportId || !birthDate || !pinfl) return
+    if (!clinicNumber || !passportId || !phoneNumber) return
 
     setError('')
     setInfo('')
     try {
       setResendLoading(true)
-      const res = await authApi.doctorPasswordResetRequest(passportId, birthDate, pinfl)
+      const res = await authApi.clinicPasswordResetRequest(clinicNumber, passportId, phoneNumber)
       setCode('')
       setToken('')
       startCodeCountdown(res?.expires_in)
@@ -160,7 +160,7 @@ const DoctorForgotPassword = () => {
       setLoading(true)
 
       if (step === 'identity') {
-        const res = await authApi.doctorPasswordResetRequest(passportId, birthDate, pinfl)
+        const res = await authApi.clinicPasswordResetRequest(clinicNumber, passportId, phoneNumber)
         setBotLink(String(res?.bot_link || ''))
         setBotSessionNote(String(res?.bot_note || ''))
         setInfo(res?.detail || 'Kod Telegram botga yuborildi')
@@ -184,7 +184,7 @@ const DoctorForgotPassword = () => {
           return
         }
 
-        const res = await authApi.doctorPasswordResetVerify(passportId, birthDate, pinfl, code)
+        const res = await authApi.clinicPasswordResetVerify(clinicNumber, passportId, phoneNumber, code)
         if (!res?.token) {
           setCode('')
           setError("Kod noto'g'ri yoki eskirgan.")
@@ -216,9 +216,9 @@ const DoctorForgotPassword = () => {
         }
 
         const normalizedEmail = normalizeEmailWithDefaultDomain(newEmail)
-        const res = await authApi.doctorPasswordResetConfirm(token, newPassword, normalizedEmail)
+        const res = await authApi.clinicPasswordResetConfirm(token, newPassword, normalizedEmail)
         setInfo(res?.detail || 'Email va parol muvaffaqiyatli yangilandi')
-        setTimeout(() => navigate('/doctor-login'), 900)
+        setTimeout(() => navigate('/clinic-owner-login'), 900)
       }
     } catch (err) {
       const serverData = err?.response?.data || {}
@@ -265,7 +265,7 @@ const DoctorForgotPassword = () => {
     <div className="doctor-forgot-page">
       <div className="doctor-forgot-card">
         <div className="doctor-forgot-header">
-          <div className="badge">Doktor parolini tiklash</div>
+          <div className="badge">Klinika parolini tiklash</div>
           <h1>Parolni unutdingizmi?</h1>
           <p>Iltimos, so'ralgan barcha ma'lumotlarni aniq kiriting. Ma'lumotlar to'g'ri bo'lsa, sizga Telegram orqali bir martalik kod yuboramiz.</p>
         </div>
@@ -273,6 +273,17 @@ const DoctorForgotPassword = () => {
         <form className="doctor-forgot-form" onSubmit={onSubmit}>
           {step === 'identity' && (
             <>
+              <label className="field">
+                <span>Klinika raqami</span>
+                <input
+                  type="text"
+                  value={clinicNumber}
+                  onChange={(e) => setClinicNumber(e.target.value.toUpperCase())}
+                  placeholder="CLN-ABC1234567"
+                  required
+                />
+              </label>
+
               <label className="field">
                 <span>Pasport ID</span>
                 <input
@@ -285,25 +296,12 @@ const DoctorForgotPassword = () => {
               </label>
 
               <label className="field">
-                <span>Tug'ilgan sana</span>
+                <span>Telefon raqami</span>
                 <input
-                  type="date"
-                  value={birthDate}
-                  onChange={(e) => setBirthDate(e.target.value)}
-                  required
-                />
-              </label>
-
-              <label className="field">
-                <span>PINFL (JSHSHIR)</span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  value={pinfl}
-                  onChange={(e) => setPinfl(e.target.value.replace(/\D+/g, ''))}
-                  maxLength={14}
-                  placeholder="12345678901234"
+                  type="tel"
+                  value={phoneNumber}
+                  onChange={(e) => setPhoneNumber(e.target.value)}
+                  placeholder="+998901234567"
                   required
                 />
               </label>
@@ -342,7 +340,7 @@ const DoctorForgotPassword = () => {
                   value={newEmail}
                   onChange={(e) => setNewEmail(e.target.value)}
                   onBlur={(e) => setNewEmail(normalizeEmailWithDefaultDomain(e.target.value))}
-                  placeholder="doctor@gmail.com"
+                  placeholder="clinic.owner@gmail.com"
                 />
               </label>
 
@@ -401,7 +399,7 @@ const DoctorForgotPassword = () => {
           Admin Telegrami
         </a>
 
-        <button className="btn-back" type="button" onClick={() => navigate('/doctor-login')}>
+        <button className="btn-back" type="button" onClick={() => navigate('/clinic-owner-login')}>
           Orqaga
         </button>
       </div>
@@ -409,4 +407,4 @@ const DoctorForgotPassword = () => {
   )
 }
 
-export default DoctorForgotPassword
+export default ClinicOwnerForgotPassword

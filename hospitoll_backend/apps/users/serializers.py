@@ -37,6 +37,10 @@ def _digits_only(value: str) -> str:
     return re.sub(r"\D+", "", str(value))
 
 
+def _normalize_compact_text(value: str) -> str:
+    return re.sub(r"\s+", "", str(value or '').strip().upper())
+
+
 def _is_digits_only(value: str) -> bool:
     return bool(str(value or '').strip()) and str(value or '').strip().isdigit()
 
@@ -78,6 +82,95 @@ def _find_doctor_for_reset(passport_id: str, birth_date, pinfl: str):
         ):
             return doctor
     return None
+
+
+def _find_clinic_for_reset(clinic_number: str, passport_id: str, phone_number: str):
+    # Import here to avoid circular imports
+    from apps.clinics.models import Clinic
+
+    normalized_clinic_number = _normalize_compact_text(clinic_number)
+    normalized_passport_id = _normalize_compact_text(passport_id)
+
+    if not normalized_clinic_number or not normalized_passport_id or not phone_number:
+        return None
+
+    clinics = Clinic.objects.select_related('owner').filter(owner__is_active=True, owner__role='clinic')
+    for clinic in clinics:
+        stored_clinic_number = _normalize_compact_text(clinic.registration_number)
+        stored_passport_id = _normalize_compact_text(clinic.owner_passport_id)
+        stored_phone = (clinic.owner.phone_number or clinic.phone_number or '').strip()
+
+        if not stored_clinic_number or not stored_passport_id or not stored_phone:
+            continue
+
+        if (
+            stored_clinic_number == normalized_clinic_number
+            and stored_passport_id == normalized_passport_id
+            and _phones_match(phone_number, stored_phone)
+        ):
+            return clinic
+
+    return None
+
+
+def _find_pharmacy_for_reset(pharmacy_number: str, passport_id: str, phone_number: str):
+    # Import here to avoid circular imports
+    from apps.pharmacies.models import Pharmacy
+
+    normalized_pharmacy_number = _normalize_compact_text(pharmacy_number)
+    normalized_passport_id = _normalize_compact_text(passport_id)
+
+    if not normalized_pharmacy_number or not normalized_passport_id or not phone_number:
+        return None
+
+    pharmacies = Pharmacy.objects.select_related('owner').filter(owner__is_active=True, owner__role='pharmacy')
+    for pharmacy in pharmacies:
+        stored_pharmacy_number = _normalize_compact_text(pharmacy.registration_number)
+        stored_passport_id = _normalize_compact_text(pharmacy.owner_passport_id)
+        stored_phone = (pharmacy.owner.phone_number or pharmacy.phone_number or '').strip()
+
+        if not stored_pharmacy_number or not stored_passport_id or not stored_phone:
+            continue
+
+        if (
+            stored_pharmacy_number == normalized_pharmacy_number
+            and stored_passport_id == normalized_passport_id
+            and _phones_match(phone_number, stored_phone)
+        ):
+            return pharmacy
+
+    return None
+
+
+def _find_patient_for_reset(passport_id: str, phone_number: str):
+    # Import here to avoid circular imports
+    from apps.patients.models import Patient
+
+    normalized_passport_id = _normalize_compact_text(passport_id)
+    if not normalized_passport_id or not phone_number:
+        return None
+
+    patient = (
+        Patient.objects.select_related('user')
+        .annotate(
+            national_norm=Replace(
+                Replace(Upper('national_id'), Value(' '), Value('')),
+                Value('\t'),
+                Value(''),
+            )
+        )
+        .filter(national_norm=normalized_passport_id)
+        .first()
+    )
+
+    if not patient or not patient.user:
+        return None
+
+    stored_phone = (patient.phone_number or patient.user.phone_number or '').strip()
+    if not _phones_match(phone_number, stored_phone):
+        return None
+
+    return patient
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -255,6 +348,24 @@ class PasswordResetRequestSerializer(serializers.Serializer):
     passport_id = serializers.CharField()
     phone_number = serializers.CharField()
 
+    def validate(self, attrs):
+        passport_id = str(attrs.get('passport_id') or '')
+        phone_number = str(attrs.get('phone_number') or '')
+
+        if len(_normalize_compact_text(passport_id)) < 5:
+            raise serializers.ValidationError({'passport_id': 'Pasport ID noto\'g\'ri.'})
+        if len(_normalize_phone_number(phone_number)) < 9:
+            raise serializers.ValidationError({'phone_number': 'Telefon raqam noto\'g\'ri.'})
+
+        patient = _find_patient_for_reset(passport_id, phone_number)
+        if not patient or not patient.user or not patient.user.is_active or patient.user.role != 'patient':
+            raise serializers.ValidationError({'detail': "Kiritilgan ma'lumotlar bo'yicha bemor topilmadi."})
+
+        attrs['passport_id'] = _normalize_compact_text(passport_id)
+        attrs['patient'] = patient
+        attrs['user'] = patient.user
+        return attrs
+
 
 class PasswordResetVerifySerializer(serializers.Serializer):
     passport_id = serializers.CharField()
@@ -262,33 +373,17 @@ class PasswordResetVerifySerializer(serializers.Serializer):
     code = serializers.CharField()
 
     def validate(self, attrs):
-        passport_id_raw = attrs.get('passport_id') or ''
-        passport_id = re.sub(r"\s+", "", passport_id_raw.strip().upper())
-        phone_number = attrs.get('phone_number') or ''
-        code = (attrs.get('code') or '').strip()
-
-        from apps.patients.models import Patient
-
-        patient = (
-            Patient.objects.select_related('user')
-            .annotate(
-                national_norm=Replace(
-                    Replace(Upper('national_id'), Value(' '), Value('')),
-                    Value('\t'),
-                    Value(''),
-                )
-            )
-            .filter(national_norm=passport_id)
-            .first()
+        base = PasswordResetRequestSerializer(
+            data={
+                'passport_id': attrs.get('passport_id'),
+                'phone_number': attrs.get('phone_number'),
+            }
         )
-        user = patient.user if patient else None
+        base.is_valid(raise_exception=True)
 
-        if not patient or not user or not user.is_active or user.role != 'patient':
-            raise serializers.ValidationError({'detail': "Bunday foydalanuvchi bazada yo'q."})
-
-        stored_phone = (patient.phone_number or user.phone_number or '').strip()
-        if not _phones_match(phone_number, stored_phone):
-            raise serializers.ValidationError({'detail': "Pasport ID va telefon raqam mos emas."})
+        patient = base.validated_data['patient']
+        user = base.validated_data['user']
+        code = (attrs.get('code') or '').strip()
 
         reset = PasswordResetCode.objects.filter(user=user, used_at__isnull=True, expires_at__gt=timezone.now()).first()
         if not reset:
@@ -304,6 +399,7 @@ class PasswordResetVerifySerializer(serializers.Serializer):
 
         clear_lock_state(user, CodeVerificationLockState.CHANNEL_PATIENT_RESET)
 
+        attrs['patient'] = patient
         attrs['user'] = user
         attrs['reset'] = reset
         return attrs
@@ -409,6 +505,177 @@ class DoctorPasswordResetVerifySerializer(serializers.Serializer):
 
 
 class DoctorPasswordResetConfirmSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+    new_email = serializers.EmailField(required=False, allow_blank=True)
+
+    def validate_new_password(self, value):
+        if not value or len(value) < 6:
+            raise serializers.ValidationError('Parol kamida 6 ta belgidan iborat bo\'lishi kerak.')
+        return value
+
+    def validate_new_email(self, value):
+        clean = (value or '').strip()
+        if not clean:
+            return ''
+        return clean.lower()
+
+
+class ClinicPasswordResetRequestSerializer(serializers.Serializer):
+    clinic_number = serializers.CharField()
+    passport_id = serializers.CharField()
+    phone_number = serializers.CharField()
+
+    def validate(self, attrs):
+        clinic_number = str(attrs.get('clinic_number') or '')
+        passport_id = str(attrs.get('passport_id') or '')
+        phone_number = str(attrs.get('phone_number') or '')
+
+        if len(_normalize_compact_text(clinic_number)) < 3:
+            raise serializers.ValidationError({'clinic_number': 'Klinika raqami noto\'g\'ri.'})
+        if len(_normalize_compact_text(passport_id)) < 5:
+            raise serializers.ValidationError({'passport_id': 'Pasport ID noto\'g\'ri.'})
+        if len(_normalize_phone_number(phone_number)) < 9:
+            raise serializers.ValidationError({'phone_number': 'Telefon raqam noto\'g\'ri.'})
+
+        clinic = _find_clinic_for_reset(clinic_number, passport_id, phone_number)
+        if not clinic or not clinic.owner or not clinic.owner.is_active or clinic.owner.role != 'clinic':
+            raise serializers.ValidationError({'detail': "Kiritilgan ma'lumotlar bo'yicha klinika topilmadi."})
+
+        attrs['clinic_number'] = _normalize_compact_text(clinic_number)
+        attrs['passport_id'] = _normalize_compact_text(passport_id)
+        attrs['clinic'] = clinic
+        attrs['user'] = clinic.owner
+        return attrs
+
+
+class ClinicPasswordResetVerifySerializer(serializers.Serializer):
+    clinic_number = serializers.CharField()
+    passport_id = serializers.CharField()
+    phone_number = serializers.CharField()
+    code = serializers.CharField()
+
+    def validate(self, attrs):
+        base = ClinicPasswordResetRequestSerializer(
+            data={
+                'clinic_number': attrs.get('clinic_number'),
+                'passport_id': attrs.get('passport_id'),
+                'phone_number': attrs.get('phone_number'),
+            }
+        )
+        base.is_valid(raise_exception=True)
+
+        clinic = base.validated_data['clinic']
+        user = base.validated_data['user']
+        code = (attrs.get('code') or '').strip()
+
+        reset = PasswordResetCode.objects.filter(user=user, used_at__isnull=True, expires_at__gt=timezone.now()).first()
+        if not reset:
+            raise serializers.ValidationError({'detail': "Kod eskirgan yoki topilmadi."})
+
+        blocked_payload = ensure_not_blocked(user, CodeVerificationLockState.CHANNEL_CLINIC_RESET)
+        if blocked_payload:
+            raise serializers.ValidationError(blocked_payload)
+
+        if not check_password(code, reset.code_hash):
+            failure_payload = register_failed_code_attempt(user, CodeVerificationLockState.CHANNEL_CLINIC_RESET)
+            raise serializers.ValidationError(failure_payload)
+
+        clear_lock_state(user, CodeVerificationLockState.CHANNEL_CLINIC_RESET)
+
+        attrs['clinic'] = clinic
+        attrs['user'] = user
+        attrs['reset'] = reset
+        return attrs
+
+
+class ClinicPasswordResetConfirmSerializer(serializers.Serializer):
+    token = serializers.CharField()
+    new_password = serializers.CharField(write_only=True)
+    new_email = serializers.EmailField(required=False, allow_blank=True)
+
+    def validate_new_password(self, value):
+        if not value or len(value) < 6:
+            raise serializers.ValidationError('Parol kamida 6 ta belgidan iborat bo\'lishi kerak.')
+        return value
+
+    def validate_new_email(self, value):
+        clean = (value or '').strip()
+        if not clean:
+            return ''
+        return clean.lower()
+
+
+class PharmacyPasswordResetRequestSerializer(serializers.Serializer):
+    pharmacy_number = serializers.CharField()
+    passport_id = serializers.CharField()
+    phone_number = serializers.CharField()
+
+    def validate(self, attrs):
+        pharmacy_number = str(attrs.get('pharmacy_number') or '')
+        passport_id = str(attrs.get('passport_id') or '')
+        phone_number = str(attrs.get('phone_number') or '')
+
+        if len(_normalize_compact_text(pharmacy_number)) < 3:
+            raise serializers.ValidationError({'pharmacy_number': 'Dorixona raqami noto\'g\'ri.'})
+        if len(_normalize_compact_text(passport_id)) < 5:
+            raise serializers.ValidationError({'passport_id': 'Pasport ID noto\'g\'ri.'})
+        if len(_normalize_phone_number(phone_number)) < 9:
+            raise serializers.ValidationError({'phone_number': 'Telefon raqam noto\'g\'ri.'})
+
+        pharmacy = _find_pharmacy_for_reset(pharmacy_number, passport_id, phone_number)
+        if not pharmacy or not pharmacy.owner or not pharmacy.owner.is_active or pharmacy.owner.role != 'pharmacy':
+            raise serializers.ValidationError({'detail': "Kiritilgan ma'lumotlar bo'yicha dorixona topilmadi."})
+
+        attrs['pharmacy_number'] = _normalize_compact_text(pharmacy_number)
+        attrs['passport_id'] = _normalize_compact_text(passport_id)
+        attrs['pharmacy'] = pharmacy
+        attrs['user'] = pharmacy.owner
+        return attrs
+
+
+class PharmacyPasswordResetVerifySerializer(serializers.Serializer):
+    pharmacy_number = serializers.CharField()
+    passport_id = serializers.CharField()
+    phone_number = serializers.CharField()
+    code = serializers.CharField()
+
+    def validate(self, attrs):
+        base = PharmacyPasswordResetRequestSerializer(
+            data={
+                'pharmacy_number': attrs.get('pharmacy_number'),
+                'passport_id': attrs.get('passport_id'),
+                'phone_number': attrs.get('phone_number'),
+            }
+        )
+        base.is_valid(raise_exception=True)
+
+        pharmacy = base.validated_data['pharmacy']
+        user = base.validated_data['user']
+        code = (attrs.get('code') or '').strip()
+
+        reset = PasswordResetCode.objects.filter(user=user, used_at__isnull=True, expires_at__gt=timezone.now()).first()
+        if not reset:
+            raise serializers.ValidationError({'detail': "Kod eskirgan yoki topilmadi."})
+
+        pharmacy_channel = 'pharmacy_password_reset'
+        blocked_payload = ensure_not_blocked(user, pharmacy_channel)
+        if blocked_payload:
+            raise serializers.ValidationError(blocked_payload)
+
+        if not check_password(code, reset.code_hash):
+            failure_payload = register_failed_code_attempt(user, pharmacy_channel)
+            raise serializers.ValidationError(failure_payload)
+
+        clear_lock_state(user, pharmacy_channel)
+
+        attrs['pharmacy'] = pharmacy
+        attrs['user'] = user
+        attrs['reset'] = reset
+        return attrs
+
+
+class PharmacyPasswordResetConfirmSerializer(serializers.Serializer):
     token = serializers.CharField()
     new_password = serializers.CharField(write_only=True)
     new_email = serializers.EmailField(required=False, allow_blank=True)

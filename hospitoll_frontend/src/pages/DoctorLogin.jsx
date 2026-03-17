@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDoctor } from '../context/DoctorContext'
 import PasswordInput from '../components/PasswordInput'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
+import { setPreferredLoginPortal } from '../utils/loginPortalPreference'
 import './DoctorLogin.css'
 
 const DoctorLogin = () => {
@@ -12,6 +13,10 @@ const DoctorLogin = () => {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const { loginDoctor } = useDoctor()
+
+  useEffect(() => {
+    setPreferredLoginPortal('doctor')
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -26,10 +31,6 @@ const DoctorLogin = () => {
       setError(result.error)
     }
     setLoading(false)
-  }
-
-  const handleBackToLogin = () => {
-    navigate('/login')
   }
 
   return (
@@ -87,10 +88,6 @@ const DoctorLogin = () => {
               Parolni unutdingizmi?
             </button>
           </form>
-
-          <button className="btn-back" onClick={handleBackToLogin}>
-            ← Orqaga
-          </button>
 
         </div>
 

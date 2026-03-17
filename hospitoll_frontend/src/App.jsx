@@ -8,10 +8,11 @@ import { PharmacyProvider } from './context/PharmacyContext'
 import { PaymentProvider } from './context/PaymentContext'
 import Layout from './layouts/Layout'
 import Home from './pages/Home'
+import LoginRedirect from './pages/LoginRedirect'
 import ClinicDetailPage from './pages/ClinicDetailPage'
 import ClinicOwnerLogin from './pages/ClinicOwnerLogin'
+import ClinicOwnerForgotPassword from './pages/ClinicOwnerForgotPassword'
 import ClinicOwnerDashboard from './pages/ClinicOwnerDashboard'
-import DirectionsPage from './pages/DirectionsPage'
 import DoctorLogin from './pages/DoctorLogin'
 import DoctorForgotPassword from './pages/DoctorForgotPassword'
 import DoctorDashboard from './pages/DoctorDashboard'
@@ -21,6 +22,7 @@ import PatientPortal from './pages/PatientPortal'
 import PatientLogin from './pages/PatientLogin'
 import PatientForgotPassword from './pages/PatientForgotPassword'
 import PharmacyOwnerLogin from './pages/PharmacyOwnerLogin'
+import PharmacyOwnerForgotPassword from './pages/PharmacyOwnerForgotPassword'
 import PharmacyOwnerDashboard from './pages/PharmacyOwnerDashboard'
 import SecretLoginHub from './pages/SecretLoginHub'
 import PaymentPage from './pages/PaymentPage'
@@ -44,7 +46,7 @@ function App() {
                 <Routes>
                   <Route path="/" element={<Layout />}>
                     <Route index element={<Home />} />
-                    <Route path="login" element={<DoctorLogin />} />
+                    <Route path="login" element={<LoginRedirect />} />
                     <Route path="patient-login" element={<PatientLogin />} />
                     <Route path="patient-forgot-password" element={<PatientForgotPassword />} />
                     <Route path="contact" element={<Contact />} />
@@ -53,8 +55,9 @@ function App() {
                     <Route path="pharmacy/*" element={<Navigate to="/" replace />} />
                   </Route>
                   <Route path="/clinic-owner-login" element={<ClinicOwnerLogin />} />
+                  <Route path="/clinic-owner-forgot-password" element={<ClinicOwnerForgotPassword />} />
                   <Route path="/clinic-dashboard" element={<ClinicOwnerDashboard />} />
-                  <Route path="/clinic-dashboard/directions" element={<DirectionsPage />} />
+                  <Route path="/clinic-dashboard/directions" element={<Navigate to="/clinic-dashboard/services" replace />} />
                   <Route path="/clinic-dashboard/*" element={<ClinicOwnerDashboard />} />
                   <Route path="/doctor-login" element={<DoctorLogin />} />
                   <Route path="/doctor-forgot-password" element={<DoctorForgotPassword />} />
@@ -64,6 +67,7 @@ function App() {
                   <Route path="/JXgroup" element={<SecretLoginHub />} />
                   <Route path="/pharmacy-search" element={<Navigate to="/" replace />} />
                   <Route path="/pharmacy-owner-login" element={<PharmacyOwnerLogin />} />
+                  <Route path="/pharmacy-owner-forgot-password" element={<PharmacyOwnerForgotPassword />} />
                   <Route path="/pharmacy-owner-dashboard" element={<PharmacyOwnerDashboard />} />
                   <Route path="/payment" element={<PaymentPage />} />
                   <Route path="/subscription-payment" element={<SubscriptionPaymentPage />} />

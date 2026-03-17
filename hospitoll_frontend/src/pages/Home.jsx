@@ -4,7 +4,70 @@ import ClinicCard from '../components/ClinicCard'
 import PharmacyCard from '../components/PharmacyCard'
 import { usePharmacy } from '../context/PharmacyContext'
 import { clinicsApi, clinicDepartmentsApi, siteSettingsApi, resolveMediaUrl } from '../services/api'
+import { getPreferredLoginPath, hasPreferredLoginPortal } from '../utils/loginPortalPreference'
 import './Home.css'
+
+const PHARMACY_PRESCRIPTION_KEY = 'gmed-pharmacy-prescription-search'
+
+const normalizeSearchText = (value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim()
+
+const splitSearchTerms = (value) => {
+  if (Array.isArray(value)) {
+    return Array.from(new Set(value.map((item) => String(item || '').trim()).filter(Boolean)))
+  }
+
+  return Array.from(
+    new Set(
+      String(value || '')
+        .split(/[\n,;]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    )
+  )
+}
+
+const getMedicineName = (medicine) => String(medicine?.name || medicine?.medicine_name || '').trim()
+
+const analyzePharmacyPrescription = (pharmacy, requestedMedicines = []) => {
+  const medicines = Array.isArray(pharmacy?.medicines) ? pharmacy.medicines : []
+  const requested = splitSearchTerms(requestedMedicines)
+
+  const found = []
+  const missing = []
+  let total = 0
+
+  requested.forEach((requestedMedicine) => {
+    const normalizedRequested = normalizeSearchText(requestedMedicine)
+    const matchedMedicine = medicines.find((medicine) => {
+      const normalizedName = normalizeSearchText(getMedicineName(medicine))
+      if (!normalizedName || !normalizedRequested) return false
+      return normalizedName.includes(normalizedRequested) || normalizedRequested.includes(normalizedName)
+    })
+
+    if (!matchedMedicine || Number(matchedMedicine.stock || 0) <= 0) {
+      missing.push(requestedMedicine)
+      return
+    }
+
+    const price = Number(matchedMedicine.price || 0)
+    total += price
+    found.push({
+      requestedName: requestedMedicine,
+      medicineName: getMedicineName(matchedMedicine),
+      price,
+      stock: Number(matchedMedicine.stock || 0),
+    })
+  })
+
+  return {
+    requested,
+    found,
+    missing,
+    foundCount: found.length,
+    missingCount: missing.length,
+    total,
+  }
+}
 
 const sortClinicsByRating = (items = []) => {
   return [...items].sort((firstClinic, secondClinic) => {
@@ -31,6 +94,18 @@ const Home = () => {
   const [clinicSearchQuery, setClinicSearchQuery] = useState('')
   const [pharmacySearchQuery, setPharmacySearchQuery] = useState('')
   const [homeContact, setHomeContact] = useState(null)
+  const [prescriptionSearch, setPrescriptionSearch] = useState(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
+    if (!isStandalone || !hasPreferredLoginPortal()) return
+
+    const targetPath = getPreferredLoginPath()
+    if (targetPath && targetPath !== window.location.pathname) {
+      navigate(targetPath, { replace: true })
+    }
+  }, [navigate])
 
   useEffect(() => {
     const loadClinics = async () => {
@@ -90,8 +165,47 @@ const Home = () => {
     loadHomeContact()
   }, [])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+
+    try {
+      const raw = window.localStorage.getItem(PHARMACY_PRESCRIPTION_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      const medicines = splitSearchTerms(parsed?.medicines)
+      if (medicines.length === 0) return
+
+      setPrescriptionSearch({
+        ...parsed,
+        medicines,
+      })
+      setPharmacySearchQuery(medicines.join(', '))
+    } catch (error) {
+      console.warn('Prescription search data could not be restored')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (window.location.hash !== '#pharmacy-section') return
+
+    const timeoutId = window.setTimeout(() => {
+      document.getElementById('pharmacy-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    }, 120)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [prescriptionSearch])
+
   const handlePatientClick = () => {
     navigate('/patient-login')
+  }
+
+  const clearPrescriptionSearch = () => {
+    setPrescriptionSearch(null)
+    setPharmacySearchQuery('')
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(PHARMACY_PRESCRIPTION_KEY)
+    }
   }
 
   // Filter clinics based on search query and sort by rating (descending)
@@ -105,18 +219,48 @@ const Home = () => {
     })
   )
 
-  // Filter pharmacies based on search query
-  const filteredPharmacies = pharmacies.filter(pharmacy => {
-    const query = pharmacySearchQuery.toLowerCase()
-    const address = pharmacy.address?.toLowerCase() || ''
-    const city = pharmacy.city?.toLowerCase() || ''
-    const name = pharmacy.name?.toLowerCase() || ''
-    return (
-      name.includes(query) ||
-      address.includes(query) ||
-      city.includes(query)
-    )
+  const pharmacySearchTerms = splitSearchTerms(pharmacySearchQuery).map(normalizeSearchText).filter(Boolean)
+
+  const pharmaciesWithPrescription = pharmacies.map((pharmacy) => ({
+    ...pharmacy,
+    prescriptionMatch: analyzePharmacyPrescription(pharmacy, prescriptionSearch?.medicines || []),
+  }))
+
+  const filteredPharmacies = pharmaciesWithPrescription.filter((pharmacy) => {
+    if (pharmacySearchTerms.length === 0) return true
+
+    const address = normalizeSearchText(pharmacy.address)
+    const city = normalizeSearchText(pharmacy.city)
+    const name = normalizeSearchText(pharmacy.name)
+    const medicineNames = (pharmacy.medicines || []).map((medicine) => normalizeSearchText(getMedicineName(medicine)))
+
+    return pharmacySearchTerms.some((term) => (
+      name.includes(term) ||
+      address.includes(term) ||
+      city.includes(term) ||
+      medicineNames.some((medicineName) => medicineName.includes(term))
+    ))
   })
+
+  const rankedPharmacies = [...filteredPharmacies].sort((firstPharmacy, secondPharmacy) => {
+    if (prescriptionSearch?.medicines?.length) {
+      if (secondPharmacy.prescriptionMatch.foundCount !== firstPharmacy.prescriptionMatch.foundCount) {
+        return secondPharmacy.prescriptionMatch.foundCount - firstPharmacy.prescriptionMatch.foundCount
+      }
+
+      if (firstPharmacy.prescriptionMatch.missingCount !== secondPharmacy.prescriptionMatch.missingCount) {
+        return firstPharmacy.prescriptionMatch.missingCount - secondPharmacy.prescriptionMatch.missingCount
+      }
+
+      if (firstPharmacy.prescriptionMatch.total !== secondPharmacy.prescriptionMatch.total) {
+        return firstPharmacy.prescriptionMatch.total - secondPharmacy.prescriptionMatch.total
+      }
+    }
+
+    return String(firstPharmacy.name || '').localeCompare(String(secondPharmacy.name || ''), 'uz')
+  })
+
+  const bestPrescriptionPharmacy = prescriptionSearch?.medicines?.length ? rankedPharmacies[0] : null
 
   return (
     <div className="home">
@@ -233,26 +377,93 @@ const Home = () => {
       </section>
 
       {/* Pharmacy Section */}
-      <section className="pharmacy-section">
+      <section className="pharmacy-section" id="pharmacy-section">
         <div className="container">
           <div className="section-header">
             <h2>💊 Dorixonalar</h2>
             <div className="section-actions">
               <input
                 type="text"
-                placeholder="Dorixona nomi yoki shaharni qidiring..."
+                placeholder="Dorixona, shahar yoki dori nomini qidiring..."
                 value={pharmacySearchQuery}
                 onChange={(e) => setPharmacySearchQuery(e.target.value)}
                 className="search-input-small"
               />
             </div>
           </div>
+
+          {prescriptionSearch?.medicines?.length ? (
+            <div className="pharmacy-prescription-panel">
+              <div className="pharmacy-prescription-main">
+                <span className="pharmacy-prescription-kicker">Bemor kartasidan yuborilgan resept</span>
+                <h3>{prescriptionSearch.diagnosis || 'Dorilar ro\'yxati dorixonaga yuborildi'}</h3>
+                <p>
+                  {prescriptionSearch.complaint
+                    ? `Shikoyat: ${prescriptionSearch.complaint}`
+                    : 'Dorilar ro\'yxati Home sahifadagi dorixona qidiruviga uzatildi.'}
+                </p>
+                <div className="pharmacy-prescription-tags">
+                  {prescriptionSearch.medicines.map((medicine) => (
+                    <span key={medicine} className="pharmacy-prescription-tag">{medicine}</span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pharmacy-prescription-side">
+                <div className="pharmacy-prescription-metrics">
+                  <div className="pharmacy-prescription-metric">
+                    <span>Eng mos dorixona</span>
+                    <strong>{bestPrescriptionPharmacy?.name || 'Topilmadi'}</strong>
+                  </div>
+                  <div className="pharmacy-prescription-metric">
+                    <span>Topilgan dorilar</span>
+                    <strong>{bestPrescriptionPharmacy?.prescriptionMatch?.foundCount || 0}/{prescriptionSearch.medicines.length}</strong>
+                  </div>
+                  <div className="pharmacy-prescription-metric">
+                    <span>Jami summa</span>
+                    <strong>{Number(bestPrescriptionPharmacy?.prescriptionMatch?.total || 0).toLocaleString('uz-UZ')} so'm</strong>
+                  </div>
+                </div>
+
+                <button type="button" className="pharmacy-prescription-clear" onClick={clearPrescriptionSearch}>
+                  Resept qidiruvini tozalash
+                </button>
+              </div>
+
+              {bestPrescriptionPharmacy ? (
+                <div className="pharmacy-prescription-breakdown">
+                  <div className="pharmacy-breakdown-block">
+                    <span className="pharmacy-breakdown-title">Olinayotgan dorilar</span>
+                    <div className="pharmacy-breakdown-tags success">
+                      {bestPrescriptionPharmacy.prescriptionMatch.found.length > 0 ? bestPrescriptionPharmacy.prescriptionMatch.found.map((medicine) => (
+                        <span key={`${bestPrescriptionPharmacy.id}-${medicine.requestedName}`} className="pharmacy-breakdown-tag">
+                          {medicine.medicineName} · {medicine.price.toLocaleString('uz-UZ')} so'm
+                        </span>
+                      )) : <span className="pharmacy-breakdown-empty">Topilgan dori yo'q</span>}
+                    </div>
+                  </div>
+                  <div className="pharmacy-breakdown-block">
+                    <span className="pharmacy-breakdown-title">Yo'q dorilar</span>
+                    <div className="pharmacy-breakdown-tags danger">
+                      {bestPrescriptionPharmacy.prescriptionMatch.missing.length > 0 ? bestPrescriptionPharmacy.prescriptionMatch.missing.map((medicine) => (
+                        <span key={`${bestPrescriptionPharmacy.id}-missing-${medicine}`} className="pharmacy-breakdown-tag">
+                          {medicine}
+                        </span>
+                      )) : <span className="pharmacy-breakdown-empty">Barcha dorilar topildi</span>}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
           <div className="pharmacy-grid">
-            {filteredPharmacies.length > 0 ? (
-              filteredPharmacies.map(pharmacy => (
+            {rankedPharmacies.length > 0 ? (
+              rankedPharmacies.map(pharmacy => (
                 <PharmacyCard
                   key={pharmacy.id}
                   compact
+                  requestedMedicines={prescriptionSearch?.medicines || []}
                   pharmacy={{
                     ...pharmacy,
                     phone: pharmacy.phone || pharmacy.phone_number || '',
@@ -277,10 +488,11 @@ const Home = () => {
                 <p className="no-results-hint">Boshqa kalit so'zlar bilan qidirib ko'ring</p>
               </div>
             ) : (
-              pharmacies.map(pharmacy => (
+              pharmaciesWithPrescription.map(pharmacy => (
                 <PharmacyCard
                   key={pharmacy.id}
                   compact
+                  requestedMedicines={prescriptionSearch?.medicines || []}
                   pharmacy={{
                     ...pharmacy,
                     phone: pharmacy.phone || pharmacy.phone_number || '',

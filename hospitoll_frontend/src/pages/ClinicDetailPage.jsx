@@ -3,6 +3,13 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { clinicsApi, doctorsApi, medicalApi, resolveMediaUrl } from '../services/api'
 import './ClinicDetailPage.css'
 
+const INITIAL_BOOKING_FORM = {
+  firstName: '',
+  lastName: '',
+  passportId: '',
+  phone: '+998'
+}
+
 const ClinicDetailPage = () => {
   const { clinicId } = useParams()
   const navigate = useNavigate()
@@ -18,10 +25,7 @@ const ClinicDetailPage = () => {
   const [availableSlots, setAvailableSlots] = useState([])
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [bookingForm, setBookingForm] = useState({
-    firstName: '',
-    lastName: '',
-    passportId: '',
-    phone: '+998'
+    ...INITIAL_BOOKING_FORM
   })
   const [bookingLoading, setBookingLoading] = useState(false)
   const [bookingMessage, setBookingMessage] = useState(null)
@@ -112,6 +116,7 @@ const ClinicDetailPage = () => {
     setSelectedSpecialtyPriceId(specialtyPriceId)
     setSelectedSlot(null)
     setBookingMessage(null)
+    setBookingForm({ ...INITIAL_BOOKING_FORM })
     const today = new Date().toISOString().split('T')[0]
     setSelectedDate(today)
     setBookingOpen(true)
@@ -128,12 +133,22 @@ const ClinicDetailPage = () => {
   }
 
   const submitBooking = async () => {
+    const firstName = bookingForm.firstName.trim()
+    const lastName = bookingForm.lastName.trim()
+    const passportId = bookingForm.passportId.trim().toUpperCase()
+    const phoneNumber = bookingForm.phone.replace(/[^\d+]/g, '')
+    const phoneDigits = phoneNumber.replace(/\D/g, '')
+
     if (!selectedDoctor || !selectedSlot) {
       setBookingMessage('Iltimos, bo\'sh vaqtni tanlang')
       return
     }
-    if (!bookingForm.firstName || !bookingForm.lastName || !bookingForm.passportId) {
-      setBookingMessage('Ism, familiya va pasport ID majburiy')
+    if (!firstName || !lastName || !passportId || !phoneNumber || phoneNumber === '+998') {
+      setBookingMessage('Barcha maydonlarni to\'ldiring (telefon ham majburiy)')
+      return
+    }
+    if (!/^\+998\d{9}$/.test(phoneNumber) || phoneDigits.length !== 12) {
+      setBookingMessage('Telefon raqami +998 bilan va 9 xonali formatda bo\'lishi kerak')
       return
     }
 
@@ -145,10 +160,10 @@ const ClinicDetailPage = () => {
         doctor: selectedDoctor.id,
         specialty_price_id: selectedSpecialtyPriceId,
         slot_id: selectedSlot.id,
-        first_name: bookingForm.firstName,
-        last_name: bookingForm.lastName,
-        passport_id: bookingForm.passportId,
-        phone_number: bookingForm.phone
+        first_name: firstName,
+        last_name: lastName,
+        passport_id: passportId,
+        phone_number: phoneNumber
       })
       if (result?.telegram_bot_link) {
         // Redirect to Telegram for confirmation
@@ -156,6 +171,9 @@ const ClinicDetailPage = () => {
         return
       }
       setBookingMessage(`Muvaffaqiyatli! Sizning navbat raqamingiz: ${result.queue_number}`)
+      setBookingForm({ ...INITIAL_BOOKING_FORM })
+      setSelectedSlot(null)
+      await fetchAvailability(selectedDoctor.id, selectedDate)
     } catch (error) {
       setBookingMessage(error.message || 'Navbat olishda xatolik')
     } finally {
@@ -324,6 +342,7 @@ const ClinicDetailPage = () => {
                     value={bookingForm.firstName}
                     onChange={(e) => setBookingForm({ ...bookingForm, firstName: e.target.value })}
                     placeholder="Ism"
+                    required
                   />
                 </div>
 
@@ -334,6 +353,7 @@ const ClinicDetailPage = () => {
                     value={bookingForm.lastName}
                     onChange={(e) => setBookingForm({ ...bookingForm, lastName: e.target.value })}
                     placeholder="Familiya"
+                    required
                   />
                 </div>
 
@@ -344,16 +364,18 @@ const ClinicDetailPage = () => {
                     value={bookingForm.passportId}
                     onChange={(e) => setBookingForm({ ...bookingForm, passportId: e.target.value.replace(/\s+/g, '').toUpperCase() })}
                     placeholder="AA1234567"
+                    required
                   />
                 </div>
 
                 <div className="booking-section">
-                  <label>Telefon (ixtiyoriy)</label>
+                  <label>Telefon</label>
                   <input
                     type="tel"
                     value={bookingForm.phone}
                     onChange={(e) => setBookingForm({ ...bookingForm, phone: e.target.value })}
                     placeholder="+998 90 123 45 67"
+                    required
                   />
                 </div>
               </div>

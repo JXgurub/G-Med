@@ -213,6 +213,22 @@
   cursor: not-allowed;
 }
 
+.btn-forgot {
+  border: none;
+  background: transparent;
+  color: #1d5fc2;
+  text-decoration: underline;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-top: -0.25rem;
+}
+
+.btn-forgot:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .btn-back {
   width: 100%;
   padding: 0.75rem;

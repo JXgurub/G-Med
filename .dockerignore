@@ -9,6 +9,8 @@ __pycache__
 *.sqlite3
 *.db
 .venv
+.venv312
+hospitoll_backend/.venv312
 venv
 node_modules
 dist
@@ -17,6 +19,7 @@ dist
 .coverage
 htmlcov
 *.log
+deploy_hotfix_*.tgz
 media/
 staticfiles/
 logs/

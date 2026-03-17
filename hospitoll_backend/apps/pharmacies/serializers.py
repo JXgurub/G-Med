@@ -6,6 +6,40 @@ from apps.users.models import CustomUser
 from .models import Pharmacy, Medicine, PharmacyMarchandise
 
 
+MEDICINE_COUNTRY_OPTIONS = {
+    "Rossiya",
+    "O'zbekiston",
+    'Vetnam',
+    'Boshqa',
+}
+
+
+def normalize_medicine_country(value):
+    country = str(value or '').strip()
+    normalized = country.lower()
+    if not normalized:
+        return 'Boshqa'
+
+    aliases = {
+        "o'zbekiston": "O'zbekiston",
+        'ozbekiston': "O'zbekiston",
+        'uzbekistan': "O'zbekiston",
+        'rossiya': 'Rossiya',
+        'rassiya': 'Rossiya',
+        'russia': 'Rossiya',
+        'vetnam': 'Vetnam',
+        'vietnam': 'Vetnam',
+        'boshqa': 'Boshqa',
+        'other': 'Boshqa',
+    }
+
+    if normalized in aliases:
+        return aliases[normalized]
+    if country in MEDICINE_COUNTRY_OPTIONS:
+        return country
+    return 'Boshqa'
+
+
 class PharmacySerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(source='owner.email', read_only=True)
     owner_name = serializers.SerializerMethodField()
@@ -20,6 +54,7 @@ class PharmacySerializer(serializers.ModelSerializer):
             'owner',
             'owner_email',
             'owner_name',
+            'owner_passport_id',
             'name',
             'slug',
             'description',
@@ -73,13 +108,17 @@ class PharmacySerializer(serializers.ModelSerializer):
 class PharmacyMarchandiseListSerializer(serializers.ModelSerializer):
     """Serializer for medicines list in pharmacy detail"""
     name = serializers.CharField(source='medicine.name', read_only=True)
-    category = serializers.CharField(source='medicine.description', read_only=True)
+    category = serializers.CharField(source='medicine.category', read_only=True)
+    strength = serializers.CharField(source='medicine.strength', read_only=True)
+    dosage_form = serializers.CharField(source='medicine.dosage_form', read_only=True)
+    country_of_origin = serializers.CharField(source='medicine.country_of_origin', read_only=True)
+    expiry_date = serializers.DateField(read_only=True)
     stock = serializers.IntegerField(source='quantity_in_stock', read_only=True)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, source='unit_price', read_only=True)
 
     class Meta:
         model = PharmacyMarchandise
-        fields = ['id', 'name', 'category', 'stock', 'price']
+        fields = ['id', 'name', 'category', 'strength', 'dosage_form', 'country_of_origin', 'expiry_date', 'stock', 'price']
 
 
 class PharmacyCreateSerializer(serializers.ModelSerializer):
@@ -87,6 +126,7 @@ class PharmacyCreateSerializer(serializers.ModelSerializer):
     owner_password = serializers.CharField(write_only=True)
     owner_first_name = serializers.CharField(write_only=True)
     owner_last_name = serializers.CharField(write_only=True)
+    owner_passport_id = serializers.CharField(write_only=True, required=False, allow_blank=True)
     owner_phone_number = serializers.CharField(write_only=True, required=False, allow_blank=True)
     slug = serializers.CharField(required=False, allow_blank=True)
 
@@ -98,6 +138,7 @@ class PharmacyCreateSerializer(serializers.ModelSerializer):
             'owner_password',
             'owner_first_name',
             'owner_last_name',
+            'owner_passport_id',
             'owner_phone_number',
             'name',
             'slug',
@@ -130,6 +171,7 @@ class PharmacyCreateSerializer(serializers.ModelSerializer):
         owner_password = validated_data.pop('owner_password')
         owner_first_name = validated_data.pop('owner_first_name')
         owner_last_name = validated_data.pop('owner_last_name')
+        owner_passport_id = str(validated_data.pop('owner_passport_id', '') or '').strip().upper().replace(' ', '')
         owner_phone_number = validated_data.pop('owner_phone_number', '')
 
         slug = validated_data.get('slug')
@@ -146,7 +188,7 @@ class PharmacyCreateSerializer(serializers.ModelSerializer):
             role='pharmacy'
         )
 
-        pharmacy = Pharmacy.objects.create(owner=owner, **validated_data)
+        pharmacy = Pharmacy.objects.create(owner=owner, owner_passport_id=owner_passport_id, **validated_data)
         return pharmacy
 
 
@@ -159,33 +201,92 @@ class MedicineSerializer(serializers.ModelSerializer):
             'generic_name',
             'atc_code',
             'description',
+            'category',
             'dosage_form',
             'strength',
             'manufacturer',
+            'country_of_origin',
             'is_prescription_required',
             'is_active',
             'created_at',
         ]
 
-    def create(self, validated_data):
-        name = (validated_data.get('name') or '').strip()
-        description = (validated_data.get('description') or '').strip()
+    def validate_name(self, value):
+        return ' '.join(str(value or '').strip().split())
 
-        existing = Medicine.objects.filter(
-            name__iexact=name,
-            description__iexact=description,
-        ).first()
+    def validate_country_of_origin(self, value):
+        return normalize_medicine_country(value)
+
+    @staticmethod
+    def _normalize_identity_value(value):
+        return ' '.join(str(value or '').strip().lower().split())
+
+    def _build_identity(self, data):
+        return {
+            'name': self._normalize_identity_value(data.get('name')),
+            'strength': self._normalize_identity_value(data.get('strength')),
+            'dosage_form': self._normalize_identity_value(data.get('dosage_form')),
+            'category': self._normalize_identity_value(data.get('category') or 'Boshqa'),
+            'generic_name': self._normalize_identity_value(data.get('generic_name')),
+            'atc_code': self._normalize_identity_value(data.get('atc_code')),
+            'manufacturer': self._normalize_identity_value(data.get('manufacturer')),
+            'country_of_origin': self._normalize_identity_value(data.get('country_of_origin')),
+            'description': self._normalize_identity_value(data.get('description')),
+        }
+
+    def _find_existing_by_identity(self, identity):
+        if not identity['name']:
+            return None
+
+        candidates = Medicine.objects.filter(
+            name__iexact=identity['name'],
+            strength__iexact=identity['strength'],
+            dosage_form__iexact=identity['dosage_form'],
+            category__iexact=identity['category'],
+        )
+
+        for candidate in candidates:
+            candidate_identity = self._build_identity({
+                'name': candidate.name,
+                'strength': candidate.strength,
+                'dosage_form': candidate.dosage_form,
+                'category': candidate.category,
+                'generic_name': candidate.generic_name,
+                'atc_code': candidate.atc_code,
+                'manufacturer': candidate.manufacturer,
+                'country_of_origin': candidate.country_of_origin,
+                'description': candidate.description,
+            })
+            if candidate_identity == identity:
+                return candidate
+
+        return None
+
+    def create(self, validated_data):
+        validated_data['name'] = ' '.join(str(validated_data.get('name') or '').strip().split())
+        validated_data['description'] = str(validated_data.get('description') or '').strip()
+        validated_data['category'] = str(validated_data.get('category') or '').strip() or 'Boshqa'
+        validated_data['strength'] = str(validated_data.get('strength') or '').strip()
+        validated_data['dosage_form'] = str(validated_data.get('dosage_form') or '').strip()
+        validated_data['generic_name'] = str(validated_data.get('generic_name') or '').strip()
+        validated_data['atc_code'] = str(validated_data.get('atc_code') or '').strip()
+        validated_data['manufacturer'] = str(validated_data.get('manufacturer') or '').strip()
+        validated_data['country_of_origin'] = normalize_medicine_country(validated_data.get('country_of_origin'))
+
+        identity = self._build_identity(validated_data)
+        existing = self._find_existing_by_identity(identity)
         if existing:
             return existing
 
-        validated_data['name'] = name
-        validated_data['description'] = description
         return super().create(validated_data)
 
 
 class PharmacyMarchandiseSerializer(serializers.ModelSerializer):
     medicine_name = serializers.CharField(source='medicine.name', read_only=True)
-    medicine_category = serializers.CharField(source='medicine.description', read_only=True)
+    medicine_category = serializers.CharField(source='medicine.category', read_only=True)
+    medicine_strength = serializers.CharField(source='medicine.strength', read_only=True)
+    medicine_dosage_form = serializers.CharField(source='medicine.dosage_form', read_only=True)
+    medicine_country_of_origin = serializers.CharField(source='medicine.country_of_origin', read_only=True)
 
     class Meta:
         model = PharmacyMarchandise
@@ -195,6 +296,9 @@ class PharmacyMarchandiseSerializer(serializers.ModelSerializer):
             'medicine',
             'medicine_name',
             'medicine_category',
+            'medicine_strength',
+            'medicine_dosage_form',
+            'medicine_country_of_origin',
             'batch_number',
             'expiry_date',
             'quantity_in_stock',

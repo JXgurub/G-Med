@@ -3,10 +3,13 @@ Celery tasks for medical app.
 Handles medical record-related background operations.
 """
 
+from datetime import timedelta
+
 from celery import shared_task
 from django.utils import timezone
 from django.db import transaction
 from .models import LabTest
+from django.conf import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -119,10 +122,32 @@ def send_telegram_appointment_reminder(appointment_id: str) -> dict:
     if getattr(appt, 'telegram_reminder_sent_at', None) is not None:
         return {'status': 'skipped', 'reason': 'already_sent', 'appointment_id': appointment_id}
 
-    if appt.status in (Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW):
+    if appt.status in (
+        Appointment.Status.CANCELLED,
+        Appointment.Status.NO_SHOW,
+        Appointment.Status.COMPLETED,
+        Appointment.Status.IN_PROGRESS,
+    ):
         return {'status': 'skipped', 'reason': 'inactive_status', 'appointment_id': appointment_id}
+    if getattr(appt, 'patient_arrival_confirmed_at', None) is not None:
+        return {'status': 'skipped', 'reason': 'already_arrived', 'appointment_id': appointment_id}
     if not appt.telegram_chat_id:
         return {'status': 'skipped', 'reason': 'no_chat', 'appointment_id': appointment_id}
+
+    reminder_window_minutes = int(getattr(settings, 'TELEGRAM_REMINDER_WINDOW_MINUTES', 2) or 2)
+    if reminder_window_minutes < 0:
+        reminder_window_minutes = 0
+
+    now = timezone.now()
+    remaining = appt.scheduled_date - now
+    min_remaining = timedelta(minutes=max(0, 60 - reminder_window_minutes))
+    max_remaining = timedelta(minutes=60 + reminder_window_minutes)
+    if remaining < min_remaining or remaining > max_remaining:
+        return {
+            'status': 'skipped',
+            'reason': 'outside_one_hour_window',
+            'appointment_id': appointment_id,
+        }
 
     when = timezone.localtime(appt.scheduled_date).strftime('%d.%m.%Y %H:%M')
     doctor_name = appt.doctor_name or (appt.doctor.user.get_full_name() if appt.doctor else 'Doktor')
@@ -158,8 +183,30 @@ def send_telegram_appointment_15min_prompt(appointment_id: str) -> dict:
     if not appt.telegram_chat_id:
         return {'status': 'skipped', 'reason': 'no_chat', 'appointment_id': appointment_id}
 
-    if appt.status in (Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED):
+    if appt.status in (
+        Appointment.Status.CANCELLED,
+        Appointment.Status.NO_SHOW,
+        Appointment.Status.COMPLETED,
+        Appointment.Status.IN_PROGRESS,
+    ):
         return {'status': 'skipped', 'reason': 'inactive_status', 'appointment_id': appointment_id}
+    if getattr(appt, 'patient_arrival_confirmed_at', None) is not None:
+        return {'status': 'skipped', 'reason': 'already_arrived', 'appointment_id': appointment_id}
+
+    prompt_window_minutes = int(getattr(settings, 'TELEGRAM_15MIN_WINDOW_MINUTES', 2) or 2)
+    if prompt_window_minutes < 0:
+        prompt_window_minutes = 0
+
+    now = timezone.now()
+    remaining = appt.scheduled_date - now
+    min_remaining = timedelta(minutes=max(0, 15 - prompt_window_minutes))
+    max_remaining = timedelta(minutes=15 + prompt_window_minutes)
+    if remaining < min_remaining or remaining > max_remaining:
+        return {
+            'status': 'skipped',
+            'reason': 'outside_15min_window',
+            'appointment_id': appointment_id,
+        }
 
     try:
         service = TelegramBotService()

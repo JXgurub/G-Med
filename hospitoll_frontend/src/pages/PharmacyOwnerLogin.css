@@ -159,6 +159,23 @@
   cursor: not-allowed;
 }
 
+.btn-forgot {
+  padding: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--primary-color);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  align-self: center;
+}
+
+.btn-forgot:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .btn-back {
   width: 100%;
   padding: 0.75rem;

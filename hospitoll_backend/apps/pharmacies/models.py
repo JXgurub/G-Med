@@ -28,6 +28,13 @@ class Pharmacy(models.Model):
         limit_choices_to={'role': 'pharmacy'},
         help_text=_("Dorixona egasi")
     )
+    owner_passport_id = models.CharField(
+        _('owner passport id'),
+        max_length=32,
+        blank=True,
+        default='',
+        help_text=_("Dorixona egasining pasport IDsi")
+    )
     name = models.CharField(
         _('pharmacy name'),
         max_length=255,
@@ -183,6 +190,13 @@ class Medicine(models.Model):
         _('description'),
         blank=True
     )
+    category = models.CharField(
+        _('category'),
+        max_length=120,
+        default='Boshqa',
+        blank=True,
+        help_text=_('Dori kategoriyasi')
+    )
     dosage_form = models.CharField(
         _('dosage form'),
         max_length=100,
@@ -199,6 +213,12 @@ class Medicine(models.Model):
         _('manufacturer'),
         max_length=255,
         blank=True
+    )
+    country_of_origin = models.CharField(
+        _('country of origin'),
+        max_length=120,
+        blank=True,
+        help_text=_('Dori ishlab chiqarilgan davlat')
     )
     is_prescription_required = models.BooleanField(
         _('prescription required'),
@@ -221,6 +241,7 @@ class Medicine(models.Model):
         indexes = [
             models.Index(fields=['name']),
             models.Index(fields=['atc_code']),
+            models.Index(fields=['category']),
         ]
     
     def __str__(self):

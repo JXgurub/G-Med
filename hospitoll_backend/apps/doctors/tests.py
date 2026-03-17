@@ -1,13 +1,14 @@
 from django.urls import reverse
 from django.utils import timezone
-from datetime import timedelta, datetime
+from datetime import timedelta, datetime, date
 from rest_framework.test import APITestCase
 from typing import Any, cast
 
 from apps.users.models import CustomUser
 from apps.clinics.models import Clinic
-from apps.doctors.models import Doctor, Specialization, DoctorAvailability
+from apps.doctors.models import Doctor, Specialization, DoctorAvailability, DoctorEmployment, DoctorWorkRecord
 from apps.patients.models import Patient
+from apps.medical.models import Appointment, MedicalRecord
 
 
 class DoctorEmploymentLifecycleTests(APITestCase):
@@ -67,8 +68,78 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             license_number='LIC-EMP-001',
             pinfl='12345678901234',
             passport_id='AB1234567',
+            date_of_birth=date(1990, 1, 1),
             is_active=True,
         )
+
+    def _list_results(self, response):
+        payload = response.json()
+        if isinstance(payload, dict) and 'results' in payload:
+            return payload['results']
+        return payload
+
+    def _rehire_doctor_to_clinic_b(self, **extra_payload):
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+        payload = {
+            'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+            'date_of_birth': '1990-01-01',
+            'first_name': 'Doctor',
+            'last_name': 'User',
+            'email': 'doctor.user@example.com',
+        }
+        payload.update(extra_payload)
+        return self.client.post(create_url, payload, format='json')
+
+    def test_identity_check_blocks_active_doctor_in_other_clinic(self):
+        self.auth_as(self.owner_b)
+        url = reverse('doctor-identity-check')
+
+        response = self.client.post(url, {
+            'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload.get('status'), 'blocked_other_clinic')
+        self.assertFalse(payload.get('can_submit'))
+
+    def test_identity_check_allows_new_doctor_when_identity_not_found(self):
+        self.auth_as(self.owner_a)
+        url = reverse('doctor-identity-check')
+
+        response = self.client.post(url, {
+            'pinfl': '77778888999900',
+            'passport_id': 'AA7654321',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload.get('status'), 'new_doctor_allowed')
+        self.assertTrue(payload.get('can_submit'))
+
+    def test_identity_check_marks_existing_doctor_as_eligible_rehire_on_full_match(self):
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        self.client.post(terminate_url, {})
+
+        self.auth_as(self.owner_b)
+        url = reverse('doctor-identity-check')
+        response = self.client.post(url, {
+            'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+            'date_of_birth': '1990-01-01',
+            'first_name': 'Doctor',
+            'last_name': 'User',
+            'email': 'doctor.user@example.com',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload.get('status'), 'eligible_rehire')
+        self.assertTrue(payload.get('can_submit'))
 
     def test_active_doctor_cannot_be_hired_to_other_clinic_by_pinfl(self):
         self.auth_as(self.owner_b)
@@ -92,6 +163,28 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.assertIn('detail', payload)
         self.assertIn('boshqa klinikada ham faoliyat yuritadi', str(payload['detail']).lower())
 
+    def test_active_doctor_duplicate_pinfl_in_same_clinic_returns_field_error(self):
+        self.auth_as(self.owner_a)
+        create_url = reverse('doctor-list')
+
+        response = self.client.post(create_url, {'pinfl': '12345678901234'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertIn('pinfl', payload)
+        self.assertIn('allaqachon mavjud', str(payload['pinfl']).lower())
+
+    def test_active_doctor_duplicate_passport_in_same_clinic_returns_field_error(self):
+        self.auth_as(self.owner_a)
+        create_url = reverse('doctor-list')
+
+        response = self.client.post(create_url, {'passport_id': 'AB1234567'}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        payload = response.json()
+        self.assertIn('passport_id', payload)
+        self.assertIn('allaqachon mavjud', str(payload['passport_id']).lower())
+
     def test_terminate_keeps_profile_but_unassigns_clinic(self):
         self.auth_as(self.owner_a)
         url = reverse('doctor-terminate', args=[self.doctor.id])
@@ -103,6 +196,156 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.assertFalse(self.doctor.is_active)
         self.assertIsNone(self.doctor.clinic)
 
+    def test_terminate_and_rehire_preserve_employment_history(self):
+        self.doctor.compensation_type = 'salary'
+        self.doctor.compensation_value = 2500000
+        self.doctor.save(update_fields=['compensation_type', 'compensation_value', 'updated_at'])
+
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+
+        terminate_response = self.client.post(terminate_url, {})
+        self.assertEqual(terminate_response.status_code, 200)
+
+        old_employment = DoctorEmployment.objects.filter(
+            doctor=self.doctor,
+            clinic=self.clinic_a,
+        ).order_by('-started_at').first()
+        self.assertIsNotNone(old_employment)
+        self.assertIsNotNone(old_employment.ended_at)
+        self.assertEqual(old_employment.terminated_by_id, self.owner_a.id)
+        self.assertEqual(old_employment.compensation_type, 'salary')
+        self.assertEqual(float(cast(Any, old_employment.compensation_value)), 2500000.0)
+
+        rehire_response = self._rehire_doctor_to_clinic_b(
+            compensation_type='percent',
+            compensation_value='30',
+        )
+        self.assertEqual(rehire_response.status_code, 201)
+
+        active_employment = DoctorEmployment.objects.filter(
+            doctor=self.doctor,
+            clinic=self.clinic_b,
+            ended_at__isnull=True,
+        ).first()
+        self.assertIsNotNone(active_employment)
+        self.assertEqual(active_employment.compensation_type, 'percent')
+        self.assertEqual(float(cast(Any, active_employment.compensation_value)), 30.0)
+
+    def test_include_former_list_keeps_old_clinic_stats_and_isolates_new_clinic_stats(self):
+        today = timezone.localdate()
+        old_work_date = today.replace(day=1)
+        new_work_date = today if today.day != 1 else today.replace(day=2)
+
+        old_start_dt = timezone.make_aware(datetime.combine(old_work_date, datetime.min.time()))
+        Doctor.objects.filter(id=self.doctor.id).update(
+            created_at=old_start_dt,
+            updated_at=old_start_dt,
+            compensation_type='salary',
+            compensation_value=2000000,
+            consultation_fee=100000,
+        )
+        self.doctor.refresh_from_db()
+
+        DoctorWorkRecord.objects.create(
+            doctor=self.doctor,
+            date=old_work_date,
+            checked_in_at=datetime.strptime('09:00', '%H:%M').time(),
+            checked_out_at=datetime.strptime('13:00', '%H:%M').time(),
+        )
+
+        patient_user = CustomUser.objects.create_user(
+            username='patient-for-scope',
+            email='patient.scope@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Scope',
+            last_name='Patient',
+        )
+        patient = Patient.objects.create(user=patient_user, national_id='99887766554433')
+
+        old_appointment = Appointment.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_a,
+            status=Appointment.Status.COMPLETED,
+            scheduled_date=timezone.make_aware(datetime.combine(old_work_date, datetime.strptime('10:00', '%H:%M').time())),
+            consultation_fee=100000,
+        )
+        MedicalRecord.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_a,
+            appointment=old_appointment,
+        )
+
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        terminate_response = self.client.post(terminate_url, {})
+        self.assertEqual(terminate_response.status_code, 200)
+
+        rehire_response = self._rehire_doctor_to_clinic_b(
+            compensation_type='percent',
+            compensation_value='40',
+            consultation_fee='200000',
+        )
+        self.assertEqual(rehire_response.status_code, 201)
+        self.doctor.refresh_from_db()
+
+        DoctorWorkRecord.objects.create(
+            doctor=self.doctor,
+            date=new_work_date,
+            checked_in_at=datetime.strptime('10:00', '%H:%M').time(),
+            checked_out_at=datetime.strptime('16:00', '%H:%M').time(),
+        )
+
+        new_appointment = Appointment.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_b,
+            status=Appointment.Status.COMPLETED,
+            scheduled_date=timezone.make_aware(datetime.combine(new_work_date, datetime.strptime('11:00', '%H:%M').time())),
+            consultation_fee=200000,
+        )
+        MedicalRecord.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_b,
+            appointment=new_appointment,
+        )
+
+        self.auth_as(self.owner_a)
+        old_list_response = self.client.get(reverse('doctor-list'), {
+            'clinic': str(self.clinic_a.id),
+            'include_former': '1',
+        })
+        self.assertEqual(old_list_response.status_code, 200)
+        old_results = self._list_results(old_list_response)
+        old_doctor = next((item for item in old_results if str(item['id']) == str(self.doctor.id)), None)
+        self.assertIsNotNone(old_doctor)
+        self.assertEqual(old_doctor['clinic_association_status'], 'former')
+        self.assertTrue(old_doctor['is_former_for_scope_clinic'])
+        self.assertAlmostEqual(float(old_doctor['monthly_hours']), 4.0, places=2)
+        self.assertEqual(old_doctor['monthly_patients'], 1)
+        self.assertAlmostEqual(float(old_doctor['monthly_effective_revenue']), 100000.0, places=2)
+        self.assertAlmostEqual(float(old_doctor['monthly_estimated_salary']), 2000000.0, places=2)
+
+        self.auth_as(self.owner_b)
+        new_list_response = self.client.get(reverse('doctor-list'), {
+            'clinic': str(self.clinic_b.id),
+            'include_former': '1',
+        })
+        self.assertEqual(new_list_response.status_code, 200)
+        new_results = self._list_results(new_list_response)
+        new_doctor = next((item for item in new_results if str(item['id']) == str(self.doctor.id)), None)
+        self.assertIsNotNone(new_doctor)
+        self.assertEqual(new_doctor['clinic_association_status'], 'current')
+        self.assertFalse(new_doctor['is_former_for_scope_clinic'])
+        self.assertAlmostEqual(float(new_doctor['monthly_hours']), 6.0, places=2)
+        self.assertEqual(new_doctor['monthly_patients'], 1)
+        self.assertAlmostEqual(float(new_doctor['monthly_effective_revenue']), 200000.0, places=2)
+        self.assertAlmostEqual(float(new_doctor['monthly_estimated_salary']), 80000.0, places=2)
+
     def test_rehire_by_pinfl_reuses_same_doctor_profile(self):
         self.auth_as(self.owner_a)
         terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
@@ -113,7 +356,14 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         create_url = reverse('doctor-list')
         doctor_count_before = Doctor.objects.count()
 
-        response = self.client.post(create_url, {'pinfl': '12345678901234'}, format='json')
+        response = self.client.post(create_url, {
+            'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+            'date_of_birth': '1990-01-01',
+            'first_name': 'Doctor',
+            'last_name': 'User',
+            'email': 'doctor.user@example.com',
+        }, format='json')
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(Doctor.objects.count(), doctor_count_before)
@@ -131,7 +381,14 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         create_url = reverse('doctor-list')
         doctor_count_before = Doctor.objects.count()
 
-        response = self.client.post(create_url, {'passport_id': 'AB1234567'}, format='json')
+        response = self.client.post(create_url, {
+            'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+            'date_of_birth': '1990-01-01',
+            'first_name': 'Doctor',
+            'last_name': 'User',
+            'email': 'doctor.user@example.com',
+        }, format='json')
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(Doctor.objects.count(), doctor_count_before)
@@ -148,6 +405,10 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         create_url = reverse('doctor-list')
         response = self.client.post(create_url, {
             'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+            'date_of_birth': '1990-01-01',
+            'first_name': 'Doctor',
+            'last_name': 'User',
             'email': 'doctor.user@example.com',
         }, format='json')
 
@@ -180,6 +441,10 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         create_url = reverse('doctor-list')
         response = self.client.post(create_url, {
             'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+            'date_of_birth': '1990-01-01',
+            'first_name': 'Doctor',
+            'last_name': 'User',
             'email': 'other.doctor@example.com',
         }, format='json')
 
@@ -187,6 +452,27 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         response_json = response.json()
         self.assertIn('email', response_json)
         self.assertIn('boshqa doktorga tegishli', str(response_json['email']).lower())
+
+    def test_rehire_rejects_when_full_identity_does_not_match_existing_doctor(self):
+        self.auth_as(self.owner_a)
+        terminate_url = reverse('doctor-terminate', args=[self.doctor.id])
+        self.client.post(terminate_url, {})
+
+        self.auth_as(self.owner_b)
+        create_url = reverse('doctor-list')
+        response = self.client.post(create_url, {
+            'pinfl': '12345678901234',
+            'passport_id': 'AB1234567',
+            'date_of_birth': '1990-01-01',
+            'first_name': 'WrongName',
+            'last_name': 'User',
+            'email': 'doctor.user@example.com',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = response.json()
+        self.assertIn('first_name', response_json)
+        self.assertIn('mos emas', str(response_json['first_name']).lower())
 
     def test_delete_doctor_is_not_allowed(self):
         self.auth_as(self.owner_a)
@@ -346,7 +632,10 @@ class DoctorEmploymentLifecycleTests(APITestCase):
     def test_create_doctor_rejects_non_14_digit_jshshir(self):
         self.auth_as(self.owner_a)
         create_url = reverse('doctor-list')
-        specialization = Specialization.objects.create(name='Endokrinolog', code='ENDO')
+        specialization, _ = Specialization.objects.get_or_create(
+            code='ENDO',
+            defaults={'name': 'Endokrinolog'},
+        )
 
         payload = {
             'pinfl': '1234567890123',

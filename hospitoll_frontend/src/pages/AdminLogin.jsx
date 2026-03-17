@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAdmin } from '../context/AdminContext'
 import PasswordInput from '../components/PasswordInput'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
+import { setPreferredLoginPortal } from '../utils/loginPortalPreference'
 import './AdminLogin.css'
 
 const AdminLogin = () => {
@@ -12,6 +13,10 @@ const AdminLogin = () => {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const { loginAdmin } = useAdmin()
+
+  useEffect(() => {
+    setPreferredLoginPortal('admin')
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -26,10 +31,6 @@ const AdminLogin = () => {
       setError(result.error)
     }
     setLoading(false)
-  }
-
-  const handleBackToLogin = () => {
-    navigate('/login')
   }
 
   return (
@@ -83,9 +84,6 @@ const AdminLogin = () => {
             </button>
           </form>
 
-          <button className="btn-back" onClick={handleBackToLogin}>
-            ← Orqaga
-          </button>
         </div>
 
         <div className="login-background">

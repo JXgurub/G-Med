@@ -4,6 +4,40 @@ import { usePatient } from '../context/PatientContext'
 import PasswordInput from '../components/PasswordInput'
 import './PatientPortal.css'
 
+const PHARMACY_PRESCRIPTION_KEY = 'gmed-pharmacy-prescription-search'
+
+const formatHistoryDate = (value) => {
+  if (!value) return 'Sana ko\'rsatilmagan'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return value
+  return parsed.toLocaleDateString('uz-UZ', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  })
+}
+
+const copyTextToClipboard = async (text) => {
+  const value = String(text || '').trim()
+  if (!value) return false
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value)
+    return true
+  }
+
+  const helper = document.createElement('textarea')
+  helper.value = value
+  helper.setAttribute('readonly', '')
+  helper.style.position = 'absolute'
+  helper.style.left = '-9999px'
+  document.body.appendChild(helper)
+  helper.select()
+  const copied = document.execCommand('copy')
+  document.body.removeChild(helper)
+  return copied
+}
+
 const PatientPortal = () => {
   const navigate = useNavigate()
   const { patientAuth, patientData, updateDoctorRating, updatePatientProfile, changePatientPassword } = usePatient()
@@ -123,6 +157,43 @@ const PatientPortal = () => {
     }
   }
 
+  const handleCopyMedicines = async (entry) => {
+    const medicinesText = (entry.medications || []).join('\n')
+    if (!medicinesText) {
+      alert('Bu yozuvda dorilar ro\'yxati yo\'q')
+      return
+    }
+
+    try {
+      const copied = await copyTextToClipboard(medicinesText)
+      if (!copied) throw new Error('copy_failed')
+      alert('Dorilar ro\'yxati nusxalandi ✅')
+    } catch (error) {
+      alert('Dorilar ro\'yxatini nusxalab bo\'lmadi')
+    }
+  }
+
+  const handleSendMedicinesToPharmacy = (entry) => {
+    if (!entry.medications || entry.medications.length === 0) {
+      alert('Bu yozuvda dorilar ro\'yxati yo\'q')
+      return
+    }
+
+    try {
+      localStorage.setItem(PHARMACY_PRESCRIPTION_KEY, JSON.stringify({
+        medicines: entry.medications,
+        diagnosis: entry.diagnosis,
+        complaint: entry.complaint,
+        date: entry.date,
+        doctorName: entry.doctorName,
+        clinic: entry.clinic,
+      }))
+      navigate('/#pharmacy-section')
+    } catch (error) {
+      alert('Dorilar ro\'yxatini dorixonaga yuborishda xatolik yuz berdi')
+    }
+  }
+
   return (
     <div className="patient-portal">
       <header className="patient-hero">
@@ -177,42 +248,85 @@ const PatientPortal = () => {
 
         {activeTab === 'history' && (
           <div className="history-grid">
-            {history.map((entry) => (
-              <article key={entry.id} className="history-card">
+            {history.length > 0 ? history.map((entry) => (
+              <article key={entry.id} className="history-card history-card-modern">
                 <div className="history-header">
-                  <span className="history-date">{entry.date}</span>
-                  <span className="history-diagnosis">{entry.diagnosis}</span>
+                  <span className="history-date">{formatHistoryDate(entry.date)}</span>
+                  <span className="history-pill">{entry.medications?.length || 0} ta dori</span>
                 </div>
-                <div className="history-body">
-                  <div className="history-row doctor-row">
-                    <span>👨‍⚕️ Tashxis qo'ygan shifokor</span>
+
+                <div className="history-title-block">
+                  <h3 className="history-diagnosis">{entry.diagnosis}</h3>
+                  <p className="history-subtitle">Kasallik bo'yicha doktor xulosasi va resept tafsilotlari</p>
+                </div>
+
+                <div className="history-complaint-card">
+                  <span className="history-section-kicker">Bemor shikoyati</span>
+                  <p>{entry.complaint || 'Shikoyat kiritilmagan'}</p>
+                </div>
+
+                <div className="history-detail-grid">
+                  <div className="history-detail-card history-detail-card-doctor">
+                    <span className="history-detail-label">Tashxis qo'ygan shifokor</span>
                     <strong>{entry.doctorName}</strong>
                   </div>
                   {entry.doctorSpecialization && (
-                    <div className="history-row specialization-row">
-                      <span>Ixtisoslash</span>
+                    <div className="history-detail-card">
+                      <span className="history-detail-label">Ixtisoslash</span>
                       <strong>{entry.doctorSpecialization}</strong>
                     </div>
                   )}
-                  <div className="history-row">
-                    <span>Klinika</span>
+                  <div className="history-detail-card">
+                    <span className="history-detail-label">Klinika</span>
                     <strong>{entry.clinic}</strong>
                   </div>
-                  {entry.medications && entry.medications.length > 0 && (
-                    <div className="history-medications">
-                      <p>💊 Yozilgan dorilar</p>
-                      <div className="medication-tags">
-                        {entry.medications.map((medication) => (
-                          <span key={medication} className="medication-tag">
-                            {medication}
-                          </span>
-                        ))}
-                      </div>
+                </div>
+
+                <div className="history-medications history-medications-panel">
+                  <div className="history-medications-header">
+                    <div>
+                      <p>Yozilgan dorilar</p>
+                      <span className="history-medication-hint">Ro'yxatni nusxalash yoki dorixona qidiruviga yuborish mumkin</span>
                     </div>
+                    {entry.medications && entry.medications.length > 0 ? (
+                      <div className="history-medication-actions">
+                        <button
+                          type="button"
+                          className="history-action-btn history-action-btn-ghost"
+                          onClick={() => handleCopyMedicines(entry)}
+                        >
+                          Nusxa olish
+                        </button>
+                        <button
+                          type="button"
+                          className="history-action-btn history-action-btn-primary"
+                          onClick={() => handleSendMedicinesToPharmacy(entry)}
+                        >
+                          Dorixonadan qidirish
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {entry.medications && entry.medications.length > 0 ? (
+                    <div className="medication-tags">
+                      {entry.medications.map((medication) => (
+                        <span key={`${entry.id}-${medication}`} className="medication-tag">
+                          {medication}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="history-empty-inline">Bu yozuv uchun dori tavsiyasi kiritilmagan</div>
                   )}
                 </div>
               </article>
-            ))}
+            )) : (
+              <div className="history-empty-state">
+                <h3>Kasallik tarixi hali shakllanmagan</h3>
+                <p>Ko'riklar tugagach, tashxis, shikoyat va yozilgan dorilar shu yerda ko'rinadi.</p>
+              </div>
+            )}
           </div>
         )}
 

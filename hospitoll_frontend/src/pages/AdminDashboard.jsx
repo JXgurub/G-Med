@@ -17,6 +17,12 @@ const generateClinicRegistrationNumber = () => {
   return `CLN-${datePart}-${randomPart}`
 }
 
+const generatePharmacyRegistrationNumber = () => {
+  const datePart = new Date().toISOString().slice(2, 10).replace(/-/g, '')
+  const randomPart = Math.floor(1000 + Math.random() * 9000)
+  return `PHR-${datePart}-${randomPart}`
+}
+
 const getDefaultClinicForm = () => ({
   name: '',
   ownerFirstName: '',
@@ -33,12 +39,11 @@ const getDefaultPharmacyForm = () => ({
   name: '',
   ownerFirstName: '',
   ownerLastName: '',
-  ownerEmail: '',
-  ownerPhone: DEFAULT_PHONE_PREFIX,
-  pharmacyEmail: '',
+  ownerPassportId: '',
+  email: '',
   phone: DEFAULT_PHONE_PREFIX,
   address: '',
-  registrationNumber: '',
+  registrationNumber: generatePharmacyRegistrationNumber(),
   password: ''
 })
 
@@ -332,8 +337,8 @@ const AdminDashboard = () => {
     if (!showAddPharmacy) {
       setPharmacyForm((prev) => ({
         ...prev,
-        ownerPhone: prev.ownerPhone || DEFAULT_PHONE_PREFIX,
         phone: prev.phone || DEFAULT_PHONE_PREFIX,
+        registrationNumber: prev.registrationNumber || generatePharmacyRegistrationNumber(),
       }))
     }
     setShowAddPharmacy((prev) => !prev)
@@ -341,13 +346,13 @@ const AdminDashboard = () => {
 
   const handleAddPharmacy = async (e) => {
     e.preventDefault()
-    const ownerEmail = normalizeEmailWithDefaultDomain(pharmacyForm.ownerEmail)
-    const pharmacyEmail = normalizeEmailWithDefaultDomain(pharmacyForm.pharmacyEmail)
+    const pharmacyEmail = normalizeEmailWithDefaultDomain(pharmacyForm.email)
     if (
       pharmacyForm.name &&
       pharmacyForm.ownerFirstName &&
       pharmacyForm.ownerLastName &&
-      ownerEmail &&
+      pharmacyForm.ownerPassportId &&
+      pharmacyEmail &&
       pharmacyForm.phone &&
       pharmacyForm.address &&
       pharmacyForm.registrationNumber &&
@@ -358,10 +363,11 @@ const AdminDashboard = () => {
           name: pharmacyForm.name,
           owner_first_name: pharmacyForm.ownerFirstName,
           owner_last_name: pharmacyForm.ownerLastName,
-          owner_email: ownerEmail,
-          owner_phone_number: pharmacyForm.ownerPhone,
+          owner_passport_id: pharmacyForm.ownerPassportId,
+          owner_email: pharmacyEmail,
+          owner_phone_number: pharmacyForm.phone,
           owner_password: pharmacyForm.password,
-          email: pharmacyEmail || ownerEmail,
+          email: pharmacyEmail,
           phone_number: pharmacyForm.phone,
           address: pharmacyForm.address,
           registration_number: pharmacyForm.registrationNumber,
@@ -369,7 +375,7 @@ const AdminDashboard = () => {
         })
         setPharmacyForm(getDefaultPharmacyForm())
         setShowAddPharmacy(false)
-        alert(`Dorixona muvaffaqiyatli qo'shildi! ✅\n\nKirish emaili: ${ownerEmail}`)
+        alert(`Dorixona muvaffaqiyatli qo'shildi! ✅\n\nKirish emaili: ${pharmacyEmail}`)
       } catch (error) {
         console.error('Dorixona qo\'shish xatosi:', error)
         const errorMsg = error.response?.data?.detail || error.message || 'Dorixona qo\'shishda xatolik yuz berdi'
@@ -510,6 +516,7 @@ const AdminDashboard = () => {
     ...clinic,
     owner: clinic.owner || clinic.owner_name || clinic.owner_email || '',
     ownerName: clinic.owner_name || '',
+    ownerPassportId: clinic.owner_passport_id || '',
     clinicEmail: clinic.email || '',
     city: clinic.city || clinic.address || '',
     phone: clinic.phone || clinic.phone_number || '',
@@ -522,6 +529,7 @@ const AdminDashboard = () => {
     ...pharmacy,
     owner: pharmacy.owner || pharmacy.owner_name || pharmacy.owner_email || '',
     ownerName: pharmacy.owner_name || '',
+    ownerPassportId: pharmacy.owner_passport_id || '',
     pharmacyEmail: pharmacy.email || '',
     city: pharmacy.city || pharmacy.address || '',
     phone: pharmacy.phone || pharmacy.phone_number || '',
@@ -531,10 +539,14 @@ const AdminDashboard = () => {
   }))
 
   const filteredClinics = normalizedClinics.filter(clinic => {
+    const query = searchTerm.toLowerCase().trim()
     const matchesSearch = 
-      clinic.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      clinic.owner.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      clinic.city.toLowerCase().includes(searchTerm.toLowerCase())
+      clinic.name.toLowerCase().includes(query) ||
+      clinic.owner.toLowerCase().includes(query) ||
+      clinic.city.toLowerCase().includes(query) ||
+      String(clinic.phone || '').toLowerCase().includes(query) ||
+      String(clinic.ownerPassportId || '').toLowerCase().includes(query) ||
+      String(clinic.registration_number || '').toLowerCase().includes(query)
     
     const matchesFilter = 
       filterStatus === 'all' ||
@@ -546,10 +558,14 @@ const AdminDashboard = () => {
   })
 
   const filteredPharmacies = normalizedPharmacies.filter(pharmacy => {
+    const query = searchTerm.toLowerCase().trim()
     const matchesSearch = 
-      pharmacy.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      pharmacy.owner.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      pharmacy.city.toLowerCase().includes(searchTerm.toLowerCase())
+      pharmacy.name.toLowerCase().includes(query) ||
+      pharmacy.owner.toLowerCase().includes(query) ||
+      pharmacy.city.toLowerCase().includes(query) ||
+      String(pharmacy.phone || '').toLowerCase().includes(query) ||
+      String(pharmacy.ownerPassportId || '').toLowerCase().includes(query) ||
+      String(pharmacy.registration_number || '').toLowerCase().includes(query)
     
     const matchesFilter = 
       filterStatus === 'all' ||
@@ -750,7 +766,7 @@ const AdminDashboard = () => {
           </svg>
           <input
             type="text"
-            placeholder={activeTab === 'clinics' ? 'Klinika, egasi yoki shahar bo\'yicha qidiring...' : 'Dorixona, egasi yoki shahar bo\'yicha qidiring...'}
+            placeholder={activeTab === 'clinics' ? 'Nomi, telefoni yoki yagona shaxsiy raqami bo\'yicha qidiring...' : 'Nomi, telefoni yoki yagona shaxsiy raqami bo\'yicha qidiring...'}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -813,13 +829,13 @@ const AdminDashboard = () => {
               <div className="form-row">
                 <div className="form-group">
                   <label>Matn</label>
-                    <label>Email</label>
+                  <textarea
                     placeholder="Bog'lanish bo'limi matni"
                     value={homeContactForm.text}
                     onChange={(e) => setHomeContactForm({ ...homeContactForm, text: e.target.value })}
-                      value={clinicForm.email}
-                      onChange={(e) => setClinicForm({ ...clinicForm, email: e.target.value })}
-                      required
+                    rows={4}
+                    required
+                  />
                 </div>
               </div>
 
@@ -1205,13 +1221,14 @@ const AdminDashboard = () => {
               />
             </div>
             <div className="form-group">
-              <label>Dorixona email</label>
+              <label>Email</label>
               <input
                 type="email"
                 placeholder="pharmacy@example.uz"
-                value={pharmacyForm.pharmacyEmail}
-                onChange={(e) => setPharmacyForm({ ...pharmacyForm, pharmacyEmail: e.target.value })}
-                onBlur={(e) => setPharmacyForm({ ...pharmacyForm, pharmacyEmail: normalizeEmailWithDefaultDomain(e.target.value) })}
+                value={pharmacyForm.email}
+                onChange={(e) => setPharmacyForm({ ...pharmacyForm, email: e.target.value })}
+                onBlur={(e) => setPharmacyForm({ ...pharmacyForm, email: normalizeEmailWithDefaultDomain(e.target.value) })}
+                required
               />
             </div>
           </div>
@@ -1239,23 +1256,13 @@ const AdminDashboard = () => {
           </div>
           <div className="form-row">
             <div className="form-group">
-              <label>Egasi email</label>
+              <label>Egasi pasport ID</label>
               <input
-                type="email"
-                placeholder="owner@example.uz"
-                value={pharmacyForm.ownerEmail}
-                onChange={(e) => setPharmacyForm({ ...pharmacyForm, ownerEmail: e.target.value })}
-                onBlur={(e) => setPharmacyForm({ ...pharmacyForm, ownerEmail: normalizeEmailWithDefaultDomain(e.target.value) })}
+                type="text"
+                placeholder="AA1234567"
+                value={pharmacyForm.ownerPassportId}
+                onChange={(e) => setPharmacyForm({ ...pharmacyForm, ownerPassportId: e.target.value.replace(/\s+/g, '').toUpperCase() })}
                 required
-              />
-            </div>
-            <div className="form-group">
-              <label>Egasi telefon</label>
-              <input
-                type="tel"
-                placeholder="+998 90 123 45 67"
-                value={pharmacyForm.ownerPhone}
-                onChange={(e) => setPharmacyForm({ ...pharmacyForm, ownerPhone: e.target.value })}
               />
             </div>
           </div>
@@ -1283,14 +1290,15 @@ const AdminDashboard = () => {
           </div>
           <div className="form-row">
             <div className="form-group">
-              <label>Ro'yxat raqami</label>
+              <label>Dorixona raqami</label>
               <input
                 type="text"
-                placeholder="REG-001"
+                placeholder="PHR-..."
                 value={pharmacyForm.registrationNumber}
-                onChange={(e) => setPharmacyForm({ ...pharmacyForm, registrationNumber: e.target.value })}
+                readOnly
                 required
               />
+              <small style={{ color: '#6b7280' }}>Avtomatik yaratiladi va takrorlanmaydi.</small>
             </div>
             <div className="form-group">
               <label>Egasi parol</label>
@@ -1319,6 +1327,7 @@ const AdminDashboard = () => {
                 <tr>
                   <th>Klinika</th>
                   <th>Klinika raqami</th>
+                  <th>Yagona shaxsiy raqami</th>
                   <th>Email</th>
                   <th>Egasi</th>
                   <th>Telefon</th>
@@ -1336,6 +1345,9 @@ const AdminDashboard = () => {
                     </td>
                     <td>
                       <code>{clinic.registration_number || '—'}</code>
+                    </td>
+                    <td>
+                      <code>{clinic.ownerPassportId || '—'}</code>
                     </td>
                     <td className="email-cell">
                       <a href={`mailto:${clinic.clinicEmail}`} title={clinic.clinicEmail}>
@@ -1494,6 +1506,8 @@ const AdminDashboard = () => {
               <thead>
                 <tr>
                   <th>Dorixona</th>
+                  <th>Dorixona raqami</th>
+                  <th>Yagona shaxsiy raqami</th>
                   <th>Email</th>
                   <th>Egasi</th>
                   <th>Telefon</th>
@@ -1508,6 +1522,12 @@ const AdminDashboard = () => {
                   <tr key={pharmacy.id} className={`status-${pharmacy.status}`}>
                     <td className="clinic-name">
                       {pharmacy.name}
+                    </td>
+                    <td>
+                      <code>{pharmacy.registration_number || '—'}</code>
+                    </td>
+                    <td>
+                      <code>{pharmacy.ownerPassportId || '—'}</code>
                     </td>
                     <td className="email-cell">
                       <a href={`mailto:${pharmacy.pharmacyEmail}`} title={pharmacy.pharmacyEmail}>

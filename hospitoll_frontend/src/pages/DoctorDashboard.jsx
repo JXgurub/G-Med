@@ -12,6 +12,55 @@ const normalizePassportId = (value) => {
   return String(value).replace(/\s+/g, '').trim().toUpperCase()
 }
 
+const FIRST_WORK_YEAR_MIN = 1950
+
+const formatBirthDateLabel = (dateValue) => {
+  if (!dateValue) {
+    return 'Kiritilmagan'
+  }
+
+  const raw = String(dateValue).trim()
+  const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (match) {
+    return `${match[1]}-${match[2]}-${match[3]}`
+  }
+
+  return 'Kiritilmagan'
+}
+
+const sanitizeFirstWorkYearDraft = (value) => String(value || '').replace(/\D+/g, '').slice(0, 4)
+
+const normalizeFirstWorkYear = (value, currentYear) => {
+  const digitsOnly = sanitizeFirstWorkYearDraft(value)
+  if (!digitsOnly) return ''
+
+  const yearNumber = Number(digitsOnly)
+  if (!Number.isFinite(yearNumber)) return ''
+  if (yearNumber < FIRST_WORK_YEAR_MIN) return String(FIRST_WORK_YEAR_MIN)
+  if (yearNumber > currentYear) return String(currentYear)
+  return String(yearNumber)
+}
+
+const parseFirstWorkYear = (value, currentYear) => {
+  const normalized = normalizeFirstWorkYear(value, currentYear)
+  if (!normalized) return null
+  return Number(normalized)
+}
+
+const calculateExperiencePreview = (firstWorkYear, firstWorkMonth, nowDate = new Date()) => {
+  if (!Number.isFinite(firstWorkYear) || firstWorkYear < FIRST_WORK_YEAR_MIN) return null
+
+  const currentYear = nowDate.getFullYear()
+  const currentMonth = nowDate.getMonth() + 1
+  let years = currentYear - firstWorkYear
+
+  if (Number.isFinite(firstWorkMonth) && firstWorkMonth >= 1 && firstWorkMonth <= 12 && currentMonth < firstWorkMonth) {
+    years -= 1
+  }
+
+  return Math.max(0, years)
+}
+
 const getApiErrorMessage = (error, fallback = 'Sozlamalarni saqlashda xatolik yuz berdi') => {
   const responseData = error?.response?.data
   if (typeof responseData === 'string' && responseData.trim()) {
@@ -144,6 +193,7 @@ const DoctorDashboard = () => {
   const avatarFileInputRef = useRef(null)
   const avatarActionWrapRef = useRef(null)
   const [patientForm, setPatientForm] = useState(createInitialPatientForm)
+  const currentYear = new Date().getFullYear()
 
   const [staffInbox, setStaffInbox] = useState([])
   const [staffInboxLoading, setStaffInboxLoading] = useState(false)
@@ -315,6 +365,7 @@ const DoctorDashboard = () => {
     e.preventDefault()
     setSettingsSaving(true)
     try {
+      const firstWorkYear = parseFirstWorkYear(settingsForm.firstWorkYear, currentYear)
       const payload = {
         first_name: settingsForm.firstName,
         last_name: settingsForm.lastName,
@@ -323,7 +374,7 @@ const DoctorDashboard = () => {
         bio: settingsForm.bio,
         license_number: settingsForm.licenseNumber,
         diploma_number: settingsForm.diplomaNumber,
-        first_work_year: settingsForm.firstWorkYear ? Number(settingsForm.firstWorkYear) : null,
+        first_work_year: firstWorkYear,
         slot_minutes: Number(settingsForm.slotMinutes || 30),
       }
 
@@ -427,20 +478,10 @@ const DoctorDashboard = () => {
       }
   const canPractice = Boolean(doctor?.isActive && doctor?.isAssignedToClinic)
   const ratingDisplay = Number(doctor?.rating || 0).toFixed(1)
-  const currentYear = new Date().getFullYear()
-  const currentMonth = new Date().getMonth() + 1
-  const firstWorkYearNumber = Number(settingsForm.firstWorkYear)
-  const firstWorkMonthNumber = Number(doctor.firstWorkMonth)
-  const computedExperiencePreview = Number.isFinite(firstWorkYearNumber) && firstWorkYearNumber > 0
-    ? Math.max(
-        0,
-        currentYear - firstWorkYearNumber - (
-          Number.isFinite(firstWorkMonthNumber) && firstWorkMonthNumber >= 1 && firstWorkMonthNumber <= 12 && currentMonth < firstWorkMonthNumber
-            ? 1
-            : 0
-        )
-      )
-    : (doctor.yearsOfExperience || 0)
+  const birthDateLabel = formatBirthDateLabel(doctor?.dateOfBirth)
+  const firstWorkYearNumber = parseFirstWorkYear(settingsForm.firstWorkYear, currentYear)
+  const firstWorkMonthNumber = Number(doctor?.firstWorkMonth)
+  const computedExperiencePreview = calculateExperiencePreview(firstWorkYearNumber, firstWorkMonthNumber) ?? (doctor?.yearsOfExperience || 0)
 
   const handleSearch = async (e) => {
     const query = e.target.value
@@ -933,6 +974,11 @@ const DoctorDashboard = () => {
               <span className="label">Telefon:</span>
               <span className="value phone-link">{doctor.phone}</span>
             </div>
+
+            <div className="info-row">
+              <span className="label">Tug'ilgan sana:</span>
+              <span className="value">{birthDateLabel}</span>
+            </div>
             {!canPractice && (
               <div style={{ marginTop: '10px', padding: '10px', borderRadius: '8px', background: '#fff4e5', color: '#8a5700', fontSize: '13px' }}>
                 Siz klinikada faol emassiz. Faqat profil ma'lumotlari va rasmingizni o'zgartira olasiz.
@@ -1013,7 +1059,15 @@ const DoctorDashboard = () => {
                   </div>
                   <div className="doctor-settings-field">
                     <label>Birinchi ish boshlagan yil</label>
-                    <input type="number" min="1950" max={new Date().getFullYear()} value={settingsForm.firstWorkYear} onChange={(e) => setSettingsForm((prev) => ({ ...prev, firstWorkYear: e.target.value }))} />
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      placeholder={`Masalan: ${currentYear - 5}`}
+                      value={settingsForm.firstWorkYear}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, firstWorkYear: sanitizeFirstWorkYearDraft(e.target.value) }))}
+                      onBlur={() => setSettingsForm((prev) => ({ ...prev, firstWorkYear: normalizeFirstWorkYear(prev.firstWorkYear, currentYear) }))}
+                    />
                   </div>
                   <div className="doctor-settings-field">
                     <label>Avtomatik tajriba (yil)</label>
@@ -1221,7 +1275,7 @@ const DoctorDashboard = () => {
                       const timeLabel = scheduled.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })
                       const dateLabel = scheduled.toLocaleDateString('uz-UZ')
                       const isQueueLeader = index === 0
-                      const queueLabel = appointment.queue_position || index + 1
+                      const queueLabel = index + 1
                       const queueLocked = !isQueueLeader
                       return (
                         <div key={appointment.id} className="appointment-card">
@@ -1239,7 +1293,7 @@ const DoctorDashboard = () => {
                               disabled={queueLocked}
                               title={queueLocked ? 'Faqat navbatdagi birinchi bemorni qabul qilish mumkin' : ''}
                             >
-                              Qabulni boshlash
+                              Qabul qildim
                             </button>
                             <button
                               className={`btn-enter ${queueDecisionLoading[`${appointment.id}:enter`] ? 'is-loading' : ''}`}
@@ -1247,7 +1301,7 @@ const DoctorDashboard = () => {
                               disabled={Boolean(queueLocked || queueDecisionLoading[`${appointment.id}:enter`] || queueDecisionLoading[`${appointment.id}:wait`] || queueDecisionLoading[`${appointment.id}:cancel`])}
                               title={queueLocked ? 'Faqat navbatdagi birinchi bemorni chaqirish mumkin' : ''}
                             >
-                              {queueDecisionLoading[`${appointment.id}:enter`] ? 'Yuborilmoqda...' : 'Kirishga chaqir'}
+                              {queueDecisionLoading[`${appointment.id}:enter`] ? 'Yuborilmoqda...' : 'Kiring'}
                             </button>
                             <button
                               className={`btn-wait ${queueDecisionLoading[`${appointment.id}:wait`] ? 'is-loading' : ''}`}

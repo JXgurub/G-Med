@@ -175,7 +175,7 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_THROTTLE_RATES': {
         'anon': '120/hour',
-        'user': '1200/hour',
+        'user': '6000/hour',
         'auth': '20/minute',
         'password_reset': '5/hour',
         'password_reset_request': '5/hour',

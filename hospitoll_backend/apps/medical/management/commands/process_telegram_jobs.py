@@ -99,8 +99,14 @@ class Command(BaseCommand):
                 scheduled_date__gte=start,
                 scheduled_date__lte=end,
                 telegram_reminder_sent_at__isnull=True,
+                patient_arrival_confirmed_at__isnull=True,
             )
-            .exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED])
+            .exclude(status__in=[
+                Appointment.Status.CANCELLED,
+                Appointment.Status.NO_SHOW,
+                Appointment.Status.COMPLETED,
+                Appointment.Status.IN_PROGRESS,
+            ])
             .select_related("doctor", "clinic")
             .order_by("scheduled_date")
         )
@@ -140,8 +146,14 @@ class Command(BaseCommand):
                 scheduled_date__gte=start,
                 scheduled_date__lte=end,
                 telegram_15min_prompt_sent_at__isnull=True,
+                patient_arrival_confirmed_at__isnull=True,
             )
-            .exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED])
+            .exclude(status__in=[
+                Appointment.Status.CANCELLED,
+                Appointment.Status.NO_SHOW,
+                Appointment.Status.COMPLETED,
+                Appointment.Status.IN_PROGRESS,
+            ])
             .select_related('doctor', 'clinic')
             .order_by('scheduled_date')
         )

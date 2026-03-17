@@ -12,6 +12,12 @@ from .views import (
     DoctorPasswordResetRequestView,
     DoctorPasswordResetVerifyView,
     DoctorPasswordResetConfirmView,
+    ClinicPasswordResetRequestView,
+    ClinicPasswordResetVerifyView,
+    ClinicPasswordResetConfirmView,
+    PharmacyPasswordResetRequestView,
+    PharmacyPasswordResetVerifyView,
+    PharmacyPasswordResetConfirmView,
 )
 
 urlpatterns = [
@@ -26,4 +32,10 @@ urlpatterns = [
     path('doctor-password-reset/request/', DoctorPasswordResetRequestView.as_view(), name='doctor_password_reset_request'),
     path('doctor-password-reset/verify/', DoctorPasswordResetVerifyView.as_view(), name='doctor_password_reset_verify'),
     path('doctor-password-reset/confirm/', DoctorPasswordResetConfirmView.as_view(), name='doctor_password_reset_confirm'),
+    path('clinic-password-reset/request/', ClinicPasswordResetRequestView.as_view(), name='clinic_password_reset_request'),
+    path('clinic-password-reset/verify/', ClinicPasswordResetVerifyView.as_view(), name='clinic_password_reset_verify'),
+    path('clinic-password-reset/confirm/', ClinicPasswordResetConfirmView.as_view(), name='clinic_password_reset_confirm'),
+    path('pharmacy-password-reset/request/', PharmacyPasswordResetRequestView.as_view(), name='pharmacy_password_reset_request'),
+    path('pharmacy-password-reset/verify/', PharmacyPasswordResetVerifyView.as_view(), name='pharmacy_password_reset_verify'),
+    path('pharmacy-password-reset/confirm/', PharmacyPasswordResetConfirmView.as_view(), name='pharmacy_password_reset_confirm'),
 ]

@@ -18,7 +18,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
-from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization
+from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization, DoctorEmployment
 from apps.clinics.models import Clinic
 from apps.patients.models import Patient
 from apps.users.models import CustomUser
@@ -302,42 +302,44 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         queue_updated_count = 0
         selected_new_local = None
         now_local = timezone.localtime().replace(second=0, microsecond=0)
+        appointment_date = timezone.localtime(appointment.scheduled_date).date()
         queue_step_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
         if queue_step_minutes not in (15, 20, 30):
             queue_step_minutes = 30
 
         if decision == 'cancel':
             with transaction.atomic():
-                target = (
-                    Appointment.objects.select_for_update()
-                    .filter(id=appointment.id, doctor=doctor)
-                    .first()
-                )
-                if not target:
-                    return Response({'detail': 'Qabul topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
-                if target.status in [Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED]:
-                    return Response({'detail': 'Bu qabulni bekor qilib bo‘lmaydi.'}, status=status.HTTP_400_BAD_REQUEST)
-
-                appointment_date = timezone.localtime(target.scheduled_date).date()
-                target_queue_position = int(target.queue_position or 1)
-                self._free_slot_if_possible(target)
-                target.status = Appointment.Status.CANCELLED
-                target.save(update_fields=['status', 'updated_at'])
-
-                later_items = list(
+                queue_items = list(
                     Appointment.objects.select_for_update()
                     .filter(
                         doctor=doctor,
                         scheduled_date__date=appointment_date,
                         status__in=status_filter,
-                        queue_position__gt=target_queue_position,
                     )
-                    .order_by('queue_position', 'scheduled_date', 'created_at')
+                    .order_by('scheduled_date', 'created_at', 'queue_position')
                 )
 
-                next_pos = target_queue_position
+                target = next((item for item in queue_items if item.id == appointment.id), None)
+                if not target:
+                    return Response({'detail': 'Qabul topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+                if target.status in [Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED]:
+                    return Response({'detail': 'Bu qabulni bekor qilib bo‘lmaydi.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                queue_leader = queue_items[0] if queue_items else None
+                if queue_leader and queue_leader.id != target.id:
+                    return Response(
+                        {'detail': 'Faqat navbatdagi 1-bemor uchun ushbu amalni bajarish mumkin.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                self._free_slot_if_possible(target)
+                target.status = Appointment.Status.CANCELLED
+                target.save(update_fields=['status', 'updated_at'])
+
+                remaining_items = [item for item in queue_items if item.id != target.id]
+                next_pos = 1
                 queue_cursor = now_local
-                for item in later_items:
+                for item in remaining_items:
                     current_local = timezone.localtime(item.scheduled_date).replace(second=0, microsecond=0)
                     new_local = queue_cursor
 
@@ -371,7 +373,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
                 appointment = target
         else:
-            appointment_date = timezone.localtime(appointment.scheduled_date).date()
             extra_delay_minutes = 15 if decision == 'wait' else 0
             queue_cursor = now_local + timedelta(minutes=extra_delay_minutes)
 
@@ -383,7 +384,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                         scheduled_date__date=appointment_date,
                         status__in=status_filter,
                     )
-                    .order_by('queue_position', 'scheduled_date', 'created_at')
+                    .order_by('scheduled_date', 'created_at', 'queue_position')
                 )
 
                 if not any(item.id == appointment.id for item in queue_items):
@@ -498,8 +499,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                         ).values_list('id', flat=True)
                     }
 
+            selected_appointment_id = str(appointment.id)
             for rec in shifted_records:
                 if not rec['chat_id']:
+                    continue
+
+                # Current patient already receives a dedicated decision message.
+                if rec.get('id') == selected_appointment_id:
+                    continue
+
+                # For wait decision, notify shifted others only when explicitly requested.
+                if decision == 'wait' and not notify_all_shifted:
                     continue
 
                 if rec.get('id') in recently_arrived_ids:
@@ -1068,7 +1078,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['get'], permission_classes=[IsDoctor])
     def today(self, request):
-        """Doctor panel: list today's appointments ordered by queue_position then time."""
+        """Doctor panel: list today's appointments strictly ordered by appointment time."""
         doctor = self._require_active_assigned_doctor(request)
         if not doctor:
             return Response({'detail': 'Doktor topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
@@ -1077,7 +1087,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         qs = Appointment.objects.filter(
             doctor=doctor,
             scheduled_date__date=today,
-        ).select_related('patient', 'clinic', 'slot').order_by('queue_position', 'scheduled_date')
+        ).select_related('patient', 'clinic', 'slot').order_by('scheduled_date', 'created_at', 'queue_position')
         return Response(AppointmentSerializer(qs, many=True).data)
 
     @action(detail=False, methods=['get'], permission_classes=[IsDoctor])
@@ -1089,16 +1099,58 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         - monthly_arrived_patients: patients who came in current month
         - monthly_estimated_balance: doctor's own monthly balance by compensation settings
         """
-        doctor = self._require_active_assigned_doctor(request)
+        doctor = getattr(request.user, 'doctor', None)
         if not doctor:
             return Response({'detail': 'Doktor topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+        compensation_type = str(getattr(doctor, 'compensation_type', 'salary') or 'salary')
+        compensation_value = Decimal(getattr(doctor, 'compensation_value', 0) or 0)
+
+        if not doctor.is_active or not doctor.clinic_id:
+            return Response(
+                {
+                    'today_24h_patients': 0,
+                    'monthly_cancelled_appointments': 0,
+                    'monthly_arrived_patients': 0,
+                    'compensation_type': compensation_type,
+                    'compensation_value': float(compensation_value),
+                    'monthly_effective_revenue': 0.0,
+                    'monthly_estimated_balance': 0.0,
+                },
+                headers={
+                    'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+                    'Pragma': 'no-cache',
+                },
+            )
 
         now = timezone.localtime()
         tz = timezone.get_current_timezone()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if month_start.month == 12:
+            month_end = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            month_end = month_start.replace(month=month_start.month + 1)
+
+        active_employment = DoctorEmployment.objects.filter(
+            doctor=doctor,
+            clinic_id=doctor.clinic_id,
+            ended_at__isnull=True,
+        ).order_by('-started_at').first()
+
+        stats_window_start = month_start
+        if active_employment and active_employment.started_at and active_employment.started_at > stats_window_start:
+            stats_window_start = active_employment.started_at
+
+        if active_employment:
+            compensation_type = str(active_employment.compensation_type or compensation_type)
+            if active_employment.compensation_value is not None:
+                compensation_value = Decimal(active_employment.compensation_value)
 
         today_local = now.date()
-        visits_qs = MedicalRecord.objects.filter(doctor=doctor)
+        visits_qs = MedicalRecord.objects.filter(
+            doctor=doctor,
+            clinic_id=doctor.clinic_id,
+        )
 
         today_24h_patients = 0
         today_work_record = DoctorWorkRecord.objects.filter(doctor=doctor, date=today_local).first()
@@ -1115,21 +1167,29 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             if session_end < session_start:
                 session_end = now
 
-            today_24h_patients = visits_qs.filter(
-                created_at__gte=session_start,
-                created_at__lte=session_end,
-            ).count()
+            effective_session_start = session_start
+            if stats_window_start > effective_session_start:
+                effective_session_start = stats_window_start
 
-        base = Appointment.objects.filter(doctor=doctor)
+            if session_end > effective_session_start:
+                today_24h_patients = visits_qs.filter(
+                    created_at__gte=effective_session_start,
+                    created_at__lte=session_end,
+                ).count()
+
+        base = Appointment.objects.filter(
+            doctor=doctor,
+            clinic_id=doctor.clinic_id,
+        )
 
         monthly_cancelled_appointments = base.filter(
-            updated_at__gte=month_start,
-            updated_at__lte=now,
+            scheduled_date__gte=stats_window_start,
+            scheduled_date__lt=month_end,
             status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW],
         ).count()
 
         monthly_records = visits_qs.filter(
-            created_at__gte=month_start,
+            created_at__gte=stats_window_start,
             created_at__lte=now,
         ).select_related('appointment')
         monthly_arrived_patients = monthly_records.count()
@@ -1144,17 +1204,14 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             effective_fee = appointment_fee if appointment_fee > 0 else _resolve_default_consultation_fee_for_doctor(doctor)
             monthly_effective_revenue += effective_fee
 
-        compensation_type = str(getattr(doctor, 'compensation_type', 'salary') or 'salary')
-        compensation_value = Decimal(getattr(doctor, 'compensation_value', 0) or 0)
-
         if compensation_type == 'percent':
             monthly_estimated_balance = (monthly_effective_revenue * compensation_value) / Decimal('100')
         else:
             monthly_estimated_balance = compensation_value
 
         legacy_monthly_patients = visits_qs.filter(
-            created_at__date__gte=month_start.date(),
-            created_at__date__lte=today_local,
+            created_at__gte=stats_window_start,
+            created_at__lte=now,
         ).count()
 
         mismatch_delta = int(monthly_arrived_patients) - int(legacy_monthly_patients)

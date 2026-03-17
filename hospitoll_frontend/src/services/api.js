@@ -318,12 +318,18 @@ export const authApi = {
   refresh: (token) => api.post('/users/token/refresh/', { refresh: token }),
   getProfile: () => api.get('/users/profile/'),
   changePassword: (current_password, new_password) => api.post('/users/change-password/', { current_password, new_password }),
-  patientPasswordResetRequest: (phone_number, passport_id) => api.post('/users/password-reset/request/', { phone_number, ...(passport_id ? { passport_id } : {}) }),
-  patientPasswordResetVerify: (phone_number, code, passport_id) => api.post('/users/password-reset/verify/', { phone_number, code, ...(passport_id ? { passport_id } : {}) }),
+  patientPasswordResetRequest: (passport_id, phone_number) => api.post('/users/password-reset/request/', { passport_id, phone_number }),
+  patientPasswordResetVerify: (passport_id, phone_number, code) => api.post('/users/password-reset/verify/', { passport_id, phone_number, code }),
   patientPasswordResetConfirm: (token, new_password) => api.post('/users/password-reset/confirm/', { token, new_password }),
   doctorPasswordResetRequest: (passport_id, birth_date, pinfl) => api.post('/users/doctor-password-reset/request/', { passport_id, birth_date, pinfl }),
   doctorPasswordResetVerify: (passport_id, birth_date, pinfl, code) => api.post('/users/doctor-password-reset/verify/', { passport_id, birth_date, pinfl, code }),
   doctorPasswordResetConfirm: (token, new_password, new_email) => api.post('/users/doctor-password-reset/confirm/', { token, new_password, ...(new_email ? { new_email } : {}) }),
+  clinicPasswordResetRequest: (clinic_number, passport_id, phone_number) => api.post('/users/clinic-password-reset/request/', { clinic_number, passport_id, phone_number }),
+  clinicPasswordResetVerify: (clinic_number, passport_id, phone_number, code) => api.post('/users/clinic-password-reset/verify/', { clinic_number, passport_id, phone_number, code }),
+  clinicPasswordResetConfirm: (token, new_password, new_email) => api.post('/users/clinic-password-reset/confirm/', { token, new_password, ...(new_email ? { new_email } : {}) }),
+  pharmacyPasswordResetRequest: (pharmacy_number, passport_id, phone_number) => api.post('/users/pharmacy-password-reset/request/', { pharmacy_number, passport_id, phone_number }),
+  pharmacyPasswordResetVerify: (pharmacy_number, passport_id, phone_number, code) => api.post('/users/pharmacy-password-reset/verify/', { pharmacy_number, passport_id, phone_number, code }),
+  pharmacyPasswordResetConfirm: (token, new_password, new_email) => api.post('/users/pharmacy-password-reset/confirm/', { token, new_password, ...(new_email ? { new_email } : {}) }),
 }
 
 // Clinic API endpoints
@@ -363,6 +369,7 @@ export const clinicDepartmentsApi = {
 export const doctorsApi = {
   getAll: (params) => api.get('/doctors/', params),
   getById: (id) => api.get(`/doctors/${id}/`),
+  identityCheck: (data) => api.post('/doctors/identity-check/', data),
   getMy: () => api.get('/doctors/my/'),
   updateMyProfile: (data) => api.patch('/doctors/my/update/', data),
   updateMyProfileForm: (formData) => api.patchForm('/doctors/my/update/', formData),
@@ -411,6 +418,11 @@ export const medicinesApi = {
   create: (data) => api.post('/pharmacies/medicines/', data),
   update: (id, data) => api.patch(`/pharmacies/medicines/${id}/`, data),
   delete: (id) => api.delete(`/pharmacies/medicines/${id}/`),
+  clearAll: () => api.delete('/pharmacies/medicines/clear-all/'),
+  getNameAlerts: () => api.get('/pharmacies/medicines/name-alerts/'),
+  confirmNameAlert: (id) => api.patch(`/pharmacies/medicines/name-alerts/${id}/confirm/`, {}),
+  confirmAllNameAlerts: () => api.patch('/pharmacies/medicines/name-alerts/confirm-all/', {}),
+  correctNameAlert: (id, data) => api.patch(`/pharmacies/medicines/name-alerts/${id}/correct/`, data),
 }
 
 export const pharmacyInventoryApi = {

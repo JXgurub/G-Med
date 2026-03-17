@@ -70,6 +70,7 @@ const mapDoctorProfile = async (doctorData) => {
     diplomaNumber: doctorData.diploma_number || '',
     firstWorkYear: doctorData.first_work_year || '',
     firstWorkMonth: doctorData.first_work_month || '',
+    dateOfBirth: doctorData.date_of_birth || '',
     certificateDocumentUrl: resolveMediaUrl(doctorData.certificate_document),
     yearsOfExperience: doctorData.years_of_experience || 0,
     consultationFee: doctorData.consultation_fee || 0,
@@ -277,21 +278,21 @@ export const DoctorProvider = ({ children }) => {
         }
       }))
 
-      const getQueuePosition = (item) => {
-        const numeric = Number(item?.queue_position)
-        return Number.isFinite(numeric) && numeric > 0 ? numeric : Number.MAX_SAFE_INTEGER
-      }
-
       const mapped = todays
         .sort((a, b) => {
-          const aPos = getQueuePosition(a)
-          const bPos = getQueuePosition(b)
-          if (aPos !== bPos) return aPos - bPos
-
           const timeDiff = new Date(a.scheduled_date) - new Date(b.scheduled_date)
           if (timeDiff !== 0) return timeDiff
 
-          return new Date(a.created_at) - new Date(b.created_at)
+          const createdDiff = new Date(a.created_at) - new Date(b.created_at)
+          if (createdDiff !== 0) return createdDiff
+
+          const aPos = Number(a?.queue_position)
+          const bPos = Number(b?.queue_position)
+          const safeAPos = Number.isFinite(aPos) && aPos > 0 ? aPos : Number.MAX_SAFE_INTEGER
+          const safeBPos = Number.isFinite(bPos) && bPos > 0 ? bPos : Number.MAX_SAFE_INTEGER
+          if (safeAPos !== safeBPos) return safeAPos - safeBPos
+
+          return 0
         })
         .map((item) => ({
         ...item,

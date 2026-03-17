@@ -134,6 +134,7 @@ const ClinicOwnerDashboard = () => {
     deleteDoctor, 
     toggleDoctorStatus,
     updateDoctorSchedule,
+    updateDoctorCompensation,
     addService,
     updateService,
     deleteService,
@@ -184,6 +185,16 @@ const ClinicOwnerDashboard = () => {
   })
   const [activeView, setActiveView] = useState('overview')
   const [scheduleForms, setScheduleForms] = useState({})
+  const [compensationForms, setCompensationForms] = useState({})
+  const [doctorCardTabs, setDoctorCardTabs] = useState({})
+  const [compensationSavingDoctorId, setCompensationSavingDoctorId] = useState(null)
+  const [identityCheckState, setIdentityCheckState] = useState({
+    status: 'idle',
+    message: '',
+    loading: false,
+    canSubmit: true,
+    fieldErrors: {}
+  })
   const [bannerFile, setBannerFile] = useState(null)
   const [bannerPreviewUrl, setBannerPreviewUrl] = useState('')
   const [bannerSaving, setBannerSaving] = useState(false)
@@ -238,6 +249,13 @@ const ClinicOwnerDashboard = () => {
 
   const clinicId = clinicOwner?.id
   const clinicDoctorsList = clinicId ? getDoctorsByClinic(clinicId) : []
+  const activeClinicDoctorsList = clinicDoctorsList.filter(
+    (doctor) => !(doctor.isFormerForClinic || doctor.clinicAssociationStatus === 'former')
+  )
+  const formerClinicDoctorsList = clinicDoctorsList.filter(
+    (doctor) => doctor.isFormerForClinic || doctor.clinicAssociationStatus === 'former'
+  )
+  const doctorsListForView = activeView === 'former-doctors' ? formerClinicDoctorsList : activeClinicDoctorsList
   const selectedSpecializationObjects = (specializations || []).filter((spec) =>
     doctorForm.specialization_ids.includes(spec.id)
   )
@@ -367,6 +385,12 @@ const ClinicOwnerDashboard = () => {
     if (path.includes('/clinic-dashboard/appointments')) {
       setActiveView('appointments')
     }
+    if (path.includes('/clinic-dashboard/services') || path.includes('/clinic-dashboard/directions')) {
+      setActiveView('services')
+    }
+    if (path.includes('/clinic-dashboard/former-doctors')) {
+      setActiveView('former-doctors')
+    }
     if (path.includes('/clinic-dashboard/settings')) {
       setActiveView('settings')
     }
@@ -450,6 +474,122 @@ const ClinicOwnerDashboard = () => {
     })
   }, [clinicDoctorsList])
 
+  useEffect(() => {
+    if (!clinicDoctorsList.length) return
+    setCompensationForms((prev) => {
+      const next = { ...prev }
+      clinicDoctorsList.forEach((doctor) => {
+        if (!next[doctor.id]) {
+          const type = doctor.compensationType || 'salary'
+          const rawValue = doctor.compensationValue || ''
+          next[doctor.id] = {
+            compensationType: type,
+            compensationValue: type === 'percent' ? String(rawValue || '') : formatCurrencyInput(rawValue)
+          }
+        }
+      })
+      return next
+    })
+  }, [clinicDoctorsList])
+
+  useEffect(() => {
+    if (!showAddDoctor) {
+      setIdentityCheckState({
+        status: 'idle',
+        message: '',
+        loading: false,
+        canSubmit: true,
+        fieldErrors: {}
+      })
+      return
+    }
+
+    const pinfl = String(doctorForm.pinfl || '').trim()
+    const passport = String(doctorForm.passportId || '').trim()
+    if (!pinfl && !passport) {
+      setIdentityCheckState({
+        status: 'idle',
+        message: '',
+        loading: false,
+        canSubmit: true,
+        fieldErrors: {}
+      })
+      return
+    }
+
+    if (pinfl && pinfl.length < 14) {
+      setIdentityCheckState({
+        status: 'typing',
+        message: 'JSHSHIR 14 ta bo\'lgach tekshiruv avtomatik ishlaydi.',
+        loading: false,
+        canSubmit: false,
+        fieldErrors: {}
+      })
+      return
+    }
+
+    let isCancelled = false
+    const timeoutId = setTimeout(async () => {
+      setIdentityCheckState((prev) => ({ ...prev, loading: true }))
+      try {
+        const response = await doctorsApi.identityCheck({
+          pinfl,
+          passport_id: passport,
+          first_name: doctorForm.firstName,
+          last_name: doctorForm.lastName,
+          email: normalizeEmailWithDefaultDomain(doctorForm.email),
+          date_of_birth: doctorForm.dateOfBirth,
+          clinic: clinicOwner?.id
+        })
+        if (isCancelled) return
+
+        const rawFieldErrors = response?.field_errors || {}
+        setIdentityCheckState({
+          status: response?.status || 'idle',
+          message: response?.message || '',
+          loading: false,
+          canSubmit: response?.can_submit !== false,
+          fieldErrors: rawFieldErrors,
+        })
+
+        if (Object.keys(rawFieldErrors).length > 0) {
+          setDoctorFormErrors((prev) => ({
+            ...prev,
+            ...(rawFieldErrors.pinfl ? { pinfl: rawFieldErrors.pinfl } : {}),
+            ...(rawFieldErrors.passport_id ? { passportId: rawFieldErrors.passport_id } : {}),
+            ...(rawFieldErrors.first_name ? { firstName: rawFieldErrors.first_name } : {}),
+            ...(rawFieldErrors.last_name ? { lastName: rawFieldErrors.last_name } : {}),
+            ...(rawFieldErrors.email ? { email: rawFieldErrors.email } : {}),
+            ...(rawFieldErrors.date_of_birth ? { dateOfBirth: rawFieldErrors.date_of_birth } : {}),
+          }))
+        }
+      } catch (error) {
+        if (isCancelled) return
+        setIdentityCheckState({
+          status: 'error',
+          message: error?.message || 'Real-time tekshiruvda xatolik yuz berdi.',
+          loading: false,
+          canSubmit: true,
+          fieldErrors: {},
+        })
+      }
+    }, 450)
+
+    return () => {
+      isCancelled = true
+      clearTimeout(timeoutId)
+    }
+  }, [
+    showAddDoctor,
+    doctorForm.pinfl,
+    doctorForm.passportId,
+    doctorForm.firstName,
+    doctorForm.lastName,
+    doctorForm.email,
+    doctorForm.dateOfBirth,
+    clinicOwner?.id,
+  ])
+
   const fetchMonthlyAppointmentsStats = useCallback(async ({ silent = false } = {}) => {
     if (!clinicOwner?.id) return
 
@@ -495,7 +635,7 @@ const ClinicOwnerDashboard = () => {
   const refreshClinicOwnerDashboard = useCallback(async () => {
     if (!clinicOwner?.id) return
 
-    const isDoctorsOrStatsView = ['overview', 'appointments', 'doctors', 'settings'].includes(activeView)
+    const isDoctorsOrStatsView = ['overview', 'appointments', 'doctors', 'former-doctors', 'settings'].includes(activeView)
     const isServicesView = activeView === 'services'
 
     const tasks = [
@@ -540,48 +680,129 @@ const ClinicOwnerDashboard = () => {
     return null
   }
 
+  const getFirstErrorMessage = (value) => {
+    if (Array.isArray(value)) {
+      return String(value[0] || '').trim()
+    }
+    return String(value || '').trim()
+  }
+
+  const mapDoctorCreateErrors = (responseData) => {
+    if (!responseData || typeof responseData !== 'object') {
+      return {}
+    }
+
+    const nextErrors = {}
+
+    const pinflError = getFirstErrorMessage(responseData.pinfl)
+    if (pinflError) {
+      nextErrors.pinfl = pinflError
+    }
+
+    const passportError = getFirstErrorMessage(responseData.passport_id)
+    if (passportError) {
+      nextErrors.passportId = passportError
+    }
+
+    const emailError = getFirstErrorMessage(responseData.email)
+    if (emailError) {
+      nextErrors.email = emailError
+    }
+
+    const firstNameError = getFirstErrorMessage(responseData.first_name)
+    if (firstNameError) {
+      nextErrors.firstName = firstNameError
+    }
+
+    const lastNameError = getFirstErrorMessage(responseData.last_name)
+    if (lastNameError) {
+      nextErrors.lastName = lastNameError
+    }
+
+    const dateOfBirthError = getFirstErrorMessage(responseData.date_of_birth)
+    if (dateOfBirthError) {
+      nextErrors.dateOfBirth = dateOfBirthError
+    }
+
+    const phoneError = getFirstErrorMessage(responseData.phone_number)
+    if (phoneError) {
+      nextErrors.phone = phoneError
+    }
+
+    const consultationFeeError = getFirstErrorMessage(responseData.consultation_fee)
+    if (consultationFeeError) {
+      nextErrors.consultationFee = consultationFeeError
+    }
+
+    const specializationError = getFirstErrorMessage(responseData.specialization_ids)
+    if (specializationError) {
+      nextErrors.specialization_ids = specializationError
+    }
+
+    const passwordError = getFirstErrorMessage(responseData.password)
+    if (passwordError) {
+      nextErrors.password = passwordError
+    }
+
+    const generalError = getFirstErrorMessage(responseData.detail || responseData.non_field_errors)
+    if (generalError) {
+      nextErrors.general = generalError
+    }
+
+    return nextErrors
+  }
+
   const handleAddDoctor = async (e) => {
     e.preventDefault()
     setDoctorFormErrors({})
     const normalizedDoctorEmail = normalizeEmailWithDefaultDomain(doctorForm.email)
     const pinfl = String(doctorForm.pinfl || '').replace(/\D+/g, '')
     if (!pinfl) {
-      alert("JSHSHIR kiritish majburiy.")
+      setDoctorFormErrors({ pinfl: "JSHSHIR kiritish majburiy." })
       return
     }
     if (pinfl.length !== String(doctorForm.pinfl || '').trim().length) {
-      alert("JSHSHIR faqat raqamlardan iborat bo'lishi kerak.")
+      setDoctorFormErrors({ pinfl: "JSHSHIR faqat raqamlardan iborat bo'lishi kerak." })
       return
     }
     if (pinfl.length !== 14) {
-      alert("JSHSHIR 14 ta raqamdan iborat bo'lishi kerak.")
+      setDoctorFormErrors({ pinfl: "JSHSHIR 14 ta raqamdan iborat bo'lishi kerak." })
       return
     }
 
-    const isPinflOnlyRehire = (
-      !doctorForm.firstName &&
-      !doctorForm.lastName &&
-      !doctorForm.email &&
-      !doctorForm.phone &&
-      !doctorForm.password
-    )
+    if (identityCheckState.loading) {
+      setDoctorFormErrors({ general: 'Iltimos, identity tekshiruvi tugashini kuting.' })
+      return
+    }
 
-    if (!isPinflOnlyRehire && (
-      !doctorForm.firstName ||
-      !doctorForm.lastName ||
-      !normalizedDoctorEmail ||
-      !doctorForm.phone ||
-      !doctorForm.password ||
-      !doctorForm.consultationFee ||
-      doctorForm.specialization_ids.length === 0
-    )) {
-      alert("Yangi doktor uchun barcha majburiy maydonlarni to'ldiring (ixtisoslik ham kerak).")
+    if (identityCheckState.canSubmit === false) {
+      setDoctorFormErrors({
+        general: identityCheckState.message || 'Kiritilgan JSHSHIR/Pasport ma\'lumotlari bilan doktorni ishga olish mumkin emas.'
+      })
+      return
+    }
+
+    const localErrors = {}
+    if (!doctorForm.passportId) localErrors.passportId = "Pasport/ID majburiy."
+    if (!doctorForm.dateOfBirth) localErrors.dateOfBirth = "Tug'ilgan sana majburiy."
+    if (!doctorForm.firstName) localErrors.firstName = "Ism majburiy."
+    if (!doctorForm.lastName) localErrors.lastName = "Familiya majburiy."
+    if (!normalizedDoctorEmail) localErrors.email = "Email majburiy."
+    if (!doctorForm.phone || doctorForm.phone === DEFAULT_PHONE_PREFIX) localErrors.phone = "Telefon majburiy."
+    if (!doctorForm.consultationFee) localErrors.consultationFee = "Konsultatsiya narxi majburiy."
+    if (doctorForm.specialization_ids.length === 0) localErrors.specialization_ids = "Kamida bitta ixtisoslik tanlang."
+    if (identityCheckState.status === 'new_doctor_allowed' && !doctorForm.password) {
+      localErrors.password = 'Yangi doktor uchun parol majburiy.'
+    }
+
+    if (Object.keys(localErrors).length > 0) {
+      setDoctorFormErrors(localErrors)
       return
     }
 
     const parsedConsultationFee = parseCurrencyInput(doctorForm.consultationFee)
-    if (!isPinflOnlyRehire && parsedConsultationFee <= 0) {
-      alert("Konsultatsiya narxi 0 dan katta bo'lishi kerak.")
+    if (parsedConsultationFee <= 0) {
+      setDoctorFormErrors({ consultationFee: "Konsultatsiya narxi 0 dan katta bo'lishi kerak." })
       return
     }
 
@@ -591,40 +812,26 @@ const ClinicOwnerDashboard = () => {
     }))
 
     try {
-      const payload = isPinflOnlyRehire
-        ? {
-            pinfl,
-            date_of_birth: doctorForm.dateOfBirth || null,
-            passport_id: doctorForm.passportId || null,
-            compensation_type: doctorForm.compensationType,
-            compensation_value: doctorForm.compensationValue ? parseCurrencyInput(doctorForm.compensationValue) : null,
-            consultation_fee: doctorForm.consultationFee ? parsedConsultationFee : null,
-            available_from: doctorForm.availableFrom,
-            available_until: doctorForm.availableUntil,
-            lunch_break_start: doctorForm.lunchBreakStart || null,
-            lunch_break_end: doctorForm.lunchBreakEnd || null,
-            working_days: doctorForm.workingDays.join(',')
-          }
-        : {
-            pinfl,
-            first_name: doctorForm.firstName,
-            last_name: doctorForm.lastName,
-            email: normalizedDoctorEmail,
-            phone_number: doctorForm.phone,
-            password: doctorForm.password,
-            date_of_birth: doctorForm.dateOfBirth || null,
-            passport_id: doctorForm.passportId || null,
-            compensation_type: doctorForm.compensationType,
-            compensation_value: doctorForm.compensationValue ? parseCurrencyInput(doctorForm.compensationValue) : null,
-            consultation_fee: parsedConsultationFee,
-            specialization_ids: doctorForm.specialization_ids,
-            specialty_prices: generatedSpecialtyPrices,
-            available_from: doctorForm.availableFrom,
-            available_until: doctorForm.availableUntil,
-            lunch_break_start: doctorForm.lunchBreakStart || null,
-            lunch_break_end: doctorForm.lunchBreakEnd || null,
-            working_days: doctorForm.workingDays.join(',')
-          }
+      const payload = {
+        pinfl,
+        first_name: doctorForm.firstName,
+        last_name: doctorForm.lastName,
+        email: normalizedDoctorEmail,
+        phone_number: doctorForm.phone,
+        ...(doctorForm.password ? { password: doctorForm.password } : {}),
+        date_of_birth: doctorForm.dateOfBirth || null,
+        passport_id: doctorForm.passportId || null,
+        compensation_type: doctorForm.compensationType,
+        compensation_value: doctorForm.compensationValue ? parseCurrencyInput(doctorForm.compensationValue) : null,
+        consultation_fee: parsedConsultationFee,
+        specialization_ids: doctorForm.specialization_ids,
+        specialty_prices: generatedSpecialtyPrices,
+        available_from: doctorForm.availableFrom,
+        available_until: doctorForm.availableUntil,
+        lunch_break_start: doctorForm.lunchBreakStart || null,
+        lunch_break_end: doctorForm.lunchBreakEnd || null,
+        working_days: doctorForm.workingDays.join(',')
+      }
 
       await addDoctor(clinicOwner.id, payload)
 
@@ -652,20 +859,16 @@ const ClinicOwnerDashboard = () => {
       setCompensationClearedOnFocus(false)
       setDoctorFormErrors({})
       setShowAddDoctor(false)
-      alert(isPinflOnlyRehire ? "Doktor JSHSHIR bo'yicha klinikaga biriktirildi!" : "Doktor qo'shildi!")
+      alert("Doktor muvaffaqiyatli qo'shildi yoki qayta ishga olindi!")
     } catch (error) {
-      const emailErrorRaw = error?.response?.data?.email
-      const emailError = Array.isArray(emailErrorRaw)
-        ? String(emailErrorRaw[0] || '').trim()
-        : String(emailErrorRaw || '').trim()
-
-      if (emailError) {
-        setDoctorFormErrors((prev) => ({ ...prev, email: emailError }))
+      const mappedErrors = mapDoctorCreateErrors(error?.response?.data)
+      if (Object.keys(mappedErrors).length > 0) {
+        setDoctorFormErrors(mappedErrors)
       }
 
-      const detail = error?.response?.data?.detail
+      const detail = mappedErrors.general || error?.response?.data?.detail
       const msg = detail || error?.message || "Doktor qo'shishda xatolik yuz berdi"
-      if (!emailError) {
+      if (Object.keys(mappedErrors).length === 0) {
         alert(msg)
       }
     }
@@ -695,10 +898,27 @@ const ClinicOwnerDashboard = () => {
   const totalDoctors = Number(clinicDashboardStats?.total_doctors || 0)
   const monthlyTotalPatients = Number(clinicDashboardStats?.monthly_arrived_patients || 0)
   const totalWorkHours = Number(clinicDashboardStats?.monthly_total_hours || 0)
-  const monthlyEstimatedRevenue = Number(clinicDashboardStats?.monthly_estimated_revenue || 0)
   const monthlyRevenueByDoctor = Array.isArray(clinicDashboardStats?.monthly_estimated_revenue_by_doctor)
     ? clinicDashboardStats.monthly_estimated_revenue_by_doctor
     : []
+  const activeDoctorIds = new Set(activeClinicDoctorsList.map((doctor) => String(doctor.id)))
+  const activeMonthlyRevenueByDoctor = monthlyRevenueByDoctor.filter((item) =>
+    activeDoctorIds.has(String(item.doctor_id))
+  )
+  const monthlyEstimatedRevenue = activeMonthlyRevenueByDoctor.reduce(
+    (sum, item) => sum + Number(item.estimated_revenue || 0),
+    0
+  )
+  const formerDoctorsCount = formerClinicDoctorsList.length
+  const formerMonthlyRevenueTotal = formerClinicDoctorsList.reduce(
+    (sum, doctor) => sum + Number(doctor.monthlyEffectiveRevenue || 0),
+    0
+  )
+  const formerMonthlySalaryTotal = formerClinicDoctorsList.reduce(
+    (sum, doctor) => sum + Number(doctor.monthlyEstimatedSalary || 0),
+    0
+  )
+
   const getDoctorRevenueShare = (doctorRevenue) => {
     const total = Number(monthlyEstimatedRevenue || 0)
     const value = Number(doctorRevenue || 0)
@@ -861,6 +1081,52 @@ const ClinicOwnerDashboard = () => {
       workingDays: schedule.workingDays.join(',')
     })
     alert('Doktor ish vaqti yangilandi!')
+  }
+
+  const handleCompensationChange = (doctorId, field, value) => {
+    setCompensationForms((prev) => {
+      const current = prev[doctorId] || { compensationType: 'salary', compensationValue: '' }
+      const next = { ...current, [field]: value }
+      return {
+        ...prev,
+        [doctorId]: next
+      }
+    })
+  }
+
+  const handleSaveCompensation = async (doctorId) => {
+    const compensation = compensationForms[doctorId]
+    if (!compensation) return
+
+    let parsedValue = null
+    if (String(compensation.compensationValue || '').trim()) {
+      if (compensation.compensationType === 'percent') {
+        parsedValue = Number(compensation.compensationValue)
+        if (!Number.isFinite(parsedValue) || parsedValue < 0 || parsedValue > 100) {
+          alert('Foiz 0 dan 100 gacha bo\'lishi kerak.')
+          return
+        }
+      } else {
+        parsedValue = parseCurrencyInput(compensation.compensationValue)
+        if (parsedValue < 0) {
+          alert('Ish haqi manfiy bo\'lishi mumkin emas.')
+          return
+        }
+      }
+    }
+
+    try {
+      setCompensationSavingDoctorId(doctorId)
+      await updateDoctorCompensation(clinicOwner.id, doctorId, {
+        compensationType: compensation.compensationType,
+        compensationValue: parsedValue,
+      })
+      alert('Doktor oylik ish haqi/foizi yangilandi!')
+    } catch (error) {
+      alert(error?.message || 'Ish haqi/foizni saqlashda xatolik yuz berdi')
+    } finally {
+      setCompensationSavingDoctorId(null)
+    }
   }
 
   const handleSendStaffMessage = async (e) => {
@@ -1131,12 +1397,6 @@ const ClinicOwnerDashboard = () => {
           >
             👨‍⚕️ Doktorlar boshqaruvi
           </button>
-          <button 
-            className={`tab-button ${activeView === 'services' ? 'active' : ''}`}
-            onClick={() => setActiveView('services')}
-          >
-            🏥 Xizmatlar
-          </button>
         </div>
 
         <div className="dashboard-content">
@@ -1190,11 +1450,11 @@ const ClinicOwnerDashboard = () => {
                   <h3>Doktorlar kesimida oylik daromad</h3>
                   {clinicStatsLoading ? (
                     <p className="doctor-revenue-empty">Yuklanyapti...</p>
-                  ) : monthlyRevenueByDoctor.length === 0 ? (
+                  ) : activeMonthlyRevenueByDoctor.length === 0 ? (
                     <p className="doctor-revenue-empty">Hozircha bu oy uchun ma'lumot yo'q</p>
                   ) : (
                     <div className="doctor-revenue-list">
-                      {monthlyRevenueByDoctor.map((item) => (
+                      {activeMonthlyRevenueByDoctor.map((item) => (
                         <div className="doctor-revenue-row" key={item.doctor_id}>
                           <div className="doctor-revenue-name">{item.doctor_name}</div>
                           <div className="doctor-revenue-meta">
@@ -1515,20 +1775,42 @@ const ClinicOwnerDashboard = () => {
           )}
 
           {/* Doctors Management Tab */}
-          {activeView === 'doctors' && (
+          {(activeView === 'doctors' || activeView === 'former-doctors') && (
             <>
               <section className="dashboard-section">
                 <div className="section-header-with-action">
-                  <h2>Doktorlar boshqaruvi</h2>
-                  <button 
-                    className="btn-add-doctor"
-                    onClick={() => setShowAddDoctor(!showAddDoctor)}
-                  >
-                    {showAddDoctor ? '✕ Bekor' : '+ Doktor Qo\'shish'}
-                  </button>
+                  <h2>{activeView === 'former-doctors' ? 'Ishdan olinganlar' : 'Doktorlar boshqaruvi'}</h2>
+                  {activeView === 'doctors' && (
+                    <button
+                      className="btn-add-doctor"
+                      onClick={() => setShowAddDoctor(!showAddDoctor)}
+                    >
+                      {showAddDoctor ? '✕ Bekor' : '+ Doktor Qo\'shish'}
+                    </button>
+                  )}
                 </div>
 
-                {showAddDoctor && (
+                {activeView === 'former-doctors' && (
+                  <div className="appointments-stats-grid" style={{ marginBottom: '1rem' }}>
+                    <div className="appointments-stat-card">
+                      <div className="appointments-stat-label">Ishdan olingan doktorlar</div>
+                      <div className="appointments-stat-value">{formerDoctorsCount}</div>
+                      <div className="appointments-stat-sub">Tarixiy ro'yxat (joriy klinika)</div>
+                    </div>
+                    <div className="appointments-stat-card">
+                      <div className="appointments-stat-label">Tarixiy oylik daromad</div>
+                      <div className="appointments-stat-value">{formatSom(formerMonthlyRevenueTotal)}</div>
+                      <div className="appointments-stat-sub">Jami (ishdan olinganlar kartalari bo'yicha)</div>
+                    </div>
+                    <div className="appointments-stat-card">
+                      <div className="appointments-stat-label">Tarixiy oylik ish haqi</div>
+                      <div className="appointments-stat-value">{formatSom(formerMonthlySalaryTotal)}</div>
+                      <div className="appointments-stat-sub">Jami (ishdan olinganlar kartalari bo'yicha)</div>
+                    </div>
+                  </div>
+                )}
+
+                {activeView === 'doctors' && showAddDoctor && (
                   <form className="add-doctor-form" onSubmit={handleAddDoctor}>
                     <div className="form-grid">
                       <div className="form-group">
@@ -1540,9 +1822,18 @@ const ClinicOwnerDashboard = () => {
                           maxLength={14}
                           placeholder="12345678901234"
                           value={doctorForm.pinfl}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, pinfl: e.target.value.replace(/\D+/g, '') })}
+                          className={doctorFormErrors.pinfl ? 'input-error' : ''}
+                          onChange={(e) => {
+                            setDoctorForm({ ...doctorForm, pinfl: e.target.value.replace(/\D+/g, '') })
+                            if (doctorFormErrors.pinfl || doctorFormErrors.general) {
+                              setDoctorFormErrors((prev) => ({ ...prev, pinfl: '', general: '' }))
+                            }
+                          }}
                           required
                         />
+                        {doctorFormErrors.pinfl && (
+                          <p className="form-field-error">{doctorFormErrors.pinfl}</p>
+                        )}
                       </div>
                       <div className="form-group">
                         <label>Pasport/ID</label>
@@ -1550,16 +1841,41 @@ const ClinicOwnerDashboard = () => {
                           type="text"
                           placeholder="AA1234567"
                           value={doctorForm.passportId}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, passportId: e.target.value.replace(/\s+/g, '').toUpperCase() })}
+                          className={doctorFormErrors.passportId ? 'input-error' : ''}
+                          onChange={(e) => {
+                            setDoctorForm({ ...doctorForm, passportId: e.target.value.replace(/\s+/g, '').toUpperCase() })
+                            if (doctorFormErrors.passportId || doctorFormErrors.general) {
+                              setDoctorFormErrors((prev) => ({ ...prev, passportId: '', general: '' }))
+                            }
+                          }}
                         />
+                        {doctorFormErrors.passportId && (
+                          <p className="form-field-error">{doctorFormErrors.passportId}</p>
+                        )}
+                      </div>
+                      <div className="form-group full-width">
+                        <div className={`identity-check-hint ${identityCheckState.status || 'idle'}`}>
+                          {identityCheckState.loading
+                            ? 'JSHSHIR/Pasport real-time tekshirilmoqda...'
+                            : (identityCheckState.message || 'JSHSHIR va Pasport kiritilganda real-time tekshiruv ishlaydi.')}
+                        </div>
                       </div>
                       <div className="form-group">
                         <label>Tug'ilgan sana</label>
                         <input
                           type="date"
                           value={doctorForm.dateOfBirth}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, dateOfBirth: e.target.value })}
+                          className={doctorFormErrors.dateOfBirth ? 'input-error' : ''}
+                          onChange={(e) => {
+                            setDoctorForm({ ...doctorForm, dateOfBirth: e.target.value })
+                            if (doctorFormErrors.dateOfBirth) {
+                              setDoctorFormErrors((prev) => ({ ...prev, dateOfBirth: '' }))
+                            }
+                          }}
                         />
+                        {doctorFormErrors.dateOfBirth && (
+                          <p className="form-field-error">{doctorFormErrors.dateOfBirth}</p>
+                        )}
                       </div>
                       <div className="form-group">
                         <label>Ism</label>
@@ -1567,8 +1883,17 @@ const ClinicOwnerDashboard = () => {
                           type="text"
                           placeholder="Ali"
                           value={doctorForm.firstName}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, firstName: e.target.value })}
+                          className={doctorFormErrors.firstName ? 'input-error' : ''}
+                          onChange={(e) => {
+                            setDoctorForm({ ...doctorForm, firstName: e.target.value })
+                            if (doctorFormErrors.firstName) {
+                              setDoctorFormErrors((prev) => ({ ...prev, firstName: '' }))
+                            }
+                          }}
                         />
+                        {doctorFormErrors.firstName && (
+                          <p className="form-field-error">{doctorFormErrors.firstName}</p>
+                        )}
                       </div>
                       <div className="form-group">
                         <label>Familiya</label>
@@ -1576,8 +1901,17 @@ const ClinicOwnerDashboard = () => {
                           type="text"
                           placeholder="Karimov"
                           value={doctorForm.lastName}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, lastName: e.target.value })}
+                          className={doctorFormErrors.lastName ? 'input-error' : ''}
+                          onChange={(e) => {
+                            setDoctorForm({ ...doctorForm, lastName: e.target.value })
+                            if (doctorFormErrors.lastName) {
+                              setDoctorFormErrors((prev) => ({ ...prev, lastName: '' }))
+                            }
+                          }}
                         />
+                        {doctorFormErrors.lastName && (
+                          <p className="form-field-error">{doctorFormErrors.lastName}</p>
+                        )}
                       </div>
                       <div className="form-group">
                         <label>Email</label>
@@ -1589,8 +1923,8 @@ const ClinicOwnerDashboard = () => {
                           onChange={(e) => {
                             const value = e.target.value
                             setDoctorForm({ ...doctorForm, email: value })
-                            if (doctorFormErrors.email) {
-                              setDoctorFormErrors((prev) => ({ ...prev, email: '' }))
+                            if (doctorFormErrors.email || doctorFormErrors.general) {
+                              setDoctorFormErrors((prev) => ({ ...prev, email: '', general: '' }))
                             }
                           }}
                           onBlur={(e) => setDoctorForm({ ...doctorForm, email: normalizeEmailWithDefaultDomain(e.target.value) })}
@@ -1605,8 +1939,17 @@ const ClinicOwnerDashboard = () => {
                           type="tel"
                           placeholder="+998 90 123 45 67"
                           value={doctorForm.phone}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, phone: e.target.value })}
+                          className={doctorFormErrors.phone ? 'input-error' : ''}
+                          onChange={(e) => {
+                            setDoctorForm({ ...doctorForm, phone: e.target.value })
+                            if (doctorFormErrors.phone) {
+                              setDoctorFormErrors((prev) => ({ ...prev, phone: '' }))
+                            }
+                          }}
                         />
+                        {doctorFormErrors.phone && (
+                          <p className="form-field-error">{doctorFormErrors.phone}</p>
+                        )}
                       </div>
                       <div className="form-group">
                         <label>Ish haqi turi</label>
@@ -1655,12 +1998,16 @@ const ClinicOwnerDashboard = () => {
                           inputMode="numeric"
                           placeholder="50 000"
                           value={doctorForm.consultationFee}
+                          className={doctorFormErrors.consultationFee ? 'input-error' : ''}
                           onChange={(e) => setDoctorForm({
                             ...doctorForm,
                             consultationFee: formatCurrencyInput(e.target.value)
                           })}
                           required
                         />
+                        {doctorFormErrors.consultationFee && (
+                          <p className="form-field-error">{doctorFormErrors.consultationFee}</p>
+                        )}
                       </div>
                       <div className="form-group full-width">
                         <div className="specialization-header">
@@ -1751,7 +2098,7 @@ const ClinicOwnerDashboard = () => {
                           ))}
                         </div>
                         {doctorForm.specialization_ids.length === 0 && (
-                          <p className="spec-required-hint">Kamida bitta ixtisoslik tanlang</p>
+                          <p className="spec-required-hint">{doctorFormErrors.specialization_ids || 'Kamida bitta ixtisoslik tanlang'}</p>
                         )}
                       </div>
                       <div className="form-group">
@@ -1813,17 +2160,34 @@ const ClinicOwnerDashboard = () => {
                         <PasswordInput
                           placeholder="Parol"
                           value={doctorForm.password}
-                          onChange={(e) => setDoctorForm({ ...doctorForm, password: e.target.value })}
+                          onChange={(e) => {
+                            setDoctorForm({ ...doctorForm, password: e.target.value })
+                            if (doctorFormErrors.password) {
+                              setDoctorFormErrors((prev) => ({ ...prev, password: '' }))
+                            }
+                          }}
                         />
+                        {doctorFormErrors.password && (
+                          <p className="form-field-error">{doctorFormErrors.password}</p>
+                        )}
                       </div>
                     </div>
-                    <button type="submit" className="btn-submit-doctor" disabled={!doctorForm.pinfl}>Qo'shish</button>
+                    {doctorFormErrors.general && (
+                      <p className="form-field-error">{doctorFormErrors.general}</p>
+                    )}
+                    <button
+                      type="submit"
+                      className="btn-submit-doctor"
+                      disabled={!doctorForm.pinfl || identityCheckState.loading || identityCheckState.canSubmit === false}
+                    >
+                      Qo'shish
+                    </button>
                   </form>
                 )}
 
                 <div className="doctors-list">
-                  {clinicDoctorsList.length > 0 ? (
-                    clinicDoctorsList.map((doctor) => {
+                  {doctorsListForView.length > 0 ? (
+                    doctorsListForView.map((doctor) => {
                       const schedule = scheduleForms[doctor.id] || {
                         availableFrom: doctor.availableFrom || '09:00',
                         availableUntil: doctor.availableUntil || '17:00',
@@ -1834,174 +2198,330 @@ const ClinicOwnerDashboard = () => {
                           .map((d) => d.trim())
                           .filter(Boolean)
                       }
+                      const compensation = compensationForms[doctor.id] || {
+                        compensationType: doctor.compensationType || 'salary',
+                        compensationValue: doctor.compensationType === 'percent'
+                          ? String(doctor.compensationValue || '')
+                          : formatCurrencyInput(doctor.compensationValue || '')
+                      }
+                      const isFormerDoctor = doctor.isFormerForClinic || doctor.clinicAssociationStatus === 'former'
+                      const doctorRating = Number(doctor.raw?.rating || 0)
+                      const doctorRatingCount = Number(doctor.raw?.total_ratings || 0)
+                      const ratingPercent = Math.max(0, Math.min(100, (doctorRating / 5) * 100))
+                      const doctorCardTab = doctorCardTabs[doctor.id] || 'salary'
+
+                      if (isFormerDoctor) {
+                        return (
+                          <div key={doctor.id} className="doctor-work-card former-doctor-card former-doctor-card-modern">
+                            <div className="former-doctor-top">
+                              <div className="former-doctor-identity">
+                                <div className="doctor-avatar-placeholder former-avatar">{doctor.fullName.charAt(0)}</div>
+                                <div className="former-doctor-text">
+                                  <h3>{doctor.fullName}</h3>
+                                  <p>{doctor.specialization} • {doctor.experience} tajriba</p>
+                                </div>
+                              </div>
+                              <div className="former-doctor-actions">
+                                <span className="status-badge former">Bo'shatilgan</span>
+                                <button
+                                  type="button"
+                                  className="btn-former-history"
+                                  onClick={() => setActiveView('appointments')}
+                                >
+                                  Tarixiy hisobot
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="former-doctor-dismissed-date">
+                              <span className="former-doctor-date-icon">📅</span>
+                              <span>Bo'shatilgan sana: {doctor.scopedEmploymentEndedAt ? new Date(doctor.scopedEmploymentEndedAt).toLocaleDateString('uz-UZ') : '—'}</span>
+                            </div>
+
+                            <div className="former-doctor-stats-panel">
+                              <div className="former-doctor-stats-title">📊 Statistikasi</div>
+                              <div className="former-doctor-stats-grid">
+                                <div className="former-stat-item">
+                                  <span className="former-stat-label">Ish soati</span>
+                                  <span className="former-stat-value">{doctor.monthlyHours ? `${doctor.monthlyHours.toFixed(1)} soat` : '0 soat'}</span>
+                                </div>
+                                <div className="former-stat-item">
+                                  <span className="former-stat-label">Daromad</span>
+                                  <span className="former-stat-value">{formatSom(doctor.monthlyEffectiveRevenue || 0)}</span>
+                                </div>
+                                <div className="former-stat-item">
+                                  <span className="former-stat-label">Ish haqi</span>
+                                  <span className="former-stat-value">{formatSom(doctor.monthlyEstimatedSalary || 0)}</span>
+                                </div>
+                                <div className="former-stat-item">
+                                  <span className="former-stat-label">Rating</span>
+                                  <span className="former-stat-value former-rating-value">
+                                    {doctor.raw?.rating ? `${doctor.raw.rating}` : '0.0'}
+                                    <span className="former-rating-scale">/5</span>
+                                  </span>
+                                  <span className="former-stat-detail">{doctor.raw?.total_ratings || 0} baho</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="work-note former-work-note">
+                              ⚠ Bu doktor klinikadan bo'shatilgan. Faqat tarixiy ma'lumotlar saqlangan.
+                            </div>
+                          </div>
+                        )
+                      }
 
                       return (
-                      <div key={doctor.id} className="doctor-work-card">
-                        <div className="doctor-card-header">
-                          <div className="doctor-left">
-                            <div className="doctor-avatar-placeholder">
-                              {doctor.fullName.charAt(0)}
-                              {doctor.isCheckedIn && (
-                                <span className="online-indicator" title="Ishda"></span>
-                              )}
-                            </div>
-                            <div className="doctor-info">
-                              <div className="doctor-name-status">
-                                <h3>{doctor.fullName}</h3>
-                                <span className={`status-badge ${doctor.status}`}>
-                                  {doctor.status === 'active' ? '✓ Faol' : '⏸ To\'xtatilgan'}
-                                </span>
+                        <div key={doctor.id} className="doctor-work-card doctor-active-card">
+                          <div className="doctor-active-header">
+                            <div className="doctor-left">
+                              <div className="doctor-avatar-placeholder">
+                                {doctor.fullName.charAt(0)}
                                 {doctor.isCheckedIn && (
-                                  <span className="check-in-badge" title="Doktor ishda">🟢 Ishda</span>
+                                  <span className="online-indicator" title="Ishda"></span>
                                 )}
                               </div>
-                              <p>{doctor.specialization}</p>
-                              <span className="doctor-experience">{doctor.experience} tajriba</span>
+                              <div className="doctor-info">
+                                <div className="doctor-name-status">
+                                  <h3>{doctor.fullName}</h3>
+                                  <span className={`status-badge ${doctor.status === 'active' ? 'active' : 'suspended'}`}>
+                                    {doctor.status === 'active' ? '✓ Faol' : '⏸ To\'xtatilgan'}
+                                  </span>
+                                  {doctor.isCheckedIn && (
+                                    <span className="check-in-badge" title="Doktor ishda">🟢 Ishda</span>
+                                  )}
+                                </div>
+                                <p className="doctor-active-subtitle">
+                                  {doctor.specialization} • {doctor.isCheckedIn ? 'Ishlayapti' : doctor.status === 'active' ? 'Tayyor' : 'To\'xtatilgan'}
+                                </p>
+                              </div>
                             </div>
-                          </div>
-                          <div className="doctor-actions">
-                            <a href={`tel:${doctor.phone}`} className="btn-icon" title="Qo'ng'iroq">
-                              📞
-                            </a>
-                            <button
-                              className={`btn-toggle-status ${doctor.status === 'active' ? 'active' : 'suspended'}`}
-                              onClick={() => handleToggleStatus(doctor)}
-                              title={doctor.status === 'active' ? 'To\'xtatish' : 'Faollashtirish'}
-                            >
-                              {doctor.status === 'active' ? '⏸' : '▶'}
-                            </button>
-                            <button
-                              className="btn-icon btn-delete"
-                              onClick={async () => {
-                                if (window.confirm(`${doctor.fullName}ni klinikadan bo'shatish kerakmi?`)) {
-                                  try {
-                                    await deleteDoctor(clinicOwner.id, doctor.id)
-                                    alert('Doktor klinikadan bo\'shatildi. Profil saqlandi!')
-                                  } catch (error) {
-                                    alert(error?.message || 'Doktorni bo\'shatishda xatolik yuz berdi')
+
+                            <div className="doctor-actions doctor-active-actions">
+                              <a href={`tel:${doctor.phone}`} className="btn-icon btn-icon-call" title="Qo'ng'iroq qilish">
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="17" height="17"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.11 13 19.79 19.79 0 0 1 1.06 4.38 2 2 0 0 1 3.03 2h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 21 17z"/></svg>
+                              </a>
+                              <button
+                                className={`btn-toggle-status ${doctor.status === 'active' ? 'active' : 'suspended'}`}
+                                onClick={() => handleToggleStatus(doctor)}
+                                title={doctor.status === 'active' ? 'To\'xtatish' : 'Faollashtirish'}
+                              >
+                                {doctor.status === 'active' ? (
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" width="17" height="17"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                ) : (
+                                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="17" height="17"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                )}
+                              </button>
+                              <button
+                                className="btn-icon btn-delete"
+                                onClick={async () => {
+                                  if (window.confirm(`${doctor.fullName}ni klinikadan bo'shatish kerakmi?`)) {
+                                    try {
+                                      await deleteDoctor(clinicOwner.id, doctor.id)
+                                      alert('Doktor klinikadan bo\'shatildi. Profil saqlandi!')
+                                    } catch (error) {
+                                      alert(error?.message || 'Doktorni bo\'shatishda xatolik yuz berdi')
+                                    }
                                   }
-                                }
-                              }}
-                              title="Klinikadan bo'shatish"
+                                }}
+                                title="Klinikadan bo'shatish"
+                              >
+                                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" width="17" height="17"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/></svg>
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="doctor-active-metrics-grid">
+                            <div className="doctor-active-metric">
+                              <span className="doctor-active-metric-label">🕒 Bugun kelgan</span>
+                              <span className="doctor-active-metric-value">{doctor.todayCheckedIn || '--:--'}</span>
+                            </div>
+                            <div className="doctor-active-metric">
+                              <span className="doctor-active-metric-label">⏱ Ishdan ketgan</span>
+                              <span className="doctor-active-metric-value">{doctor.todayCheckedOut || '--:--'}</span>
+                            </div>
+                            <div className="doctor-active-metric">
+                              <span className="doctor-active-metric-label">💸 Oylik daromad</span>
+                              <span className="doctor-active-metric-value">{formatSom(doctor.monthlyEffectiveRevenue || 0)}</span>
+                            </div>
+                            <div className="doctor-active-metric">
+                              <span className="doctor-active-metric-label">💼 Oylik ish haqi</span>
+                              <span className="doctor-active-metric-value">{formatSom(doctor.monthlyEstimatedSalary || 0)}</span>
+                            </div>
+                            <div className="doctor-active-metric doctor-active-metric-wide">
+                              <span className="doctor-active-metric-label">👥 Bugungi bemorlar</span>
+                              <span className="doctor-active-metric-value">{doctor.todayPatients || 0}</span>
+                            </div>
+                            <div className="doctor-active-metric doctor-active-metric-rating">
+                              <div className="doctor-active-rating-row">
+                                <span className="doctor-active-metric-label">⭐ Rating</span>
+                                <span className="doctor-active-metric-value">{doctorRating.toFixed(1)} / 5</span>
+                              </div>
+                              <div className="doctor-rating-progress">
+                                <span style={{ width: `${ratingPercent}%` }}></span>
+                              </div>
+                              <span className="doctor-active-metric-detail">{doctorRatingCount} baho</span>
+                            </div>
+                          </div>
+
+                          <div className="work-note doctor-active-note">
+                            Iltimos klinika bo'yicha doktorning oylik/minimal foiz stavkasini belgilang.
+                          </div>
+
+                          <div className="doctor-active-tabs">
+                            <button
+                              type="button"
+                              className={`doctor-active-tab ${doctorCardTab === 'salary' ? 'active' : ''}`}
+                              onClick={() => setDoctorCardTabs((prev) => ({ ...prev, [doctor.id]: 'salary' }))}
                             >
-                              🗑️
+                              Moash
+                            </button>
+                            <button
+                              type="button"
+                              className={`doctor-active-tab ${doctorCardTab === 'time' ? 'active' : ''}`}
+                              onClick={() => setDoctorCardTabs((prev) => ({ ...prev, [doctor.id]: 'time' }))}
+                            >
+                              Vaqtni sozlash
                             </button>
                           </div>
+
+                          {doctorCardTab === 'salary' ? (
+                            <div className="doctor-active-settings-grid">
+                              <div className="doctor-compensation">
+                                <h4>Moash</h4>
+                                <div className="doctor-monthly-hours-chip">
+                                  Oylik jami ish soati: <strong>{doctor.monthlyHours ? `${doctor.monthlyHours.toFixed(1)} soat` : '0 soat'}</strong>
+                                </div>
+                                <div className="schedule-row">
+                                  <div className="schedule-field">
+                                    <label>Turi</label>
+                                    <select
+                                      value={compensation.compensationType}
+                                      onChange={(e) => {
+                                        const nextType = e.target.value
+                                        const currentValue = compensation.compensationValue
+                                        handleCompensationChange(doctor.id, 'compensationType', nextType)
+                                        if (!String(currentValue || '').trim()) return
+                                        if (nextType === 'percent') {
+                                          handleCompensationChange(doctor.id, 'compensationValue', String(parseCurrencyInput(currentValue)))
+                                        } else {
+                                          handleCompensationChange(doctor.id, 'compensationValue', formatCurrencyInput(currentValue))
+                                        }
+                                      }}
+                                    >
+                                      <option value="salary">Moash</option>
+                                      <option value="percent">Foiz</option>
+                                    </select>
+                                  </div>
+                                  <div className="schedule-field">
+                                    <label>{compensation.compensationType === 'percent' ? 'Foiz (%)' : 'Moash (UZS)'}</label>
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      value={compensation.compensationValue}
+                                      onChange={(e) => {
+                                        const raw = e.target.value
+                                        if (compensation.compensationType === 'percent') {
+                                          const nextPercent = Math.min(parseCurrencyInput(raw), 100)
+                                          handleCompensationChange(
+                                            doctor.id,
+                                            'compensationValue',
+                                            raw.trim() ? String(nextPercent) : ''
+                                          )
+                                          return
+                                        }
+                                        handleCompensationChange(doctor.id, 'compensationValue', formatCurrencyInput(raw))
+                                      }}
+                                      placeholder={compensation.compensationType === 'percent' ? '20' : '50 000'}
+                                    />
+                                  </div>
+                                </div>
+                                <button
+                                  className="btn-save-schedule"
+                                  onClick={() => handleSaveCompensation(doctor.id)}
+                                  disabled={compensationSavingDoctorId === doctor.id}
+                                >
+                                  {compensationSavingDoctorId === doctor.id ? 'Saqlanmoqda...' : 'Moashni saqlash'}
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="doctor-active-settings-grid doctor-active-time-grid">
+                              <div className="doctor-schedule doctor-schedule-full">
+                                <h4>Ish vaqti va abet</h4>
+                                <div className="schedule-row">
+                                  <div className="schedule-field">
+                                    <label>Ish boshlanishi</label>
+                                    <input
+                                      type="time"
+                                      value={schedule.availableFrom}
+                                      onChange={(e) => handleScheduleChange(doctor.id, 'availableFrom', e.target.value)}
+                                    />
+                                  </div>
+                                  <div className="schedule-field">
+                                    <label>Ish tugashi</label>
+                                    <input
+                                      type="time"
+                                      value={schedule.availableUntil}
+                                      onChange={(e) => handleScheduleChange(doctor.id, 'availableUntil', e.target.value)}
+                                    />
+                                  </div>
+                                  <div className="schedule-field">
+                                    <label>Abet boshlanishi</label>
+                                    <input
+                                      type="time"
+                                      value={schedule.lunchBreakStart || ''}
+                                      onChange={(e) => handleScheduleChange(doctor.id, 'lunchBreakStart', e.target.value)}
+                                    />
+                                  </div>
+                                  <div className="schedule-field">
+                                    <label>Abet tugashi</label>
+                                    <input
+                                      type="time"
+                                      value={schedule.lunchBreakEnd || ''}
+                                      onChange={(e) => handleScheduleChange(doctor.id, 'lunchBreakEnd', e.target.value)}
+                                    />
+                                  </div>
+                                </div>
+
+                                <div className="schedule-days">
+                                  <label>Ish kunlari</label>
+                                  <div className="workdays-grid compact">
+                                    {dayOptions.map((day) => (
+                                      <label key={day.key} className="workday-item">
+                                        <input
+                                          type="checkbox"
+                                          checked={schedule.workingDays.includes(day.key)}
+                                          onChange={(e) => handleScheduleDayToggle(doctor.id, day.key, e.target.checked)}
+                                        />
+                                        <span>{day.label}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                                <button className="btn-save-schedule" onClick={() => handleSaveSchedule(doctor.id)}>
+                                  Ish vaqtini saqlash
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
-
-                        {/* Work Time Info */}
-                        <div className="doctor-work-info">
-                          <div className="work-time-section">
-                            <div className="work-time-item">
-                              <span className="work-label">Bugun kelgan:</span>
-                              <span className="work-value">
-                                {doctor.todayCheckedIn || '--:--'}
-                              </span>
-                            </div>
-                            <div className="work-time-item">
-                              <span className="work-label">Bugun ketgan:</span>
-                              <span className="work-value">
-                                {doctor.todayCheckedOut || '--:--'}
-                              </span>
-                            </div>
-                            <div className="work-time-item">
-                              <span className="work-label">Bugun ish soati:</span>
-                              <span className="work-value-medium">
-                                {doctor.todayHours ? `${doctor.todayHours.toFixed(1)}s` : '0s'}
-                              </span>
-                            </div>
-                            <div className="work-time-item highlight">
-                              <span className="work-label">Oyda jami soat:</span>
-                              <span className="work-value-big">
-                                {doctor.monthlyHours ? `${doctor.monthlyHours.toFixed(1)}s` : '0s'}
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Statistics Row */}
-                          <div className="doctor-stats-row">
-                            <div className="stat-box">
-                              <span className="stat-box-label">Bugungi bemorlar</span>
-                              <span className="stat-box-value">{doctor.todayPatients || 0}</span>
-                            </div>
-                            <div className="stat-box rating-box">
-                              <span className="stat-box-label">⭐ Rating</span>
-                              <span className="stat-box-value rating-value">
-                                {doctor.raw?.rating ? `${doctor.raw.rating}/5` : '0/5'}
-                              </span>
-                              <span className="stat-box-detail">
-                                {doctor.raw?.total_ratings || 0} baho
-                              </span>
-                            </div>
-                          </div>
-
-                          <div className="work-note">
-                            Ishga kelish/ketish doktorning o'z sahifasida belgilanadi.
-                          </div>
-
-                          <div className="doctor-schedule">
-                            <div className="schedule-row">
-                              <div className="schedule-field">
-                                <label>Ish boshlanishi</label>
-                                <input
-                                  type="time"
-                                  value={schedule.availableFrom}
-                                  onChange={(e) => handleScheduleChange(doctor.id, 'availableFrom', e.target.value)}
-                                />
-                              </div>
-                              <div className="schedule-field">
-                                <label>Ish tugashi</label>
-                                <input
-                                  type="time"
-                                  value={schedule.availableUntil}
-                                  onChange={(e) => handleScheduleChange(doctor.id, 'availableUntil', e.target.value)}
-                                />
-                              </div>
-                              <div className="schedule-field">
-                                <label>Abet boshlanishi</label>
-                                <input
-                                  type="time"
-                                  value={schedule.lunchBreakStart || ''}
-                                  onChange={(e) => handleScheduleChange(doctor.id, 'lunchBreakStart', e.target.value)}
-                                />
-                              </div>
-                              <div className="schedule-field">
-                                <label>Abet tugashi</label>
-                                <input
-                                  type="time"
-                                  value={schedule.lunchBreakEnd || ''}
-                                  onChange={(e) => handleScheduleChange(doctor.id, 'lunchBreakEnd', e.target.value)}
-                                />
-                              </div>
-                            </div>
-                            <div className="schedule-days">
-                              {dayOptions.map((day) => (
-                                <label key={day.key} className="workday-item">
-                                  <input
-                                    type="checkbox"
-                                    checked={schedule.workingDays.includes(day.key)}
-                                    onChange={(e) => handleScheduleDayToggle(doctor.id, day.key, e.target.checked)}
-                                  />
-                                  <span>{day.label}</span>
-                                </label>
-                              ))}
-                            </div>
-                            <button className="btn-save-schedule" onClick={() => handleSaveSchedule(doctor.id)}>
-                              Ish vaqtini saqlash
-                            </button>
-                          </div>
-                        </div>
-                      </div>
                     )})
                   ) : (
                     <div className="no-doctors">
-                      <p>Hozircha doktorlar qo'shilmagan</p>
-                      <button 
-                        className="btn-add-first"
-                        onClick={() => setShowAddDoctor(true)}
-                      >
-                        Birinchi doktorni qo'shish
-                      </button>
+                      <p>
+                        {activeView === 'former-doctors'
+                          ? 'Hozircha ishdan olingan doktorlar yo\'q'
+                          : 'Hozircha doktorlar qo\'shilmagan'}
+                      </p>
+                      {activeView === 'doctors' && (
+                        <button
+                          className="btn-add-first"
+                          onClick={() => setShowAddDoctor(true)}
+                        >
+                          Birinchi doktorni qo'shish
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>

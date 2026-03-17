@@ -22,6 +22,8 @@ htmlcov/
 .env.*.local
 .env.local
 .env.production
+.venv312/
+hospitoll_backend/.venv312/
 hospitoll_backend/.env
 hospitoll_frontend/.env
 
@@ -36,6 +38,7 @@ hospitoll_backend/staticfiles/
 *.bak
 *.backup
 *~
+deploy_hotfix_*.tgz
 
 # SSL private material (keep local on server)
 ssl/

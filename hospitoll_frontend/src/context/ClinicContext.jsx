@@ -60,6 +60,7 @@ export const ClinicProvider = ({ children }) => {
     return {
       id: doctor.id,
       clinicId: doctor.clinic,
+      scopeClinicId: doctor.scoped_clinic_id || doctor.clinic,
       fullName: fullName || 'Doktor',
       specialization: doctor.specializations?.map((s) => s.name).join(', ') || 'N/A',
       experience: doctor.years_of_experience || 0,
@@ -79,18 +80,44 @@ export const ClinicProvider = ({ children }) => {
       monthlyPatients: doctor.monthly_patients || 0,
       todayCheckedIn: todayCheckedIn,
       todayCheckedOut: todayCheckedOut,
+      compensationType: doctor.compensation_type || 'salary',
+      compensationValue: doctor.compensation_value != null ? String(doctor.compensation_value) : '',
       workHours: 0,
       todayPatients: doctor.today_patients ?? doctor.today_appointments ?? 0,
-      totalRevenue: 0,
+      totalRevenue: Number(doctor.monthly_effective_revenue || 0),
+      monthlyEffectiveRevenue: Number(doctor.monthly_effective_revenue || 0),
+      monthlyEstimatedSalary: Number(doctor.monthly_estimated_salary || 0),
       version: doctor.updated_at || doctor.version,
+      clinicAssociationStatus: doctor.clinic_association_status || 'current',
+      isFormerForClinic: Boolean(doctor.is_former_for_scope_clinic),
+      scopedEmploymentStartedAt: doctor.scoped_employment_started_at || null,
+      scopedEmploymentEndedAt: doctor.scoped_employment_ended_at || null,
       raw: doctor
     }
   }
 
   const fetchClinicDoctors = async (clinicId) => {
-    const data = await doctorsApi.getAll({ clinic: clinicId })
-    const results = data?.results || data || []
-    const mapped = results.map(mapDoctor)
+    const firstPage = await doctorsApi.getAll({ clinic: clinicId, include_former: 1, page: 1 })
+
+    let allResults = []
+    if (Array.isArray(firstPage)) {
+      allResults = firstPage
+    } else {
+      const firstResults = Array.isArray(firstPage?.results) ? firstPage.results : []
+      allResults = [...firstResults]
+
+      const totalCount = Number(firstPage?.count || firstResults.length)
+      const pageSize = firstResults.length > 0 ? firstResults.length : (totalCount || 1)
+      const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+
+      for (let page = 2; page <= totalPages; page += 1) {
+        const nextPage = await doctorsApi.getAll({ clinic: clinicId, include_former: 1, page })
+        const nextResults = Array.isArray(nextPage?.results) ? nextPage.results : []
+        allResults.push(...nextResults)
+      }
+    }
+
+    const mapped = allResults.map(mapDoctor)
     setClinicDoctors(mapped)
     return mapped
   }
@@ -384,7 +411,12 @@ export const ClinicProvider = ({ children }) => {
   }
 
   const getDoctorsByClinic = (clinicId) => {
-    return clinicDoctors.filter((doctor) => doctor.clinicId === clinicId)
+    if (!clinicId) return []
+    return clinicDoctors.filter(
+      (doctor) =>
+        String(doctor.clinicId) === String(clinicId)
+        || String(doctor.scopeClinicId) === String(clinicId)
+    )
   }
 
   const deleteDoctor = async (clinicId, doctorId) => {
@@ -470,6 +502,32 @@ export const ClinicProvider = ({ children }) => {
     }
   }
 
+  const updateDoctorCompensation = async (clinicId, doctorId, compensationData) => {
+    try {
+      const doctor = clinicDoctors.find((d) => d.id === doctorId)
+      const payload = {
+        compensation_type: compensationData.compensationType,
+        compensation_value: compensationData.compensationValue,
+        version: doctor?.version
+      }
+
+      try {
+        const updated = await doctorsApi.update(doctorId, payload)
+        await fetchClinicDoctors(clinicId)
+        return updated
+      } catch (error) {
+        if (error.response?.status === 409) {
+          await fetchClinicDoctors(clinicId)
+          throw new Error('Ma\'lumot boshqa foydalanuvchi tomonidan o\'zgartirilgan. Iltimos, sahifani yangilang.')
+        }
+        throw error
+      }
+    } catch (error) {
+      console.error('[ClinicContext] Error updating doctor compensation:', error)
+      throw error
+    }
+  }
+
   const addService = async (clinicId, serviceData) => {
     const payload = {
       ...serviceData,
@@ -534,6 +592,7 @@ export const ClinicProvider = ({ children }) => {
       deleteDoctor,
       toggleDoctorStatus,
       updateDoctorSchedule,
+      updateDoctorCompensation,
       addService,
       updateService,
       deleteService,

@@ -327,6 +327,62 @@
   font-weight: 600;
 }
 
+.pharmacy-prescription-match-card {
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.85rem;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.pharmacy-prescription-match-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.65rem;
+}
+
+.pharmacy-prescription-match-header strong {
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
+.pharmacy-prescription-match-header span {
+  color: #1e3a8a;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.pharmacy-prescription-match-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.match-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.38rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.match-pill.success {
+  background: rgba(100, 179, 52, 0.14);
+  color: #1a5e2a;
+}
+
+.match-pill.danger {
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
+}
+
+.match-pill.neutral {
+  background: rgba(30, 111, 215, 0.1);
+  color: #1e3a8a;
+}
+
 .medicines-modal-overlay {
   position: fixed;
   top: 0;
@@ -436,6 +492,81 @@
   flex: 1;
 }
 
+.prescription-compare-panel {
+  margin-bottom: 1rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  background: linear-gradient(135deg, rgba(30, 111, 215, 0.05), rgba(100, 179, 52, 0.08));
+  border: 1px solid rgba(30, 111, 215, 0.12);
+}
+
+.prescription-compare-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.95rem;
+}
+
+.prescription-compare-metric {
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.9rem;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.prescription-compare-metric span {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #64748b;
+}
+
+.prescription-compare-metric strong {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 1rem;
+  color: #0f172a;
+}
+
+.prescription-compare-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.prescription-compare-block h4 {
+  margin: 0 0 0.6rem;
+  font-size: 0.92rem;
+  color: #1e3a8a;
+}
+
+.prescription-compare-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.prescription-compare-tag,
+.prescription-compare-empty {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.42rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.prescription-compare-tags.success .prescription-compare-tag,
+.prescription-compare-tags.success .prescription-compare-empty {
+  background: rgba(100, 179, 52, 0.14);
+  color: #1a5e2a;
+}
+
+.prescription-compare-tags.danger .prescription-compare-tag,
+.prescription-compare-tags.danger .prescription-compare-empty {
+  background: rgba(239, 68, 68, 0.12);
+  color: #991b1b;
+}
+
 .medicines-list {
   display: flex;
   flex-direction: column;
@@ -451,6 +582,11 @@
   border-radius: 0.75rem;
   border: 1px solid #e5e7eb;
   transition: all 0.2s ease;
+}
+
+.medicine-item-requested {
+  border-color: rgba(100, 179, 52, 0.26);
+  background: rgba(100, 179, 52, 0.08);
 }
 
 .medicine-item:hover {
@@ -607,6 +743,11 @@
 
   .modal-body {
     padding: 1rem;
+  }
+
+  .prescription-compare-summary,
+  .prescription-compare-grid {
+    grid-template-columns: 1fr;
   }
 
   .medicine-item {

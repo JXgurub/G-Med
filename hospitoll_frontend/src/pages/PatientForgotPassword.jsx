@@ -1,8 +1,15 @@
-﻿import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { authApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
-import './PatientForgotPassword.css'
+import './DoctorForgotPassword.css'
+
+const ADMIN_TELEGRAM_URL = 'https://t.me/G_Med_group'
+const CODE_MAX_SECONDS = 120
+const BOT_LINK_HIDE_SECONDS = 3600
+const BOT_LINK_HIDE_STORAGE_KEY = 'patient_reset_bot_link_hidden_until'
+
+const onlyDigits = (value) => String(value || '').replace(/\D+/g, '')
 
 const asNonNegativeInt = (value, fallback = null) => {
   const parsed = Number(value)
@@ -15,6 +22,7 @@ const formatDuration = (seconds) => {
   const hrs = Math.floor(safe / 3600)
   const mins = Math.floor((safe % 3600) / 60)
   const secs = safe % 60
+
   if (hrs > 0) {
     return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
   }
@@ -23,16 +31,21 @@ const formatDuration = (seconds) => {
 
 const PatientForgotPassword = () => {
   const navigate = useNavigate()
-  const [step, setStep] = useState('phone') // phone | code | new_password
+  const [step, setStep] = useState('identity') // identity | code | new_password
 
   const [passportId, setPassportId] = useState('')
-  const [phoneNumber, setPhoneNumber] = useState('+998')
+  const [phoneNumber, setPhoneNumber] = useState('')
   const [code, setCode] = useState('')
   const [token, setToken] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
 
   const [loading, setLoading] = useState(false)
+  const [resendLoading, setResendLoading] = useState(false)
+  const [codeExpiresIn, setCodeExpiresIn] = useState(0)
+  const [botLink, setBotLink] = useState('')
+  const [botSessionNote, setBotSessionNote] = useState('')
+  const [botLinkHiddenUntil, setBotLinkHiddenUntil] = useState(0)
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [lockState, setLockState] = useState({
@@ -54,13 +67,87 @@ const PatientForgotPassword = () => {
     return () => clearInterval(timer)
   }, [lockState.blockedSeconds])
 
+  useEffect(() => {
+    if (codeExpiresIn <= 0) return undefined
+    const timer = setInterval(() => {
+      setCodeExpiresIn((prev) => Math.max(0, Number(prev || 0) - 1))
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [codeExpiresIn])
+
+  useEffect(() => {
+    const storedUntil = Number(window.localStorage.getItem(BOT_LINK_HIDE_STORAGE_KEY) || 0)
+    if (Number.isFinite(storedUntil) && storedUntil > Date.now()) {
+      setBotLinkHiddenUntil(storedUntil)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!botLinkHiddenUntil || botLinkHiddenUntil <= Date.now()) return undefined
+    const timeoutMs = botLinkHiddenUntil - Date.now()
+    const timer = setTimeout(() => {
+      setBotLinkHiddenUntil(0)
+      window.localStorage.removeItem(BOT_LINK_HIDE_STORAGE_KEY)
+    }, timeoutMs)
+    return () => clearTimeout(timer)
+  }, [botLinkHiddenUntil])
+
+  const startCodeCountdown = (secondsFromApi) => {
+    const safeSeconds = asNonNegativeInt(secondsFromApi, CODE_MAX_SECONDS)
+    const capped = Math.min(CODE_MAX_SECONDS, safeSeconds || CODE_MAX_SECONDS)
+    setCodeExpiresIn(capped)
+  }
+
+  const countdownSeconds = Math.max(0, Number(codeExpiresIn || 0), Number(lockState.blockedSeconds || 0))
+  const isCodeExpired = codeExpiresIn <= 0
+  const attemptsUsed = Math.max(0, Number(lockState.attemptsLimit || 0) - Number(lockState.attemptsLeft || 0))
+  const attemptsLimit = Number(lockState.attemptsLimit || 0)
+  const isBotButtonVisible = Boolean(step === 'code' && botLink && Date.now() >= Number(botLinkHiddenUntil || 0))
+
   const canSubmit = useMemo(() => {
-    if (loading) return false
-    if (step === 'phone') return Boolean(phoneNumber && passportId)
-    if (step === 'code') return Boolean(phoneNumber && passportId && code && lockState.blockedSeconds === 0)
-    if (step === 'new_password') return Boolean(token && newPassword && confirmPassword)
+    if (loading || resendLoading) return false
+    if (step === 'identity') {
+      return Boolean(onlyDigits(passportId).length >= 5 && onlyDigits(phoneNumber).length >= 9)
+    }
+    if (step === 'code') {
+      if (!passportId || !phoneNumber || token !== '' || lockState.blockedSeconds > 0) return false
+      return isCodeExpired ? true : Boolean(code)
+    }
+    if (step === 'new_password') {
+      return Boolean(token && newPassword && confirmPassword)
+    }
     return false
-  }, [step, loading, phoneNumber, passportId, code, token, newPassword, confirmPassword, lockState.blockedSeconds])
+  }, [step, loading, resendLoading, passportId, phoneNumber, code, token, newPassword, confirmPassword, lockState.blockedSeconds, isCodeExpired])
+
+  const handleOpenBot = () => {
+    if (!botLink) return
+    const hiddenUntil = Date.now() + (BOT_LINK_HIDE_SECONDS * 1000)
+    setBotLinkHiddenUntil(hiddenUntil)
+    window.localStorage.setItem(BOT_LINK_HIDE_STORAGE_KEY, String(hiddenUntil))
+    window.location.href = botLink
+  }
+
+  const handleResendCode = async () => {
+    if (!passportId || !phoneNumber) return
+
+    setError('')
+    setInfo('')
+    try {
+      setResendLoading(true)
+      const res = await authApi.patientPasswordResetRequest(passportId, phoneNumber)
+      setCode('')
+      setToken('')
+      startCodeCountdown(res?.expires_in)
+      setBotLink(String(res?.bot_link || botLink || ''))
+      setBotSessionNote(String(res?.bot_note || botSessionNote || ''))
+      setInfo(res?.detail || 'Kod qayta yuborildi')
+    } catch (err) {
+      const serverDetail = err?.response?.data?.detail
+      setError(serverDetail || err?.message || 'Kodni qayta yuborishda xatolik yuz berdi')
+    } finally {
+      setResendLoading(false)
+    }
+  }
 
   const onSubmit = async (e) => {
     e.preventDefault()
@@ -70,9 +157,14 @@ const PatientForgotPassword = () => {
     try {
       setLoading(true)
 
-      if (step === 'phone') {
-        const res = await authApi.patientPasswordResetRequest(phoneNumber, passportId)
+      if (step === 'identity') {
+        const res = await authApi.patientPasswordResetRequest(passportId, phoneNumber)
+        setBotLink(String(res?.bot_link || ''))
+        setBotSessionNote(String(res?.bot_note || ''))
         setInfo(res?.detail || 'Kod Telegram botga yuborildi')
+        setCode('')
+        setToken('')
+        startCodeCountdown(res?.expires_in)
         setLockState({
           attemptsLeft: 5,
           attemptsLimit: 5,
@@ -85,13 +177,20 @@ const PatientForgotPassword = () => {
       }
 
       if (step === 'code') {
-        const res = await authApi.patientPasswordResetVerify(phoneNumber, code, passportId)
-        if (!res?.token) {
-          setError('Kod noto\'g\'ri yoki eskirgan')
+        if (isCodeExpired) {
+          await handleResendCode()
           return
         }
+
+        const res = await authApi.patientPasswordResetVerify(passportId, phoneNumber, code)
+        if (!res?.token) {
+          setCode('')
+          setError("Kod noto'g'ri yoki eskirgan.")
+          return
+        }
+
         setToken(res.token)
-        setStep('new_password')
+        setCodeExpiresIn(0)
         setLockState({
           attemptsLeft: null,
           attemptsLimit: 5,
@@ -99,12 +198,14 @@ const PatientForgotPassword = () => {
           supportRequired: false,
           adminTelegram: '',
         })
+        setInfo('Kod tasdiqlandi. Endi yangi parol kiriting.')
+        setStep('new_password')
         return
       }
 
       if (step === 'new_password') {
         if (newPassword.length < 6) {
-          setError('Parol kamida 6 ta belgidan iborat bo\u2018lishi kerak')
+          setError("Parol kamida 6 ta belgidan iborat bo'lishi kerak")
           return
         }
         if (newPassword !== confirmPassword) {
@@ -114,10 +215,11 @@ const PatientForgotPassword = () => {
 
         const res = await authApi.patientPasswordResetConfirm(token, newPassword)
         setInfo(res?.detail || 'Parol muvaffaqiyatli yangilandi')
-        setTimeout(() => navigate('/patient-login'), 700)
+        setTimeout(() => navigate('/patient-login'), 900)
       }
     } catch (err) {
       const serverData = err?.response?.data || {}
+
       if (step === 'code') {
         const attemptsLeft = asNonNegativeInt(serverData?.attempts_left, null)
         const attemptsLimit = asNonNegativeInt(serverData?.attempts_limit, 5)
@@ -131,35 +233,54 @@ const PatientForgotPassword = () => {
           supportRequired: Boolean(serverData?.support_required),
           adminTelegram: String(serverData?.admin_telegram || ''),
         }))
+
+        const detailLower = String(serverData?.detail || '').toLowerCase()
+        if (detailLower.includes('eskirgan') || detailLower.includes('muddati tugagan')) {
+          setCodeExpiresIn(0)
+        }
+
+        setCode('')
       }
-      setError(serverData?.detail || err?.message || 'Xatolik yuz berdi')
+
+      const serverDetail = serverData?.detail || err?.message || 'Xatolik yuz berdi'
+      const responseBotLink = serverData?.bot_link
+      const hint = serverData?.link_hint
+
+      if (responseBotLink) {
+        setError(`${serverDetail}${hint ? ` ${hint}` : ''}`)
+        setBotLink(String(responseBotLink))
+        setInfo(`Bot manzili: ${responseBotLink}`)
+      } else {
+        setError(serverDetail)
+      }
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="patient-forgot-page">
-      <div className="patient-forgot-card">
-        <div className="patient-forgot-header">
+    <div className="doctor-forgot-page">
+      <div className="doctor-forgot-card">
+        <div className="doctor-forgot-header">
           <div className="badge">Parolni tiklash</div>
           <h1>Parolni unutdingizmi?</h1>
-          <p>Pasport ID va telefon orqali Telegram botga bir martalik kod yuboramiz</p>
+          <p>Iltimos, pasport ID va telefon raqamingizni aniq kiriting. Ma'lumotlar to'g'ri bo'lsa, sizga Telegram orqali bir martalik kod yuboramiz.</p>
         </div>
 
-        <form className="patient-forgot-form" onSubmit={onSubmit}>
-          {step === 'phone' && (
+        <form className="doctor-forgot-form" onSubmit={onSubmit}>
+          {step === 'identity' && (
             <>
               <label className="field">
                 <span>Pasport ID</span>
                 <input
                   type="text"
                   value={passportId}
-                  onChange={(e) => setPassportId(e.target.value.toUpperCase().replace(/\s+/g, ''))}
+                  onChange={(e) => setPassportId(e.target.value.toUpperCase())}
                   placeholder="AA1234567"
                   required
                 />
               </label>
+
               <label className="field">
                 <span>Telefon raqam</span>
                 <input
@@ -176,23 +297,22 @@ const PatientForgotPassword = () => {
           {step === 'code' && (
             <>
               <label className="field">
-                <span>Pasport ID</span>
-                <input type="text" value={passportId} disabled />
-              </label>
-              <label className="field">
-                <span>Telefon raqam</span>
-                <input type="tel" value={phoneNumber} disabled />
-              </label>
-              <label className="field">
                 <span>Bir martalik kod</span>
-                <input
-                  type="text"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  placeholder="123456"
-                  inputMode="numeric"
-                  required
-                />
+                <div className="code-input-wrap">
+                  <input
+                    className="code-input"
+                    type="text"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.replace(/\D+/g, ''))}
+                    placeholder="123456"
+                    inputMode="numeric"
+                    required
+                  />
+                  <span className={`code-countdown ${countdownSeconds <= 0 ? 'expired' : ''} ${lockState.blockedSeconds > 0 ? 'blocked' : ''}`}>
+                    {formatDuration(countdownSeconds)}
+                  </span>
+                </div>
+                <div className="attempts-inline">{attemptsUsed}/{attemptsLimit}</div>
               </label>
             </>
           )}
@@ -204,56 +324,58 @@ const PatientForgotPassword = () => {
                 <PasswordInput
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="********"
                   required
                 />
               </label>
+
               <label className="field">
                 <span>Yangi parol (takror)</span>
                 <PasswordInput
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="••••••••"
+                  placeholder="********"
                   required
                 />
               </label>
             </>
           )}
 
+          {step === 'code' && botSessionNote && (
+            <div className="message info">{botSessionNote}</div>
+          )}
+
           {error && <div className="message error">{error}</div>}
           {info && <div className="message info">{info}</div>}
 
-          {step === 'code' && lockState.attemptsLeft !== null && (
-            <div className="message info">
-              Urinishlar: {Math.max(0, (lockState.attemptsLimit || 0) - (lockState.attemptsLeft || 0))}/{lockState.attemptsLimit || 0}. Qolgan urinish: {lockState.attemptsLeft || 0}
-            </div>
-          )}
-
-          {step === 'code' && lockState.blockedSeconds > 0 && (
-            <div className="message error">
-              Qayta urinishgacha: {formatDuration(lockState.blockedSeconds)}
-            </div>
-          )}
-
-          {step === 'code' && lockState.supportRequired && (
-            <div className="message info">
-              Endi adminga murojaat qiling.
-              {lockState.adminTelegram ? (
-                <>
-                  {' '}
-                  <a href={lockState.adminTelegram} target="_blank" rel="noreferrer">{lockState.adminTelegram}</a>
-                </>
-              ) : null}
-            </div>
+          {isBotButtonVisible && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleOpenBot}
+              disabled={loading || resendLoading}
+            >
+              Botga o'tish
+            </button>
           )}
 
           <button className="btn" type="submit" disabled={!canSubmit}>
-            {loading ? 'Kutilmoqda...' : step === 'phone' ? 'Kod yuborish' : step === 'code' ? 'Kod tasdiqlash' : 'Parolni yangilash'}
+            {loading || resendLoading
+              ? 'Kutilmoqda...'
+              : step === 'identity'
+                ? 'Kod yuborish'
+                : step === 'code'
+                  ? (isCodeExpired ? 'Kodni qayta yuborish' : 'Kodni tasdiqlash')
+                  : 'Parolni yangilash'}
           </button>
         </form>
 
-        <button className="back" type="button" onClick={() => navigate('/patient-login')}>
-          ← Orqaga
+        <a className="admin-telegram-btn" href={ADMIN_TELEGRAM_URL} target="_blank" rel="noreferrer">
+          Admin Telegrami
+        </a>
+
+        <button className="btn-back" type="button" onClick={() => navigate('/patient-login')}>
+          Orqaga
         </button>
       </div>
     </div>
@@ -261,5 +383,3 @@ const PatientForgotPassword = () => {
 }
 
 export default PatientForgotPassword
-
-

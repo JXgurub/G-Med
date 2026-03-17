@@ -1,7 +1,44 @@
 import { useState } from 'react'
 import './PharmacyCard.css'
 
-const PharmacyCard = ({ pharmacy, compact = false }) => {
+const normalizeMedicineText = (value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim()
+
+const getMedicineLabel = (medicine) => String(medicine?.name || medicine?.medicine_name || 'Noma\'lum dori').trim()
+
+const buildRequestedMedicineMatch = (requestedMedicines = [], medicines = []) => {
+  const requested = Array.isArray(requestedMedicines) ? requestedMedicines.filter(Boolean) : []
+  const availableMedicines = Array.isArray(medicines) ? medicines : []
+  const found = []
+  const missing = []
+  let total = 0
+
+  requested.forEach((requestedMedicine) => {
+    const normalizedRequested = normalizeMedicineText(requestedMedicine)
+    const matched = availableMedicines.find((medicine) => {
+      const normalizedMedicine = normalizeMedicineText(getMedicineLabel(medicine))
+      if (!normalizedRequested || !normalizedMedicine) return false
+      return normalizedMedicine.includes(normalizedRequested) || normalizedRequested.includes(normalizedMedicine)
+    })
+
+    if (!matched || Number(matched.stock || 0) <= 0) {
+      missing.push(requestedMedicine)
+      return
+    }
+
+    const price = Number(matched.price || 0)
+    total += price
+    found.push({
+      requestedName: requestedMedicine,
+      matchedName: getMedicineLabel(matched),
+      price,
+      stock: Number(matched.stock || 0),
+    })
+  })
+
+  return { requested, found, missing, total }
+}
+
+const PharmacyCard = ({ pharmacy, compact = false, requestedMedicines = [] }) => {
   const [showMedicines, setShowMedicines] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -54,6 +91,8 @@ const PharmacyCard = ({ pharmacy, compact = false }) => {
   const workingHoursDisplay = formatWorkingHours(pharmacy.workingHours)
   const openStatus = getOpenStatus(workingHoursDisplay)
   const phoneDisplay = formatPhoneDisplay(pharmacy.phone)
+  const requestedMedicineMatch = buildRequestedMedicineMatch(requestedMedicines, pharmacy.medicines)
+  const hasRequestedMedicines = requestedMedicineMatch.requested.length > 0
 
   const getInitials = (name) => {
     const words = String(name || '').trim().split(/\s+/).filter(Boolean)
@@ -191,6 +230,20 @@ const PharmacyCard = ({ pharmacy, compact = false }) => {
             </svg>
             <span className="medicines-count">{pharmacy.medicines?.length || 0} ta dori mavjud</span>
           </div>
+
+          {hasRequestedMedicines ? (
+            <div className="pharmacy-prescription-match-card">
+              <div className="pharmacy-prescription-match-header">
+                <strong>Yuborilgan resept bo'yicha natija</strong>
+                <span>{requestedMedicineMatch.found.length}/{requestedMedicineMatch.requested.length} topildi</span>
+              </div>
+              <div className="pharmacy-prescription-match-metrics">
+                <span className="match-pill success">Olinayotgan: {requestedMedicineMatch.found.length}</span>
+                <span className="match-pill danger">Yo'q: {requestedMedicineMatch.missing.length}</span>
+                <span className="match-pill neutral">Jami: {requestedMedicineMatch.total.toLocaleString('uz-UZ')} so'm</span>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="pharmacy-card-actions" onClick={(e) => e.stopPropagation()}>
@@ -231,10 +284,52 @@ const PharmacyCard = ({ pharmacy, compact = false }) => {
             </div>
 
             <div className="modal-body">
+              {hasRequestedMedicines ? (
+                <div className="prescription-compare-panel">
+                  <div className="prescription-compare-summary">
+                    <div className="prescription-compare-metric success">
+                      <span>Olinayotgan dorilar</span>
+                      <strong>{requestedMedicineMatch.found.length}</strong>
+                    </div>
+                    <div className="prescription-compare-metric danger">
+                      <span>Yo'q dorilar</span>
+                      <strong>{requestedMedicineMatch.missing.length}</strong>
+                    </div>
+                    <div className="prescription-compare-metric neutral">
+                      <span>Jami summa</span>
+                      <strong>{requestedMedicineMatch.total.toLocaleString('uz-UZ')} so'm</strong>
+                    </div>
+                  </div>
+
+                  <div className="prescription-compare-grid">
+                    <div className="prescription-compare-block">
+                      <h4>Olinayotgan dorilar</h4>
+                      <div className="prescription-compare-tags success">
+                        {requestedMedicineMatch.found.length > 0 ? requestedMedicineMatch.found.map((medicine) => (
+                          <span key={`${pharmacy.id}-${medicine.requestedName}`} className="prescription-compare-tag">
+                            {medicine.matchedName} · {medicine.price.toLocaleString('uz-UZ')} so'm
+                          </span>
+                        )) : <span className="prescription-compare-empty">Topilgan dori yo'q</span>}
+                      </div>
+                    </div>
+                    <div className="prescription-compare-block">
+                      <h4>Yo'q dorilar</h4>
+                      <div className="prescription-compare-tags danger">
+                        {requestedMedicineMatch.missing.length > 0 ? requestedMedicineMatch.missing.map((medicine) => (
+                          <span key={`${pharmacy.id}-missing-${medicine}`} className="prescription-compare-tag">
+                            {medicine}
+                          </span>
+                        )) : <span className="prescription-compare-empty">Barcha dorilar topildi</span>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
               {pharmacy.medicines && pharmacy.medicines.length > 0 ? (
                 (() => {
                   const filteredMedicines = pharmacy.medicines.filter(medicine => {
-                    const name = (medicine.name || medicine.medicine_name || '').toLowerCase()
+                    const name = getMedicineLabel(medicine).toLowerCase()
                     const category = (medicine.category || '').toLowerCase()
                     const query = searchQuery.toLowerCase()
                     return name.includes(query) || category.includes(query)
@@ -252,10 +347,13 @@ const PharmacyCard = ({ pharmacy, compact = false }) => {
                   return (
                     <div className="medicines-list">
                       {filteredMedicines.map((medicine, index) => (
-                        <div key={index} className="medicine-item">
+                        <div
+                          key={index}
+                          className={`medicine-item ${hasRequestedMedicines && requestedMedicineMatch.found.some((item) => normalizeMedicineText(item.matchedName) === normalizeMedicineText(getMedicineLabel(medicine))) ? 'medicine-item-requested' : ''}`}
+                        >
                           <div className="medicine-icon">💊</div>
                           <div className="medicine-details">
-                            <h4>{medicine.name || medicine.medicine_name || 'Noma\'lum dori'}</h4>
+                            <h4>{getMedicineLabel(medicine)}</h4>
                             <div className="medicine-info">
                               <span className="medicine-category">{medicine.category || 'Boshqa'}</span>
                               {medicine.stock !== undefined && (

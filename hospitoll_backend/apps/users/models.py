@@ -129,10 +129,12 @@ class PasswordResetCode(models.Model):
 class CodeVerificationLockState(models.Model):
     CHANNEL_PATIENT_RESET = 'patient_password_reset'
     CHANNEL_DOCTOR_RESET = 'doctor_password_reset'
+    CHANNEL_CLINIC_RESET = 'clinic_password_reset'
 
     CHANNEL_CHOICES = (
         (CHANNEL_PATIENT_RESET, 'Patient password reset'),
         (CHANNEL_DOCTOR_RESET, 'Doctor password reset'),
+        (CHANNEL_CLINIC_RESET, 'Clinic password reset'),
     )
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
@@ -153,3 +155,99 @@ class CodeVerificationLockState(models.Model):
 
     def __str__(self):
         return f"{self.user_id}:{self.channel}:stage={self.lock_stage}"
+
+
+class DoctorResetTelegramSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    token = models.UUIDField(default=uuid4, unique=True, db_index=True)
+    user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE, related_name='doctor_reset_telegram_sessions')
+    doctor = models.ForeignKey('doctors.Doctor', on_delete=models.CASCADE, related_name='reset_telegram_sessions')
+    telegram_user_id = models.BigIntegerField(blank=True, null=True, db_index=True)
+    telegram_chat_id = models.BigIntegerField(blank=True, null=True)
+    linked_at = models.DateTimeField(blank=True, null=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'expires_at']),
+            models.Index(fields=['doctor', 'expires_at']),
+        ]
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+
+class ClinicResetTelegramSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    token = models.UUIDField(default=uuid4, unique=True, db_index=True)
+    user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE, related_name='clinic_reset_telegram_sessions')
+    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.CASCADE, related_name='reset_telegram_sessions')
+    telegram_user_id = models.BigIntegerField(blank=True, null=True, db_index=True)
+    telegram_chat_id = models.BigIntegerField(blank=True, null=True)
+    linked_at = models.DateTimeField(blank=True, null=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'expires_at']),
+            models.Index(fields=['clinic', 'expires_at']),
+        ]
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+
+class PatientResetTelegramSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    token = models.UUIDField(default=uuid4, unique=True, db_index=True)
+    user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE, related_name='patient_reset_telegram_sessions')
+    patient = models.ForeignKey('patients.Patient', on_delete=models.CASCADE, related_name='reset_telegram_sessions')
+    telegram_user_id = models.BigIntegerField(blank=True, null=True, db_index=True)
+    telegram_chat_id = models.BigIntegerField(blank=True, null=True)
+    linked_at = models.DateTimeField(blank=True, null=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'expires_at']),
+            models.Index(fields=['patient', 'expires_at']),
+        ]
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+
+class PharmacyResetTelegramSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    token = models.UUIDField(default=uuid4, unique=True, db_index=True)
+    user = models.ForeignKey('users.CustomUser', on_delete=models.CASCADE, related_name='pharmacy_reset_telegram_sessions')
+    pharmacy = models.ForeignKey('pharmacies.Pharmacy', on_delete=models.CASCADE, related_name='reset_telegram_sessions')
+    telegram_user_id = models.BigIntegerField(blank=True, null=True, db_index=True)
+    telegram_chat_id = models.BigIntegerField(blank=True, null=True)
+    linked_at = models.DateTimeField(blank=True, null=True)
+    expires_at = models.DateTimeField(db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'expires_at']),
+            models.Index(fields=['pharmacy', 'expires_at']),
+        ]
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at

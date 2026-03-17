@@ -10,7 +10,7 @@ from rest_framework.test import APITestCase
 
 from apps.users.models import CustomUser
 from apps.clinics.models import Clinic
-from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, Specialization, DoctorSpecialization
+from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, Specialization, DoctorSpecialization, DoctorEmployment
 from apps.patients.models import Patient
 from apps.medical.models import Appointment, MedicalRecord
 from apps.medical.telegram_bot_service import TelegramBotService
@@ -236,6 +236,73 @@ class DoctorDashboardStatsTests(MedicalApiTestCase):
         self.assertEqual(float(payload['compensation_value']), 25.0)
         self.assertEqual(float(payload['monthly_effective_revenue']), 180000.0)
         self.assertEqual(float(payload['monthly_estimated_balance']), 45000.0)
+
+    def test_dashboard_stats_are_zero_when_doctor_is_unassigned_or_inactive(self):
+        now = timezone.localtime()
+        self._create_record(created_at=now - timedelta(hours=1))
+        self._create_appointment(status=Appointment.Status.CANCELLED, scheduled_date=now - timedelta(minutes=30))
+
+        self.doctor.is_active = False
+        self.doctor.clinic = None
+        self.doctor.save(update_fields=['is_active', 'clinic', 'updated_at'])
+
+        response = self.client.get(self.url)
+        payload = self.body(response)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['today_24h_patients'], 0)
+        self.assertEqual(payload['monthly_cancelled_appointments'], 0)
+        self.assertEqual(payload['monthly_arrived_patients'], 0)
+        self.assertEqual(float(payload['monthly_effective_revenue']), 0.0)
+        self.assertEqual(float(payload['monthly_estimated_balance']), 0.0)
+
+    def test_dashboard_stats_scope_monthly_values_to_active_employment_window(self):
+        now = timezone.localtime().replace(second=0, microsecond=0)
+        active_started_at = now - timedelta(days=2)
+
+        self.doctor.compensation_type = 'salary'
+        self.doctor.compensation_value = Decimal('0')
+        self.doctor.consultation_fee = 100000
+        self.doctor.save(update_fields=['compensation_type', 'compensation_value', 'consultation_fee'])
+
+        DoctorEmployment.objects.create(
+            doctor=self.doctor,
+            clinic=self.clinic,
+            started_at=now - timedelta(days=10),
+            ended_at=active_started_at - timedelta(minutes=1),
+            compensation_type='salary',
+            compensation_value=Decimal('0'),
+        )
+        DoctorEmployment.objects.create(
+            doctor=self.doctor,
+            clinic=self.clinic,
+            started_at=active_started_at,
+            compensation_type='percent',
+            compensation_value=Decimal('50'),
+        )
+
+        self._create_record(created_at=active_started_at - timedelta(hours=1))
+        self._create_record(created_at=active_started_at + timedelta(hours=1))
+
+        self._create_appointment(
+            status=Appointment.Status.CANCELLED,
+            scheduled_date=active_started_at - timedelta(minutes=30),
+        )
+        self._create_appointment(
+            status=Appointment.Status.CANCELLED,
+            scheduled_date=active_started_at + timedelta(minutes=30),
+        )
+
+        response = self.client.get(self.url)
+        payload = self.body(response)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(payload['monthly_arrived_patients'], 1)
+        self.assertEqual(payload['monthly_cancelled_appointments'], 1)
+        self.assertEqual(payload['compensation_type'], 'percent')
+        self.assertEqual(float(payload['compensation_value']), 50.0)
+        self.assertEqual(float(payload['monthly_effective_revenue']), 100000.0)
+        self.assertEqual(float(payload['monthly_estimated_balance']), 50000.0)
 
 class MonthlyStatsHistoryTests(MedicalApiTestCase):
     def setUp(self):
@@ -1162,17 +1229,19 @@ class QueueDecisionTests(MedicalApiTestCase):
 
         self.assertGreater(self.appt1.scheduled_date, old_appt1_dt)
         self.assertGreater(self.appt2.scheduled_date, old_appt2_dt)
-        self.assertGreaterEqual(int((self.appt2.scheduled_date - old_appt2_dt).total_seconds() // 60), 15)
+        self.assertGreaterEqual(int((self.appt1.scheduled_date - old_appt1_dt).total_seconds() // 60), 15)
 
         chat_ids = [entry['chat_id'] for entry in sent_messages]
         self.assertIn(100001, chat_ids)
-        self.assertIn(100002, chat_ids)
+        self.assertNotIn(100002, chat_ids)
 
     def test_enter_decision_uses_realtime_for_selected_and_message(self):
         # Put selected appointment further in future to ensure it is pulled to now.
         future_dt = timezone.localtime().replace(second=0, microsecond=0) + timedelta(minutes=18)
         self.appt1.scheduled_date = future_dt
         self.appt1.save(update_fields=['scheduled_date', 'updated_at'])
+        self.appt2.scheduled_date = future_dt + timedelta(minutes=10)
+        self.appt2.save(update_fields=['scheduled_date', 'updated_at'])
 
         sent_messages = []
 

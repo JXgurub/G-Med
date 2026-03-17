@@ -14,12 +14,6 @@ const Navbar = () => {
             <Link to="/" className="navbar-link">Asosiy</Link>
           </li>
           <li>
-            <Link to="/about" className="navbar-link">Haqida</Link>
-          </li>
-          <li>
-            <Link to="/services" className="navbar-link">Mahsulotlar</Link>
-          </li>
-          <li>
             <Link to="/contact" className="navbar-link">Bog'lanish</Link>
           </li>
           <li>
@@ -29,9 +23,6 @@ const Navbar = () => {
               </svg>
               Men bemorman
             </Link>
-          </li>
-          <li>
-            <Link to="/login" className="navbar-link navbar-link-login">Kirish</Link>
           </li>
         </ul>
       </div>

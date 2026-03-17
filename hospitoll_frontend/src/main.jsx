@@ -6,8 +6,14 @@ import ErrorBoundary from './components/ErrorBoundary.jsx'
 import { api } from './services/api'
 import './index.css'
 
-registerSW({
+const updateSW = registerSW({
   immediate: true,
+  onNeedRefresh() {
+    window.dispatchEvent(new Event('pwa-update-found'))
+    window.setTimeout(() => {
+      void updateSW(true)
+    }, 250)
+  },
   onOfflineReady() {
     window.dispatchEvent(new Event('pwa-offline-ready'))
   },

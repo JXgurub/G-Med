@@ -3,6 +3,13 @@ import { authApi, patientsApi, medicalRecordsApi, doctorsApi, clinicsApi } from 
 
 const PatientContext = createContext()
 
+const parseMedicationList = (value) => {
+  return String(value || '')
+    .split(/[\n,;]+/)
+    .map((item) => item.replace(/^[-•\d.)\s]+/, '').trim())
+    .filter(Boolean)
+}
+
 // Helper function to map API patient data to local format
 const mapPatientProfile = (patient, user) => {
   return {
@@ -44,11 +51,12 @@ const buildPatientHistory = async (medicalRecords) => {
         id: record.id,
         date: record.created_at?.split('T')[0] || record.visit_date,
         diagnosis: record.assessment || record.diagnosis || 'Ko\'rik amalga oshirildi',
+        complaint: record.chief_complaint || record.reason || '',
         doctorId: record.doctor,
         doctorName: doctorName,
         doctorSpecialization: doctorSpecialization,
         clinic: clinicName,
-        medications: record.plan ? record.plan.split(',').map(m => m.trim()).filter(m => m) : []
+        medications: parseMedicationList(record.plan)
       })
     } catch (error) {
       console.error('Error building history entry:', error)

@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePharmacy } from '../context/PharmacyContext'
 import PasswordInput from '../components/PasswordInput'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
+import { setPreferredLoginPortal } from '../utils/loginPortalPreference'
 import './PharmacyOwnerLogin.css'
 
 const PharmacyOwnerLogin = () => {
@@ -12,6 +13,10 @@ const PharmacyOwnerLogin = () => {
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
   const { loginPharmacy } = usePharmacy()
+
+  useEffect(() => {
+    setPreferredLoginPortal('pharmacy')
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -26,10 +31,6 @@ const PharmacyOwnerLogin = () => {
       setError(result.error)
     }
     setLoading(false)
-  }
-
-  const handleBackToLogin = () => {
-    navigate('/login')
   }
 
   return (
@@ -91,11 +92,17 @@ const PharmacyOwnerLogin = () => {
             >
               {loading ? 'Kirish...' : 'Kirish'}
             </button>
+
+            <button
+              type="button"
+              className="btn-forgot"
+              onClick={() => navigate('/pharmacy-owner-forgot-password')}
+              disabled={loading}
+            >
+              Parolni unutdingizmi?
+            </button>
           </form>
 
-          <button className="btn-back" onClick={handleBackToLogin}>
-            ← Orqaga
-          </button>
         </div>
 
         <div className="login-background">
