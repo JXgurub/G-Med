@@ -725,11 +725,12 @@ class DoctorEmploymentLifecycleTests(APITestCase):
     def test_available_endpoint_rebuilds_legacy_available_slots_for_current_interval(self):
         target_date = self._next_weekday()
 
+        self.doctor.is_checked_in = True
         self.doctor.available_from = datetime.strptime('09:00', '%H:%M').time()
         self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
         self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri'
         self.doctor.slot_minutes = 20
-        self.doctor.save(update_fields=['available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
+        self.doctor.save(update_fields=['is_checked_in', 'available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
 
         DoctorAvailability.objects.create(
             doctor=self.doctor,
@@ -767,11 +768,12 @@ class DoctorEmploymentLifecycleTests(APITestCase):
     def test_available_endpoint_does_not_create_slots_overlapping_booked_slot(self):
         target_date = self._next_weekday()
 
+        self.doctor.is_checked_in = True
         self.doctor.available_from = datetime.strptime('09:00', '%H:%M').time()
         self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
         self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri'
         self.doctor.slot_minutes = 20
-        self.doctor.save(update_fields=['available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
+        self.doctor.save(update_fields=['is_checked_in', 'available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
 
         DoctorAvailability.objects.create(
             doctor=self.doctor,
@@ -794,3 +796,19 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             start = datetime.strptime(slot['start_time'][:5], '%H:%M')
             end = datetime.strptime(slot['end_time'][:5], '%H:%M')
             self.assertFalse(start < blocked_end and end > blocked_start)
+
+    def test_available_endpoint_returns_empty_when_doctor_not_checked_in(self):
+        target_date = self._next_weekday()
+
+        self.doctor.is_checked_in = False
+        self.doctor.available_from = datetime.strptime('09:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri'
+        self.doctor.slot_minutes = 20
+        self.doctor.save(update_fields=['is_checked_in', 'available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
+
+        url = reverse('doctor-availability-available')
+        response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': target_date.isoformat()})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])

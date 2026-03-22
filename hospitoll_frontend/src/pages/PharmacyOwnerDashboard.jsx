@@ -140,6 +140,12 @@ const buildMedicineIdentityKey = (value = {}) => {
   return `${name}__${dosageForm}__${category}__${country}`
 }
 
+const formatMedicinePreviewLabel = (value) => String(value || '')
+  .replace(/[_-]\d+$/g, '')
+  .replace(/_/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim()
+
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const getMedicineNameSuggestionScore = (medicineName, query) => {
@@ -309,7 +315,8 @@ const PharmacyOwnerDashboard = () => {
   const [medicineTransferType, setMedicineTransferType] = useState('success')
   const [medicineImporting, setMedicineImporting] = useState(false)
   const [medicineImportProgress, setMedicineImportProgress] = useState(0)
-  const [pendingImportFile, setPendingImportFile] = useState(null)
+  const [pendingImportFiles, setPendingImportFiles] = useState([])
+  const [medicineTransferMeta, setMedicineTransferMeta] = useState(null)
   const [confirmingAllNameAlerts, setConfirmingAllNameAlerts] = useState(false)
   const [bulkDeletingMedicines, setBulkDeletingMedicines] = useState(false)
   const [medicinesUpdatedAt, setMedicinesUpdatedAt] = useState(null)
@@ -506,6 +513,7 @@ const PharmacyOwnerDashboard = () => {
   const showTemporaryMedicineMessage = useCallback((message, type = 'success') => {
     setMedicineTransferType(type)
     setMedicineTransferMessage(message)
+    setMedicineTransferMeta(null)
 
     if (medicineMessageTimerRef.current) {
       window.clearTimeout(medicineMessageTimerRef.current)
@@ -535,6 +543,7 @@ const PharmacyOwnerDashboard = () => {
       if (!silent) {
         setMedicineTransferType('error')
         setMedicineTransferMessage('Dori nomi bo\'yicha xabarlarni yuklashda xatolik yuz berdi.')
+        setMedicineTransferMeta(null)
       }
       setMedicineNameAlerts([])
     } finally {
@@ -1112,36 +1121,54 @@ const PharmacyOwnerDashboard = () => {
   }
 
   const handleImportFileSelected = async (event) => {
-    const file = event.target.files?.[0]
+    const selectedFiles = Array.from(event.target.files || [])
     event.target.value = ''
 
-    if (!file || !currentPharmacy?.id) return
+    if (selectedFiles.length === 0 || !currentPharmacy?.id) return
+
+    const files = selectedFiles.slice(0, 2)
 
     setMedicineImportProgress(0)
 
     try {
-      const { mappedRows } = await parseImportedRowsFromFile(file)
-      setPendingImportFile(file)
+      let totalMappedRows = 0
 
-      if (mappedRows.length === 0) {
+      for (const file of files) {
+        const { mappedRows } = await parseImportedRowsFromFile(file)
+        totalMappedRows += mappedRows.length
+      }
+
+      setPendingImportFiles(files)
+
+      if (totalMappedRows === 0) {
         setMedicineTransferType('error')
         setMedicineTransferMessage('Fayl tanlandi, lekin yaroqli qator topilmadi. Ustunlar: name/dosage_form/expiry_year/country/category/price/stock.')
+        setMedicineTransferMeta(null)
         return
       }
 
+      const truncatedNotice = selectedFiles.length > files.length
+        ? ` (${selectedFiles.length} tadan faqat dastlabki 2 tasi tanlandi)`
+        : ''
+
       setMedicineTransferType('success')
-      setMedicineTransferMessage(`Fayl tanlandi: ${file.name}. Saqlash tugmasini bossangiz ${mappedRows.length} ta qator import qilinadi.`)
+      setMedicineTransferMeta(null)
+      setMedicineTransferMessage(
+        `${files.length} ta fayl tanlandi${truncatedNotice}. Saqlash tugmasini bossangiz ${totalMappedRows} ta qator import qilinadi.`
+      )
     } catch (error) {
-      setPendingImportFile(null)
+      setPendingImportFiles([])
       setMedicineTransferType('error')
+      setMedicineTransferMeta(null)
       setMedicineTransferMessage(`Faylni o\'qishda xatolik: ${error?.message || 'noma\'lum xatolik'}`)
     }
   }
 
   const handleImportMedicinesSave = async () => {
-    if (!pendingImportFile || !currentPharmacy?.id) {
+    if (pendingImportFiles.length === 0 || !currentPharmacy?.id) {
       setMedicineTransferType('error')
       setMedicineTransferMessage('Avval import faylini tanlang.')
+      setMedicineTransferMeta(null)
       return
     }
 
@@ -1149,15 +1176,33 @@ const PharmacyOwnerDashboard = () => {
     setMedicineImportProgress(2)
 
     try {
-      const { rawRows, mappedRows } = await parseImportedRowsFromFile(pendingImportFile)
+      const parsedBatches = []
+
+      for (let fileIndex = 0; fileIndex < pendingImportFiles.length; fileIndex += 1) {
+        const file = pendingImportFiles[fileIndex]
+        const parsed = await parseImportedRowsFromFile(file)
+        parsedBatches.push({
+          fileName: file.name,
+          rawRows: parsed.rawRows,
+          mappedRows: parsed.mappedRows,
+        })
+
+        const parsingProgress = 2 + Math.round(((fileIndex + 1) / pendingImportFiles.length) * 16)
+        setMedicineImportProgress(Math.min(18, parsingProgress))
+      }
+
+      const allRawRowCount = parsedBatches.reduce((sum, batch) => sum + batch.rawRows.length, 0)
+      const mappedRows = parsedBatches.flatMap((batch) => batch.mappedRows)
+
       if (mappedRows.length === 0) {
         setMedicineTransferType('error')
         setMedicineTransferMessage('Import uchun yaroqli qator topilmadi. Ustunlar: name/dosage_form/expiry_year/country/category/price/stock.')
+        setMedicineTransferMeta(null)
         setMedicineImportProgress(0)
         return
       }
 
-      setMedicineImportProgress(8)
+      setMedicineImportProgress(20)
 
       const seen = new Set()
       const existingKeys = new Set(medicines.map((medicine) => buildMedicineIdentityKey(medicine)))
@@ -1167,7 +1212,7 @@ const PharmacyOwnerDashboard = () => {
       const existingItems = []
 
       let importedCount = 0
-      let skippedCount = rawRows.length - mappedRows.length
+      let skippedCount = Math.max(0, allRawRowCount - mappedRows.length)
       let existingCount = 0
       let failedCount = 0
 
@@ -1177,8 +1222,8 @@ const PharmacyOwnerDashboard = () => {
 
         if (seen.has(key)) {
           skippedCount += 1
-          const progress = 8 + Math.round(((index + 1) / mappedRows.length) * 84)
-          setMedicineImportProgress(Math.min(92, progress))
+          const progress = 20 + Math.round(((index + 1) / mappedRows.length) * 74)
+          setMedicineImportProgress(Math.min(94, progress))
           continue
         }
         seen.add(key)
@@ -1187,8 +1232,8 @@ const PharmacyOwnerDashboard = () => {
           existingCount += 1
           skippedCount += 1
           existingItems.push(buildMedicineDisplayName(medicine.name, medicine.strength))
-          const progress = 8 + Math.round(((index + 1) / mappedRows.length) * 84)
-          setMedicineImportProgress(Math.min(92, progress))
+          const progress = 20 + Math.round(((index + 1) / mappedRows.length) * 74)
+          setMedicineImportProgress(Math.min(94, progress))
           continue
         }
 
@@ -1209,27 +1254,41 @@ const PharmacyOwnerDashboard = () => {
           console.error('Medicine import row failed:', error)
         }
 
-        const progress = 8 + Math.round(((index + 1) / mappedRows.length) * 84)
-        setMedicineImportProgress(Math.min(92, progress))
+        const progress = 20 + Math.round(((index + 1) / mappedRows.length) * 74)
+        setMedicineImportProgress(Math.min(94, progress))
       }
 
       setMedicineImportProgress(96)
       await refreshCurrentPharmacyData()
       setMedicineImportProgress(100)
 
-      const existingPreview = existingItems.slice(0, 6).join(', ')
-      const existingSuffix = existingItems.length > 0
-        ? ` Mavjud dorilar: ${existingPreview}${existingItems.length > 6 ? ' ...' : ''}.`
-        : ''
+      const uniqueExistingItems = [...new Set(existingItems)]
+      const existingPreviewItems = uniqueExistingItems
+        .map(formatMedicinePreviewLabel)
+        .filter(Boolean)
+        .slice(0, 6)
 
       setMedicineTransferType(failedCount > 0 ? 'error' : 'success')
+      setMedicineTransferMeta({
+        kind: 'import-summary',
+        fileCount: pendingImportFiles.length,
+        importedCount,
+        existingCount,
+        skippedCount,
+        failedCount,
+        existingPreviewItems,
+        hasMoreExisting: uniqueExistingItems.length > existingPreviewItems.length,
+      })
       setMedicineTransferMessage(
-        `Import yakunlandi: qo'shildi ${importedCount}, mavjud ${existingCount}, o'tkazib yuborildi ${skippedCount}, xatolik ${failedCount}.${existingSuffix}`
+        failedCount > 0
+          ? 'Import yakunlandi, lekin ayrim qatorlarda xatolik bor.'
+          : 'Import muvaffaqiyatli yakunlandi.'
       )
-      setPendingImportFile(null)
+      setPendingImportFiles([])
     } catch (error) {
       console.error('Medicine import error:', error)
       setMedicineTransferType('error')
+      setMedicineTransferMeta(null)
       setMedicineTransferMessage(`Importda xatolik: ${error?.message || 'noma\'lum xatolik'}`)
       setMedicineImportProgress(0)
     } finally {
@@ -1536,7 +1595,7 @@ const PharmacyOwnerDashboard = () => {
                   type="button"
                   className="btn-transfer"
                   onClick={handleImportMedicinesSave}
-                  disabled={medicineImporting || !pendingImportFile}
+                  disabled={medicineImporting || pendingImportFiles.length === 0}
                 >
                   {medicineImporting ? 'Saqlanmoqda...' : 'Saqlash'}
                 </button>
@@ -1545,10 +1604,15 @@ const PharmacyOwnerDashboard = () => {
                   type="file"
                   accept=".xlsx,.xls,.csv,.tsv,.json"
                   onChange={handleImportFileSelected}
+                  multiple
                   hidden
                 />
-                {pendingImportFile && (
-                  <span className="medicine-import-file">{pendingImportFile.name}</span>
+                {pendingImportFiles.length > 0 && (
+                  <div className="medicine-import-files">
+                    {pendingImportFiles.map((file, fileIndex) => (
+                      <span key={`${file.name}-${fileIndex}`} className="medicine-import-file">{file.name}</span>
+                    ))}
+                  </div>
                 )}
               </div>
               <button
@@ -1574,7 +1638,55 @@ const PharmacyOwnerDashboard = () => {
 
           {medicineTransferMessage && (
             <div className={`medicine-transfer-message ${medicineTransferType === 'error' ? 'error' : 'success'}`}>
-              {medicineTransferMessage}
+              <div className="medicine-transfer-message-main">
+                <div className="medicine-transfer-message-title-row">
+                  <strong>
+                    {medicineTransferType === 'error' ? 'Import natijasi' : 'Import holati'}
+                  </strong>
+                </div>
+                <p className="medicine-transfer-message-text">{medicineTransferMessage}</p>
+
+                {medicineTransferMeta?.kind === 'import-summary' && (
+                  <>
+                    <div className="medicine-transfer-summary-grid">
+                      <div className="medicine-transfer-summary-item">
+                        <span>Fayl</span>
+                        <strong>{medicineTransferMeta.fileCount}</strong>
+                      </div>
+                      <div className="medicine-transfer-summary-item success">
+                        <span>Qo'shildi</span>
+                        <strong>{medicineTransferMeta.importedCount}</strong>
+                      </div>
+                      <div className="medicine-transfer-summary-item neutral">
+                        <span>Oldin bor edi</span>
+                        <strong>{medicineTransferMeta.existingCount}</strong>
+                      </div>
+                      <div className="medicine-transfer-summary-item neutral">
+                        <span>O'tkazib yuborildi</span>
+                        <strong>{medicineTransferMeta.skippedCount}</strong>
+                      </div>
+                      <div className="medicine-transfer-summary-item error">
+                        <span>Xatolik</span>
+                        <strong>{medicineTransferMeta.failedCount}</strong>
+                      </div>
+                    </div>
+
+                    {medicineTransferMeta.existingPreviewItems.length > 0 && (
+                      <div className="medicine-transfer-preview-block">
+                        <div className="medicine-transfer-preview-title">Bazadagi mavjud dorilar</div>
+                        <div className="medicine-transfer-preview-list">
+                          {medicineTransferMeta.existingPreviewItems.map((item, index) => (
+                            <span key={`${item}-${index}`} className="medicine-transfer-preview-chip">{item}</span>
+                          ))}
+                          {medicineTransferMeta.hasMoreExisting && (
+                            <span className="medicine-transfer-preview-more">yana bor...</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
           )}
 

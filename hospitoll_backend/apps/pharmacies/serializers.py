@@ -260,6 +260,19 @@ class MedicineSerializer(serializers.ModelSerializer):
             if candidate_identity == identity:
                 return candidate
 
+        # Fallback: optional metadata (description/manufacturer/ATC/generic) may differ,
+        # but we still should not create a duplicate medicine base record.
+        relaxed_candidates = Medicine.objects.filter(
+            name__iexact=identity['name'],
+            strength__iexact=identity['strength'],
+            dosage_form__iexact=identity['dosage_form'],
+            category__iexact=identity['category'],
+            country_of_origin__iexact=identity['country_of_origin'],
+        ).order_by('created_at')
+
+        if relaxed_candidates.exists():
+            return relaxed_candidates.first()
+
         return None
 
     def create(self, validated_data):

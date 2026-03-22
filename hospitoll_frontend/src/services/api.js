@@ -423,6 +423,7 @@ export const medicinesApi = {
   confirmNameAlert: (id) => api.patch(`/pharmacies/medicines/name-alerts/${id}/confirm/`, {}),
   confirmAllNameAlerts: () => api.patch('/pharmacies/medicines/name-alerts/confirm-all/', {}),
   correctNameAlert: (id, data) => api.patch(`/pharmacies/medicines/name-alerts/${id}/correct/`, data),
+  search: (query, limit = 10) => api.get('/pharmacies/medicines/search/', { q: query, limit }),
 }
 
 export const pharmacyInventoryApi = {

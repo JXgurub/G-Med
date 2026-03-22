@@ -782,6 +782,8 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
         if not doctor.is_active or not doctor.clinic or not doctor.clinic.is_active_status:
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not doctor.is_checked_in:
+            return Response([], status=status.HTTP_200_OK)
 
         duration_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
         if requested_duration is not None:

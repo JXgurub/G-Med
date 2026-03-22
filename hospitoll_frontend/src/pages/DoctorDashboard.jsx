@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useDoctor } from '../context/DoctorContext'
 import { clinicsApi, patientsApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
+import MedicineAutocomplete from '../components/MedicineAutocomplete'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './DoctorDashboard.css'
@@ -1491,11 +1492,10 @@ const DoctorDashboard = () => {
                 </div>
                 <div className="form-group">
                   <label>Dorilar (ixtiyoriy)</label>
-                  <input
-                    type="text"
-                    placeholder="Dorilar (vergula bilan ajrating)"
+                  <MedicineAutocomplete
                     value={existingPatientSelected.medicines || ''}
                     onChange={(e) => setExistingPatientSelected({ ...existingPatientSelected, medicines: e.target.value })}
+                    placeholder="Dori nomini yozing va tavsiyalardan tanlang"
                   />
                 </div>
                 <div className="form-buttons">
@@ -1583,15 +1583,14 @@ const DoctorDashboard = () => {
                     onChange={(e) => setPatientForm({ ...patientForm, diagnosis: e.target.value })}
                   />
                 </div>
-                <div className="form-group">
-                  <input
-                    type="text"
-                    placeholder="Dorilar (vergula bilan ajrating)"
+                <div className="form-group medicine-form-group">
+                  <MedicineAutocomplete
                     value={patientForm.medicines}
                     onChange={(e) => setPatientForm({ ...patientForm, medicines: e.target.value })}
+                    placeholder="Dori nomini yozing va tavsiyalardan tanlang"
                   />
                 </div>
-                <button type="submit" className="btn-submit">Bemor qo'shish</button>
+                <button type="submit" className="btn-submit btn-submit-patient">Bemor qo'shish</button>
               </form>
             )}
 
@@ -1776,11 +1775,11 @@ const DoctorDashboard = () => {
                       />
                     </div>
                     <div className="form-group">
-                      <input
-                        type="text"
-                        placeholder="Dorilar (vergula bilan ajrating)"
+                      <label style={{ display: 'block', marginBottom: '5px', fontSize: '0.9rem', color: '#666' }}>Dorilar</label>
+                      <MedicineAutocomplete
                         value={newVisitForm.medicines}
                         onChange={(e) => setNewVisitForm({ ...newVisitForm, medicines: e.target.value })}
+                        placeholder="Dori nomini yozing va tavsiyalardan tanlang"
                       />
                     </div>
                     <button type="submit" className="btn-submit-visit">Tashrif qo'shish</button>

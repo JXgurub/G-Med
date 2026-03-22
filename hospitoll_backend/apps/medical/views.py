@@ -786,6 +786,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor klinikaga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
         if not doctor.is_active or not clinic.is_active_status:
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not doctor.is_checked_in:
+            return Response({'detail': 'Doktor hali ishga kelmagan.'}, status=status.HTTP_400_BAD_REQUEST)
         if slot.doctor_id != doctor.id:
             return Response({'detail': 'Slot ushbu doktorga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -938,6 +940,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor klinikaga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
         if not doctor.is_active or not clinic.is_active_status:
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not doctor.is_checked_in:
+            return Response({'detail': 'Doktor hali ishga kelmagan.'}, status=status.HTTP_400_BAD_REQUEST)
 
         tz = timezone.get_current_timezone()
         scheduled_dt = timezone.make_aware(datetime.combine(target_date, target_time), tz)

@@ -304,6 +304,22 @@
   white-space: nowrap;
 }
 
+.medicine-import-files {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  max-width: 440px;
+}
+
+.medicine-import-files .medicine-import-file {
+  max-width: 210px;
+  padding: 0.22rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(14, 116, 144, 0.08);
+  border: 1px solid rgba(14, 116, 144, 0.18);
+}
+
 .btn-add {
   padding: 0.75rem 1.5rem;
   background: linear-gradient(135deg, #10b981 0%, #059669 100%);
@@ -323,21 +339,127 @@
 
 .medicine-transfer-message {
   margin-bottom: 1rem;
-  padding: 0.75rem 1rem;
-  border-radius: 0.6rem;
+  padding: 1rem 1.1rem;
+  border-radius: 0.9rem;
   font-size: 0.88rem;
-  font-weight: 600;
   border: 1px solid var(--border-color);
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.06);
 }
 
 .medicine-transfer-message.success {
-  background: color-mix(in srgb, var(--success-color, #16a34a) 10%, var(--bg-white));
+  background: linear-gradient(180deg, rgba(240, 253, 244, 0.98), rgba(255, 255, 255, 0.98));
   color: var(--text-dark);
+  border-color: rgba(34, 197, 94, 0.22);
 }
 
 .medicine-transfer-message.error {
-  background: color-mix(in srgb, var(--error-color, #ef4444) 10%, var(--bg-white));
+  background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(255, 255, 255, 0.98));
   color: var(--text-dark);
+  border-color: rgba(239, 68, 68, 0.2);
+}
+
+.medicine-transfer-message-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.medicine-transfer-message-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.medicine-transfer-message-title-row strong {
+  font-size: 1rem;
+  color: var(--text-dark);
+}
+
+.medicine-transfer-message-text {
+  margin: 0;
+  color: #334155;
+  font-size: 0.92rem;
+  line-height: 1.5;
+  font-weight: 600;
+}
+
+.medicine-transfer-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.7rem;
+}
+
+.medicine-transfer-summary-item {
+  padding: 0.8rem 0.85rem;
+  border-radius: 0.8rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.86);
+}
+
+.medicine-transfer-summary-item span {
+  display: block;
+  font-size: 0.76rem;
+  color: #64748b;
+  margin-bottom: 0.28rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.medicine-transfer-summary-item strong {
+  font-size: 1.2rem;
+  color: #0f172a;
+}
+
+.medicine-transfer-summary-item.success {
+  background: rgba(240, 253, 244, 0.96);
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.medicine-transfer-summary-item.neutral {
+  background: rgba(248, 250, 252, 0.96);
+}
+
+.medicine-transfer-summary-item.error {
+  background: rgba(254, 242, 242, 0.96);
+  border-color: rgba(239, 68, 68, 0.18);
+}
+
+.medicine-transfer-preview-block {
+  padding-top: 0.1rem;
+}
+
+.medicine-transfer-preview-title {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: #475569;
+  margin-bottom: 0.55rem;
+}
+
+.medicine-transfer-preview-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.medicine-transfer-preview-chip,
+.medicine-transfer-preview-more {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0.35rem 0.72rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.medicine-transfer-preview-more {
+  background: rgba(241, 245, 249, 0.95);
+  color: #64748b;
 }
 
 .medicine-import-progress {

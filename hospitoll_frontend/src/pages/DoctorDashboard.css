@@ -1142,6 +1142,10 @@
   flex-direction: column;
 }
 
+.add-patient-form .medicine-form-group {
+  grid-column: 1 / -1;
+}
+
 .add-patient-form input {
   padding: 0.75rem;
   border: 1.5px solid var(--border-color);
@@ -1208,6 +1212,11 @@
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s ease;
+}
+
+.btn-submit-patient {
+  grid-column: 1 / -1;
+  justify-self: end;
 }
 
 .btn-submit:hover {
@@ -1450,6 +1459,10 @@
 
   .btn-submit {
     align-self: stretch;
+  }
+
+  .btn-submit-patient {
+    justify-self: stretch;
   }
 
   .patient-header {

@@ -1,8 +1,8 @@
 from django.shortcuts import get_object_or_404
-from django.db import transaction
+from django.db import transaction, models
 from django.utils import timezone
 from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 
 from apps.site_settings.models import SystemAlert
@@ -255,6 +255,13 @@ class MedicineViewSet(viewsets.ModelViewSet):
         alert.save(update_fields=['context'])
         return context
 
+    @staticmethod
+    def _has_pharmacy_voted(alert_context, pharmacy_id):
+        if not isinstance(alert_context, dict) or pharmacy_id is None:
+            return False
+        votes = alert_context.get('votes') if isinstance(alert_context.get('votes'), dict) else {}
+        return str(pharmacy_id) in votes
+
     def _merge_medicine_records(self, source_medicine, target_medicine):
         for stock in PharmacyMarchandise.objects.filter(medicine=source_medicine):
             existing_stock = PharmacyMarchandise.objects.filter(
@@ -441,6 +448,8 @@ class MedicineViewSet(viewsets.ModelViewSet):
             context = alert.context if isinstance(alert.context, dict) else {}
             if str(context.get('reported_by_pharmacy_id') or '') == str(pharmacy.id):
                 continue
+            if self._has_pharmacy_voted(context, pharmacy.id):
+                continue
             alerts.append(self._serialize_name_alert(alert, current_pharmacy=pharmacy))
 
         return Response(alerts, status=status.HTTP_200_OK)
@@ -488,6 +497,8 @@ class MedicineViewSet(viewsets.ModelViewSet):
         ).order_by('-created_at'):
             context = alert.context if isinstance(alert.context, dict) else {}
             if str(context.get('reported_by_pharmacy_id') or '') == str(pharmacy.id):
+                continue
+            if self._has_pharmacy_voted(context, pharmacy.id):
                 continue
             alerts.append(alert)
 
@@ -595,3 +606,39 @@ class PharmacyMarchandiseViewSet(viewsets.ModelViewSet):
         qs.delete()
 
         return Response({'deleted_count': deleted_count}, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([permissions.AllowAny])
+def medicine_search(request):
+    """
+    Search medicines by name prefix.
+    Query parameters:
+    - q: search query (minimum 1 character)
+    - limit: maximum number of results (default 10)
+    """
+    query = request.query_params.get('q', '').strip()
+    try:
+        limit = min(int(request.query_params.get('limit', 10)), 50)
+    except (TypeError, ValueError):
+        limit = 10
+
+    if not query or len(query) < 1:
+        return Response([], status=status.HTTP_200_OK)
+
+    medicines = Medicine.objects.filter(
+        is_active=True
+    ).filter(
+        models.Q(name__istartswith=query) |
+        models.Q(generic_name__istartswith=query)
+    ).annotate(
+        prefix_priority=models.Case(
+            models.When(name__istartswith=query, then=models.Value(0)),
+            models.When(generic_name__istartswith=query, then=models.Value(1)),
+            default=models.Value(2),
+            output_field=models.IntegerField(),
+        )
+    ).order_by('prefix_priority', 'name')[:limit]
+
+    serializer = MedicineSerializer(medicines, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)

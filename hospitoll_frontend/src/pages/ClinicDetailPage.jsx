@@ -120,6 +120,10 @@ const ClinicDetailPage = () => {
     const today = new Date().toISOString().split('T')[0]
     setSelectedDate(today)
     setBookingOpen(true)
+    if (!doctorData?.is_checked_in) {
+      setAvailableSlots([])
+      return
+    }
     await fetchAvailability(doctorData.id, today)
   }
 
@@ -128,6 +132,10 @@ const ClinicDetailPage = () => {
     setSelectedDate(nextDate)
     setSelectedSlot(null)
     if (selectedDoctor?.id) {
+      if (!selectedDoctor?.is_checked_in) {
+        setAvailableSlots([])
+        return
+      }
       await fetchAvailability(selectedDoctor.id, nextDate)
     }
   }
@@ -320,7 +328,11 @@ const ClinicDetailPage = () => {
                 <label>Bo'sh vaqtlar</label>
                 <div className="booking-slots">
                   {availableSlots.length === 0 && (
-                    <div className="booking-empty">Bo'sh vaqtlar topilmadi</div>
+                    <div className="booking-empty">
+                      {selectedDoctor?.is_checked_in
+                        ? "Bo'sh vaqtlar topilmadi"
+                        : "Doktor hozir ishga kelmagan, navbatlar vaqtincha yopiq"}
+                    </div>
                   )}
                   {availableSlots.map((slot) => (
                     <button

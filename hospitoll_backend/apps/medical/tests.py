@@ -876,7 +876,36 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             available_until='18:00',
             lunch_break_start='12:00',
             lunch_break_end='13:00',
+            is_checked_in=True,
         )
+
+    def test_online_booking_rejects_when_doctor_not_checked_in(self):
+        self.doctor.is_checked_in = False
+        self.doctor.save(update_fields=['is_checked_in'])
+
+        target_date = timezone.localdate() + timedelta(days=1)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='10:00',
+            end_time='10:30',
+            status='available',
+        )
+
+        url = reverse('appointment-online-booking')
+        response = self.client.post(url, {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'slot_id': str(slot.id),
+            'first_name': 'Ali',
+            'last_name': 'Valiyev',
+            'passport_id': 'AA7000001',
+            'phone_number': '+998901111000',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = self.body(response)
+        self.assertIn('ishga kelmagan', str(response_json.get('detail', '')).lower())
 
     def test_online_booking_rejects_lunch_time_slot(self):
         target_date = timezone.localdate() + timedelta(days=1)
