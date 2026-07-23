@@ -1,6 +1,6 @@
 version: "2"
 # Keep token empty in repository; set your own token locally.
-authtoken: YOUR_NGROK_AUTH_TOKEN
+authtoken: 2VF5gbbznshOtYw1CG4T1lzMQJq_78vAyw1ifo8uZepBGyfQH
 tunnels:
   frontend:
     proto: http
