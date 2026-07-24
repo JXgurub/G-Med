@@ -75,13 +75,6 @@ class Patient(models.Model):
         choices=BLOOD_TYPE_CHOICES,
         blank=True
     )
-    national_id = models.CharField(
-        _('national ID'),
-        max_length=100,
-        blank=True,
-        null=True,
-        unique=True
-    )
     insurance_id = models.CharField(
         _('insurance ID'),
         max_length=100,

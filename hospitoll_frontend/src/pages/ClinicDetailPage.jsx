@@ -6,7 +6,6 @@ import './ClinicDetailPage.css'
 const INITIAL_BOOKING_FORM = {
   firstName: '',
   lastName: '',
-  passportId: '',
   phone: '+998'
 }
 
@@ -143,7 +142,6 @@ const ClinicDetailPage = () => {
   const submitBooking = async () => {
     const firstName = bookingForm.firstName.trim()
     const lastName = bookingForm.lastName.trim()
-    const passportId = bookingForm.passportId.trim().toUpperCase()
     const phoneNumber = bookingForm.phone.replace(/[^\d+]/g, '')
     const phoneDigits = phoneNumber.replace(/\D/g, '')
 
@@ -151,7 +149,7 @@ const ClinicDetailPage = () => {
       setBookingMessage('Iltimos, bo\'sh vaqtni tanlang')
       return
     }
-    if (!firstName || !lastName || !passportId || !phoneNumber || phoneNumber === '+998') {
+    if (!firstName || !lastName || !phoneNumber || phoneNumber === '+998') {
       setBookingMessage('Barcha maydonlarni to\'ldiring (telefon ham majburiy)')
       return
     }
@@ -170,7 +168,6 @@ const ClinicDetailPage = () => {
         slot_id: selectedSlot.id,
         first_name: firstName,
         last_name: lastName,
-        passport_id: passportId,
         phone_number: phoneNumber
       })
       if (result?.telegram_bot_link) {
@@ -365,17 +362,6 @@ const ClinicDetailPage = () => {
                     value={bookingForm.lastName}
                     onChange={(e) => setBookingForm({ ...bookingForm, lastName: e.target.value })}
                     placeholder="Familiya"
-                    required
-                  />
-                </div>
-
-                <div className="booking-section">
-                  <label>Pasport ID</label>
-                  <input
-                    type="text"
-                    value={bookingForm.passportId}
-                    onChange={(e) => setBookingForm({ ...bookingForm, passportId: e.target.value.replace(/\s+/g, '').toUpperCase() })}
-                    placeholder="AA1234567"
                     required
                   />
                 </div>

@@ -1,8 +1,7 @@
-import re
-
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from django.db.models import Q
 
 from .models import Patient
 from .serializers import PatientSerializer, PatientCreateSerializer
@@ -15,11 +14,14 @@ class PatientViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
 
-        national_id = self.request.query_params.get('national_id')
-        if national_id:
-            normalized = re.sub(r"\s+", "", str(national_id)).strip().upper()
-            if normalized:
-                qs = qs.filter(national_id__icontains=normalized)
+        query = str(self.request.query_params.get('q') or '').strip()
+        if query:
+            qs = qs.filter(
+                Q(user__first_name__icontains=query)
+                | Q(user__last_name__icontains=query)
+                | Q(phone_number__icontains=query)
+                | Q(user__phone_number__icontains=query)
+            )
 
         return qs
 

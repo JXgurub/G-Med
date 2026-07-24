@@ -33,7 +33,6 @@ const PatientForgotPassword = () => {
   const navigate = useNavigate()
   const [step, setStep] = useState('identity') // identity | code | new_password
 
-  const [passportId, setPassportId] = useState('')
   const [phoneNumber, setPhoneNumber] = useState('')
   const [code, setCode] = useState('')
   const [token, setToken] = useState('')
@@ -107,17 +106,17 @@ const PatientForgotPassword = () => {
   const canSubmit = useMemo(() => {
     if (loading || resendLoading) return false
     if (step === 'identity') {
-      return Boolean(onlyDigits(passportId).length >= 5 && onlyDigits(phoneNumber).length >= 9)
+      return Boolean(onlyDigits(phoneNumber).length >= 9)
     }
     if (step === 'code') {
-      if (!passportId || !phoneNumber || token !== '' || lockState.blockedSeconds > 0) return false
+      if (!phoneNumber || token !== '' || lockState.blockedSeconds > 0) return false
       return isCodeExpired ? true : Boolean(code)
     }
     if (step === 'new_password') {
       return Boolean(token && newPassword && confirmPassword)
     }
     return false
-  }, [step, loading, resendLoading, passportId, phoneNumber, code, token, newPassword, confirmPassword, lockState.blockedSeconds, isCodeExpired])
+  }, [step, loading, resendLoading, phoneNumber, code, token, newPassword, confirmPassword, lockState.blockedSeconds, isCodeExpired])
 
   const handleOpenBot = () => {
     if (!botLink) return
@@ -128,13 +127,13 @@ const PatientForgotPassword = () => {
   }
 
   const handleResendCode = async () => {
-    if (!passportId || !phoneNumber) return
+    if (!phoneNumber) return
 
     setError('')
     setInfo('')
     try {
       setResendLoading(true)
-      const res = await authApi.patientPasswordResetRequest(passportId, phoneNumber)
+      const res = await authApi.patientPasswordResetRequest(phoneNumber)
       setCode('')
       setToken('')
       startCodeCountdown(res?.expires_in)
@@ -158,7 +157,7 @@ const PatientForgotPassword = () => {
       setLoading(true)
 
       if (step === 'identity') {
-        const res = await authApi.patientPasswordResetRequest(passportId, phoneNumber)
+        const res = await authApi.patientPasswordResetRequest(phoneNumber)
         setBotLink(String(res?.bot_link || ''))
         setBotSessionNote(String(res?.bot_note || ''))
         setInfo(res?.detail || 'Kod Telegram botga yuborildi')
@@ -182,7 +181,7 @@ const PatientForgotPassword = () => {
           return
         }
 
-        const res = await authApi.patientPasswordResetVerify(passportId, phoneNumber, code)
+        const res = await authApi.patientPasswordResetVerify(phoneNumber, code)
         if (!res?.token) {
           setCode('')
           setError("Kod noto'g'ri yoki eskirgan.")
@@ -264,23 +263,12 @@ const PatientForgotPassword = () => {
         <div className="doctor-forgot-header">
           <div className="badge">Parolni tiklash</div>
           <h1>Parolni unutdingizmi?</h1>
-          <p>Iltimos, pasport ID va telefon raqamingizni aniq kiriting. Ma'lumotlar to'g'ri bo'lsa, sizga Telegram orqali bir martalik kod yuboramiz.</p>
+          <p>Iltimos, telefon raqamingizni aniq kiriting. Ma'lumotlar to'g'ri bo'lsa, sizga Telegram orqali bir martalik kod yuboramiz.</p>
         </div>
 
         <form className="doctor-forgot-form" onSubmit={onSubmit}>
           {step === 'identity' && (
             <>
-              <label className="field">
-                <span>Pasport ID</span>
-                <input
-                  type="text"
-                  value={passportId}
-                  onChange={(e) => setPassportId(e.target.value.toUpperCase())}
-                  placeholder="AA1234567"
-                  required
-                />
-              </label>
-
               <label className="field">
                 <span>Telefon raqam</span>
                 <input

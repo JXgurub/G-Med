@@ -58,7 +58,6 @@ class OnlineAppointmentSerializer(serializers.Serializer):
     specialty_price_id = serializers.UUIDField(required=False, allow_null=True)
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
-    passport_id = serializers.CharField(max_length=100)
     phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     reason = serializers.CharField(required=False, allow_blank=True)
 

@@ -205,7 +205,7 @@ const PatientPortal = () => {
             <div>
               <p className="patient-tag">Bemor sahifasi</p>
               <h1>{profile.fullName}</h1>
-              <p className="patient-meta">Email: {profile.email || patientAuth?.email || '—'} · Pasport: {profile.passportId} · {profile.phone}</p>
+              <p className="patient-meta">Email: {profile.email || patientAuth?.email || '—'} · {profile.phone}</p>
             </div>
           </div>
           <div className="patient-status">

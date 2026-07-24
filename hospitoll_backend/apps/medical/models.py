@@ -161,6 +161,20 @@ class Appointment(models.Model):
         blank=True
     )
 
+    telegram_two_left_notified_at = models.DateTimeField(
+        _('telegram two left notified at'),
+        null=True,
+        blank=True,
+        help_text=_('Set when patient is notified that only 2 people are ahead in queue')
+    )
+
+    telegram_one_left_notified_at = models.DateTimeField(
+        _('telegram one left notified at'),
+        null=True,
+        blank=True,
+        help_text=_('Set when patient is notified that only 1 person is ahead in queue')
+    )
+
     patient_arrival_confirmed_at = models.DateTimeField(
         _('patient arrival confirmed at'),
         null=True,
@@ -321,6 +335,7 @@ class TelegramConversationState(models.Model):
 
     class Action(models.TextChoices):
         RESCHEDULE_AWAITING_DATETIME = 'reschedule_awaiting_datetime', _('Reschedule awaiting datetime')
+        RATING_AWAITING_COMMENT = 'rating_awaiting_comment', _('Rating awaiting comment')
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     telegram_user_id = models.BigIntegerField(_('telegram user id'), db_index=True)

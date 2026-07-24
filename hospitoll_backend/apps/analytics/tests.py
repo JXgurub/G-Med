@@ -66,7 +66,6 @@ class AnalyticsBaseTestCase(APITestCase):
         )
         self.patient = Patient.objects.create(
             user=self.patient_user,
-            national_id='AN1234567',
             phone_number='+998902222222',
         )
         self.patient.clinics.add(self.clinic)

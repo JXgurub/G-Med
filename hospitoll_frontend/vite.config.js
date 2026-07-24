@@ -69,6 +69,17 @@ export default defineConfig({
       }
     })
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/xlsx')) return 'vendor-xlsx'
+          if (id.includes('node_modules/react-router')) return 'vendor-router'
+          if (id.includes('node_modules/react')) return 'vendor-react'
+        }
+      }
+    }
+  },
   server: {
     host: '0.0.0.0',
     port: 3000,

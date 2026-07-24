@@ -1,8 +1,8 @@
 from rest_framework import serializers
 from django.utils import timezone
 from django.contrib.auth.hashers import check_password
-from django.db.models import Value, Q, CharField, F
-from django.db.models.functions import Upper, Replace, Coalesce
+from django.db.models import Q, CharField, F, Value
+from django.db.models.functions import Coalesce
 import re
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.exceptions import AuthenticationFailed
@@ -142,24 +142,25 @@ def _find_pharmacy_for_reset(pharmacy_number: str, passport_id: str, phone_numbe
     return None
 
 
-def _find_patient_for_reset(passport_id: str, phone_number: str):
+def _find_patient_for_reset(phone_number: str):
     # Import here to avoid circular imports
     from apps.patients.models import Patient
 
-    normalized_passport_id = _normalize_compact_text(passport_id)
-    if not normalized_passport_id or not phone_number:
+    if not phone_number:
+        return None
+
+    tail = _normalize_phone_number(phone_number)
+    tail = tail[-9:] if len(tail) >= 9 else tail
+    if not tail:
         return None
 
     patient = (
         Patient.objects.select_related('user')
         .annotate(
-            national_norm=Replace(
-                Replace(Upper('national_id'), Value(' '), Value('')),
-                Value('\t'),
-                Value(''),
-            )
+            patient_phone_norm=Coalesce(F('phone_number'), Value('', output_field=CharField())),
+            user_phone_norm=Coalesce(F('user__phone_number'), Value('', output_field=CharField())),
         )
-        .filter(national_norm=normalized_passport_id)
+        .filter(Q(patient_phone_norm__endswith=tail) | Q(user_phone_norm__endswith=tail))
         .first()
     )
 
@@ -345,37 +346,30 @@ class PatientTokenObtainSerializer(serializers.Serializer):
 
 
 class PasswordResetRequestSerializer(serializers.Serializer):
-    passport_id = serializers.CharField()
     phone_number = serializers.CharField()
 
     def validate(self, attrs):
-        passport_id = str(attrs.get('passport_id') or '')
         phone_number = str(attrs.get('phone_number') or '')
 
-        if len(_normalize_compact_text(passport_id)) < 5:
-            raise serializers.ValidationError({'passport_id': 'Pasport ID noto\'g\'ri.'})
         if len(_normalize_phone_number(phone_number)) < 9:
             raise serializers.ValidationError({'phone_number': 'Telefon raqam noto\'g\'ri.'})
 
-        patient = _find_patient_for_reset(passport_id, phone_number)
+        patient = _find_patient_for_reset(phone_number)
         if not patient or not patient.user or not patient.user.is_active or patient.user.role != 'patient':
             raise serializers.ValidationError({'detail': "Kiritilgan ma'lumotlar bo'yicha bemor topilmadi."})
 
-        attrs['passport_id'] = _normalize_compact_text(passport_id)
         attrs['patient'] = patient
         attrs['user'] = patient.user
         return attrs
 
 
 class PasswordResetVerifySerializer(serializers.Serializer):
-    passport_id = serializers.CharField()
     phone_number = serializers.CharField()
     code = serializers.CharField()
 
     def validate(self, attrs):
         base = PasswordResetRequestSerializer(
             data={
-                'passport_id': attrs.get('passport_id'),
                 'phone_number': attrs.get('phone_number'),
             }
         )

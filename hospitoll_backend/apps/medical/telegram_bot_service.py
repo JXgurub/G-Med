@@ -1,6 +1,7 @@
 import logging
 import re
 import secrets
+from urllib.parse import unquote_plus
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -16,6 +17,7 @@ from django.utils import timezone
 from apps.doctors.models import Doctor, DoctorAvailability
 from apps.medical.models import Appointment, TelegramConversationState
 from apps.medical.schedule_utils import validate_doctor_booking_window
+from apps.patients.models import PatientDoctorRating
 from apps.users.models import ClinicResetTelegramSession, DoctorResetTelegramSession, PatientResetTelegramSession, PharmacyResetTelegramSession, PasswordResetCode
 
 logger = logging.getLogger(__name__)
@@ -104,7 +106,7 @@ class TelegramBotService:
             token = ""
             parts = text.split(maxsplit=1)
             if len(parts) == 2:
-                token = parts[1].strip()
+                token = self._normalize_start_token(parts[1])
             logger.info("Telegram /start received user_id=%s chat_id=%s token=%s", ctx.user_id, ctx.chat_id, 'present' if bool(token) else 'missing')
             self._handle_start(ctx, token)
             return
@@ -132,6 +134,10 @@ class TelegramBotService:
             self._handle_reschedule_datetime(ctx, state)
             return
 
+        if state and state.action == TelegramConversationState.Action.RATING_AWAITING_COMMENT:
+            self._handle_rating_comment(ctx, state)
+            return
+
         self._require_client().send_message(
             ctx.chat_id,
             "Buyruqlar:\n"
@@ -139,6 +145,124 @@ class TelegramBotService:
             "• /doctorlink <tel> <passport> <pinfl> — doktor akkauntni bog'lash\n"
             "Token bilan tasdiqlash uchun: /start &lt;telegram_token&gt;",
         )
+
+    def _normalize_start_token(self, raw_token: str) -> str:
+        token = unquote_plus(str(raw_token or '').strip())
+        if not token:
+            return ''
+
+        if 'start=' in token:
+            token = token.split('start=', 1)[1]
+
+        token = token.split('&', 1)[0].strip()
+        token = token.replace('`', '').replace('"', '').replace("'", '')
+        return token
+
+    def send_doctor_rating_prompt(self, appointment: Appointment) -> None:
+        chat_id = int(getattr(appointment, 'telegram_chat_id', 0) or 0)
+        if not chat_id:
+            return
+
+        doctor_name = appointment.doctor_name or (appointment.doctor.user.get_full_name() if appointment.doctor else 'Doktor')
+        text = (
+            "✅ Doktor sizni qabul qildi.\n\n"
+            f"Doktor {doctor_name} xizmatini baholang:\n"
+            "Quyidagi yulduzlardan birini tanlang."
+        )
+        rating_keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "1 ⭐", "callback_data": f"rate:{appointment.id}:1"},
+                    {"text": "2 ⭐", "callback_data": f"rate:{appointment.id}:2"},
+                    {"text": "3 ⭐", "callback_data": f"rate:{appointment.id}:3"},
+                    {"text": "4 ⭐", "callback_data": f"rate:{appointment.id}:4"},
+                    {"text": "5 ⭐", "callback_data": f"rate:{appointment.id}:5"},
+                ]
+            ]
+        }
+        self._require_client().send_message(chat_id, text, reply_markup=rating_keyboard)
+
+    def _submit_doctor_rating_from_bot(self, telegram_user_id: int, chat_id: int, appointment_id: str, score: int) -> None:
+        if score < 1 or score > 5:
+            self._require_client().send_message(chat_id, "Baho 1 dan 5 gacha bo'lishi kerak.")
+            return
+
+        appointment = (
+            Appointment.objects.select_related('doctor', 'patient', 'patient__user')
+            .filter(id=appointment_id)
+            .first()
+        )
+        if not appointment or appointment.telegram_user_id != telegram_user_id:
+            self._require_client().send_message(chat_id, "Randevu topilmadi yoki ruxsat yo‘q.")
+            return
+        if not appointment.doctor_id or not appointment.patient_id:
+            self._require_client().send_message(chat_id, "Baholash uchun doktor yoki bemor ma'lumoti topilmadi.")
+            return
+
+        PatientDoctorRating.objects.update_or_create(
+            doctor_id=appointment.doctor_id,
+            patient_id=appointment.patient_id,
+            defaults={
+                'rating': score,
+                'comment': '',
+                'is_anonymous': False,
+            },
+        )
+
+        TelegramConversationState.objects.filter(
+            telegram_user_id=telegram_user_id,
+            action=TelegramConversationState.Action.RATING_AWAITING_COMMENT,
+        ).delete()
+        TelegramConversationState.objects.create(
+            telegram_user_id=telegram_user_id,
+            appointment=appointment,
+            action=TelegramConversationState.Action.RATING_AWAITING_COMMENT,
+            expires_at=timezone.now() + timedelta(minutes=10),
+        )
+
+        doctor_name = appointment.doctor_name or (appointment.doctor.user.get_full_name() if appointment.doctor else 'Doktor')
+        stars = '⭐' * score
+        self._require_client().send_message(
+            chat_id,
+            (
+                f"Rahmat! Siz {doctor_name} uchun {stars} baho berdingiz.\n\n"
+                "Agar xohlasangiz, doktorga qisqa izoh yozib yuboring.\n"
+                "Yoki o'tkazib yuborish uchun pastdagi tugmani bosing."
+            ),
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {"text": "Izohsiz yakunlash", "callback_data": f"skipratecomment:{appointment.id}"},
+                    ]
+                ]
+            },
+        )
+
+    def _handle_rating_comment(self, ctx: TelegramMessageContext, state: TelegramConversationState) -> None:
+        appointment = getattr(state, 'appointment', None)
+        if not appointment or state.is_expired:
+            state.delete()
+            self._require_client().send_message(ctx.chat_id, "Izoh yozish vaqti tugadi. Kerak bo'lsa qayta baho bering.")
+            return
+
+        comment = str(ctx.text or '').strip()
+        if not comment:
+            self._require_client().send_message(ctx.chat_id, "Izoh bo'sh bo'lmasin yoki o'tkazib yuborish tugmasini bosing.")
+            return
+
+        rating = PatientDoctorRating.objects.filter(
+            doctor_id=appointment.doctor_id,
+            patient_id=appointment.patient_id,
+        ).first()
+        if not rating:
+            state.delete()
+            self._require_client().send_message(ctx.chat_id, "Avval baho qo'ying, keyin izoh yuboring.")
+            return
+
+        rating.comment = comment
+        rating.save(update_fields=['comment'])
+        state.delete()
+        self._require_client().send_message(ctx.chat_id, "Izohingiz saqlandi. Rahmat! 💚")
 
     def _handle_doctor_link(self, ctx: TelegramMessageContext) -> None:
         parts = ctx.text.split(maxsplit=3)
@@ -425,14 +549,13 @@ class TelegramBotService:
 
         patient_name = session.user.get_full_name() or session.user.email
         patient_phone = (session.patient.phone_number or session.user.phone_number or '').strip() or "-"
-        passport = (session.patient.national_id or '').strip() or "-"
 
         self._require_client().send_message(
             ctx.chat_id,
             "✅ Bemor reset token ulandi.\n"
             f"👤 Bemor: {patient_name}\n"
             f"📱 Tel: {patient_phone}\n"
-            f"🪪 Passport: {passport}\n\n"
+            "\n"
             "Eslatma: bu bot sizga 1 soat davomida yordam beradi.",
         )
         self._require_client().send_message(
@@ -523,12 +646,15 @@ class TelegramBotService:
             doctor_name = appt.doctor_name or (appt.doctor.user.get_full_name() if appt.doctor else "Doktor")
             clinic_name = appt.clinic_name or (appt.clinic.name if appt.clinic else "Klinika")
             short_id = str(appt.id)[:8]
+            queue_position = int(getattr(appt, 'queue_position', 0) or 0)
+            ahead_count = max(queue_position - 1, 0)
             if appt.status == Appointment.Status.IN_PROGRESS:
                 lines.append(f"• ✅ <b>Doktor qabul qilgan</b> — {clinic_name} — {doctor_name} (#{short_id})")
             elif appt.status == Appointment.Status.COMPLETED:
                 lines.append(f"• ✅ <b>Qabul yakunlangan</b> — {clinic_name} — {doctor_name} (#{short_id})")
             else:
                 lines.append(f"• <b>{when}</b> — {clinic_name} — {doctor_name} (#{short_id})")
+                lines.append(f"   Oldinda: {ahead_count} ta odam")
 
             # After doctor starts/finishes the visit, patient cannot manage queue/time from bot.
             if appt.status not in [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]:
@@ -562,6 +688,36 @@ class TelegramBotService:
 
         client = self._require_client()
         try:
+            if data.startswith('rate:'):
+                parts = data.split(':', 2)
+                if len(parts) != 3:
+                    client.answer_callback_query(callback_id, "Noto‘g‘ri format")
+                    return
+                appt_id = parts[1]
+                try:
+                    score = int(parts[2])
+                except ValueError:
+                    client.answer_callback_query(callback_id, "Baho noto‘g‘ri")
+                    return
+                self._submit_doctor_rating_from_bot(user_id, chat_id, appt_id, score)
+                client.answer_callback_query(callback_id, "Baho saqlandi")
+                return
+
+            if data.startswith('skipratecomment:'):
+                appt_id = data.split(':', 1)[1]
+                appt = Appointment.objects.filter(id=appt_id).only('id', 'telegram_user_id').first()
+                if not appt or appt.telegram_user_id != user_id:
+                    client.answer_callback_query(callback_id, "Ruxsat yo‘q")
+                    return
+                TelegramConversationState.objects.filter(
+                    telegram_user_id=user_id,
+                    appointment_id=appt_id,
+                    action=TelegramConversationState.Action.RATING_AWAITING_COMMENT,
+                ).delete()
+                self._require_client().send_message(chat_id, "Baholash yakunlandi. Rahmat! 💚")
+                client.answer_callback_query(callback_id, "Yakunlandi")
+                return
+
             if data.startswith('resday:'):
                 parts = data.split(':', 2)
                 if len(parts) != 3:
@@ -779,6 +935,7 @@ class TelegramBotService:
                             'chat_id': int(item.telegram_chat_id) if item.telegram_chat_id else None,
                             'old_dt': current_local,
                             'new_dt': new_local,
+                            'new_position': int(item.queue_position or 0),
                         }
                     )
 
@@ -788,6 +945,47 @@ class TelegramBotService:
         self._require_client().send_message(chat_id, "✅ Qabulga borishingiz tasdiqlandi.")
 
         skip_threshold = timezone.now() - timedelta(minutes=10)
+        two_left_target_ids = [
+            rec['id']
+            for rec in queue_updates
+            if rec.get('chat_id') and int(rec.get('new_position') or 0) == 3 and (confirmed_id is None or rec['id'] != confirmed_id)
+        ]
+        one_left_target_ids = [
+            rec['id']
+            for rec in queue_updates
+            if rec.get('chat_id') and int(rec.get('new_position') or 0) == 2 and (confirmed_id is None or rec['id'] != confirmed_id)
+        ]
+        notifiable_two_left_ids: set[str] = set()
+        notifiable_one_left_ids: set[str] = set()
+        if two_left_target_ids:
+            notifiable_two_left_ids = {
+                str(item_id)
+                for item_id in Appointment.objects.filter(
+                    id__in=two_left_target_ids,
+                    telegram_two_left_notified_at__isnull=True,
+                    status__in=[
+                        Appointment.Status.SCHEDULED,
+                        Appointment.Status.CONFIRMED,
+                        Appointment.Status.WAITING,
+                        Appointment.Status.IN_PROGRESS,
+                    ],
+                ).values_list('id', flat=True)
+            }
+        if one_left_target_ids:
+            notifiable_one_left_ids = {
+                str(item_id)
+                for item_id in Appointment.objects.filter(
+                    id__in=one_left_target_ids,
+                    telegram_one_left_notified_at__isnull=True,
+                    status__in=[
+                        Appointment.Status.SCHEDULED,
+                        Appointment.Status.CONFIRMED,
+                        Appointment.Status.WAITING,
+                        Appointment.Status.IN_PROGRESS,
+                    ],
+                ).values_list('id', flat=True)
+            }
+
         for rec in queue_updates:
             if not rec.get('chat_id'):
                 continue
@@ -800,13 +998,22 @@ class TelegramBotService:
                 if recent_confirm:
                     continue
 
-            self._require_client().send_message(
-                rec['chat_id'],
-                "⏱️ Navbat vaqtingiz yangilandi.\n"
-                f"Eski vaqt: {rec['old_dt'].strftime('%d.%m.%Y %H:%M')}\n"
-                f"Yangi vaqt: {rec['new_dt'].strftime('%d.%m.%Y %H:%M')}\n"
-                "Sabab: navbat oldinga surildi.",
-            )
+            if rec.get('id') in notifiable_two_left_ids and int(rec.get('new_position') or 0) == 3:
+                self._require_client().send_message(
+                    rec['chat_id'],
+                    "🔔 Navbatingiz yaqinlashdi!\n"
+                    "Oldingizda faqat 2 ta odam qoldi.\n"
+                    f"🕒 Taxminiy vaqt: {rec['new_dt'].strftime('%d.%m.%Y %H:%M')}",
+                )
+                Appointment.objects.filter(id=rec['id']).update(telegram_two_left_notified_at=timezone.now())
+            elif rec.get('id') in notifiable_one_left_ids and int(rec.get('new_position') or 0) == 2:
+                self._require_client().send_message(
+                    rec['chat_id'],
+                    "🔔 Navbatingiz juda yaqinlashdi!\n"
+                    "Oldingizda faqat 1 ta bemor bor.\n"
+                    f"🕒 Taxminiy vaqt: {rec['new_dt'].strftime('%d.%m.%Y %H:%M')}",
+                )
+                Appointment.objects.filter(id=rec['id']).update(telegram_one_left_notified_at=timezone.now())
 
     def _start_reschedule_flow(self, telegram_user_id: int, chat_id: int, appointment_id: str) -> None:
         appt = Appointment.objects.filter(id=appointment_id, telegram_user_id=telegram_user_id).first()

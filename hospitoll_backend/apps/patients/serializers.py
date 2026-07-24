@@ -1,8 +1,5 @@
 from rest_framework import serializers
 from django.db import transaction
-from django.db.models import Value
-from django.db.models.functions import Upper, Replace
-import re
 from uuid import uuid4
 
 from apps.users.models import CustomUser
@@ -24,7 +21,6 @@ class PatientSerializer(serializers.ModelSerializer):
             'birth_year',
             'age',
             'blood_type',
-            'national_id',
             'insurance_id',
             'phone_number',
             'address',
@@ -66,7 +62,6 @@ class PatientCreateSerializer(serializers.ModelSerializer):
             'birth_year',
             'age',
             'blood_type',
-            'national_id',
             'insurance_id',
             'address',
             'city',
@@ -90,30 +85,6 @@ class PatientCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Bu email allaqachon ro'yxatdan o'tgan.")
         return value
 
-    def validate_national_id(self, value):
-        if value is None:
-            return value
-
-        normalized = re.sub(r"\s+", "", str(value).strip().upper())
-        if not normalized:
-            return None
-
-        # Prevent duplicates even if stored with different casing/whitespace.
-        if (
-            Patient.objects.annotate(
-                national_norm=Replace(
-                    Replace(Upper('national_id'), Value(' '), Value('')),
-                    Value('\t'),
-                    Value(''),
-                )
-            )
-            .filter(national_norm=normalized)
-            .exists()
-        ):
-            raise serializers.ValidationError("Bu passport ID ro'yxatdan o'tgan.")
-
-        return normalized
-
     @transaction.atomic
     def create(self, validated_data):
         email = (validated_data.pop('email') or '').strip()
@@ -123,10 +94,6 @@ class PatientCreateSerializer(serializers.ModelSerializer):
         first_name = validated_data.pop('first_name')
         last_name = validated_data.pop('last_name')
         phone_number = validated_data.pop('phone_number', '')
-
-        # Ensure we store normalized passport ID.
-        if 'national_id' in validated_data and validated_data['national_id']:
-            validated_data['national_id'] = re.sub(r"\s+", "", str(validated_data['national_id']).strip().upper())
 
         user = CustomUser.objects.create_user(
             username=email,

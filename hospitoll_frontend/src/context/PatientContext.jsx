@@ -14,7 +14,6 @@ const parseMedicationList = (value) => {
 const mapPatientProfile = (patient, user) => {
   return {
     id: patient.id,
-    passportId: patient.national_id || '',
     fullName: user.full_name || `${user.first_name} ${user.last_name}`.trim(),
     birthDate: patient.date_of_birth || '',
     birthYear: patient.birth_year || '',

@@ -11,7 +11,7 @@ from rest_framework.test import APITestCase
 from apps.users.models import CustomUser
 from apps.clinics.models import Clinic
 from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, Specialization, DoctorSpecialization, DoctorEmployment
-from apps.patients.models import Patient
+from apps.patients.models import Patient, PatientDoctorRating
 from apps.medical.models import Appointment, MedicalRecord
 from apps.medical.telegram_bot_service import TelegramBotService
 
@@ -34,6 +34,195 @@ def queue_reference_now():
     if now.hour >= 23:
         return now - timedelta(hours=1)
     return now
+
+
+class NotifyReadyDoctorRatingTests(MedicalApiTestCase):
+    def setUp(self):
+        self.owner_user = CustomUser.objects.create_user(
+            username='clinic_owner_rating',
+            email='clinic.rating@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='Owner',
+        )
+        self.clinic = Clinic.objects.create(
+            owner=self.owner_user,
+            name='Rating Clinic',
+            slug='rating-clinic',
+            address='Rating address',
+            phone_number='+998901111111',
+            email='rating@test.uz',
+            registration_number='REG-RATING-001',
+            status='active',
+        )
+
+        self.doctor_user = CustomUser.objects.create_user(
+            username='doctor_rating_user',
+            email='doctor.rating@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Rate',
+            last_name='Doctor',
+        )
+        self.doctor = Doctor.objects.create(
+            user=self.doctor_user,
+            clinic=self.clinic,
+            license_number='LIC-RATING-001',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+        )
+
+        self.patient_user = CustomUser.objects.create_user(
+            username='patient_rating_user',
+            email='patient.rating@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Rate',
+            last_name='Patient',
+        )
+        self.patient = Patient.objects.create(user=self.patient_user)
+        self.appointment = Appointment.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=1,
+            scheduled_date=timezone.now() + timedelta(minutes=15),
+            duration_minutes=30,
+            telegram_user_id=991001,
+            telegram_chat_id=991001,
+        )
+
+    def test_notify_ready_sends_rating_buttons(self):
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        self.auth_as(self.doctor_user)
+        url = reverse('appointment-notify-ready', args=[self.appointment.id])
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            response = self.client.post(url, {}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn('xizmatini baholang', sent_messages[0]['text'])
+        keyboard = sent_messages[0]['reply_markup']['inline_keyboard']
+        self.assertEqual(len(keyboard[0]), 5)
+        self.assertEqual(keyboard[0][4]['callback_data'], f'rate:{self.appointment.id}:5')
+
+    def test_rating_callback_updates_doctor_rating(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: sent_messages.append({'callback': kwargs.get('text') or (args[1] if len(args) > 1 else '')}),
+        )
+
+        service._handle_callback_query({
+            'id': 'cb-rate-1',
+            'data': f'rate:{self.appointment.id}:5',
+            'from': {'id': 991001},
+            'message': {'chat': {'id': 991001}},
+        })
+
+        rating = PatientDoctorRating.objects.get(doctor=self.doctor, patient=self.patient)
+        self.assertEqual(rating.rating, 5)
+        self.doctor.refresh_from_db()
+        self.assertEqual(float(self.doctor.rating), 5.0)
+        self.assertEqual(int(self.doctor.total_ratings), 1)
+        self.assertTrue(any('5' in item.get('text', '') or '⭐⭐⭐⭐⭐' in item.get('text', '') for item in sent_messages if 'text' in item))
+
+    def test_rating_callback_allows_followup_comment(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service._handle_callback_query({
+            'id': 'cb-rate-2',
+            'data': f'rate:{self.appointment.id}:4',
+            'from': {'id': 991001},
+            'message': {'chat': {'id': 991001}},
+        })
+
+        state = self.appointment.telegram_states.get(action='rating_awaiting_comment')
+        self.assertFalse(state.is_expired)
+        self.assertTrue(any('Izohsiz yakunlash' in str(item.get('reply_markup', {})) for item in sent_messages))
+
+        service.handle_update({
+            'message': {
+                'from': {'id': 991001},
+                'chat': {'id': 991001},
+                'text': 'Juda yaxshi xizmat',
+            }
+        })
+
+        rating = PatientDoctorRating.objects.get(doctor=self.doctor, patient=self.patient)
+        self.assertEqual(rating.rating, 4)
+        self.assertEqual(rating.comment, 'Juda yaxshi xizmat')
+        self.assertFalse(self.appointment.telegram_states.filter(action='rating_awaiting_comment').exists())
+
+    def test_rating_comment_can_be_skipped(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service._handle_callback_query({
+            'id': 'cb-rate-3',
+            'data': f'rate:{self.appointment.id}:3',
+            'from': {'id': 991001},
+            'message': {'chat': {'id': 991001}},
+        })
+        self.assertTrue(self.appointment.telegram_states.filter(action='rating_awaiting_comment').exists())
+
+        service._handle_callback_query({
+            'id': 'cb-rate-skip',
+            'data': f'skipratecomment:{self.appointment.id}',
+            'from': {'id': 991001},
+            'message': {'chat': {'id': 991001}},
+        })
+
+        rating = PatientDoctorRating.objects.get(doctor=self.doctor, patient=self.patient)
+        self.assertEqual(rating.rating, 3)
+        self.assertEqual(rating.comment, '')
+        self.assertFalse(self.appointment.telegram_states.filter(action='rating_awaiting_comment').exists())
+
+    def test_today_endpoint_excludes_in_progress_appointments(self):
+        self.appointment.status = Appointment.Status.IN_PROGRESS
+        self.appointment.save(update_fields=['status', 'updated_at'])
+
+        waiting_appointment = Appointment.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=timezone.now() + timedelta(minutes=45),
+            duration_minutes=30,
+        )
+
+        self.auth_as(self.doctor_user)
+        response = self.client.get(reverse('appointment-today'))
+
+        self.assertEqual(response.status_code, 200)
+        returned_ids = [item['id'] for item in self.body(response)]
+        self.assertNotIn(str(self.appointment.id), returned_ids)
+        self.assertIn(str(waiting_appointment.id), returned_ids)
 
 
 class DoctorDashboardStatsTests(MedicalApiTestCase):
@@ -82,7 +271,6 @@ class DoctorDashboardStatsTests(MedicalApiTestCase):
         )
         self.patient = Patient.objects.create(
             user=self.patient_user,
-            national_id='AA1234567',
         )
 
         self.auth_as(self.doctor_user)
@@ -350,7 +538,6 @@ class MonthlyStatsHistoryTests(MedicalApiTestCase):
         )
         self.patient = Patient.objects.create(
             user=self.patient_user,
-            national_id='MM1234567',
         )
 
         self.auth_as(self.owner_user)
@@ -488,7 +675,6 @@ class ClinicDoctorStatsAuditTests(MedicalApiTestCase):
         )
         self.patient = Patient.objects.create(
             user=self.patient_user,
-            national_id='AU1234567',
         )
 
         now = timezone.localtime().replace(second=0, microsecond=0)
@@ -603,7 +789,6 @@ class ClinicDashboardStatsTests(MedicalApiTestCase):
         )
         self.patient = Patient.objects.create(
             user=self.patient_user,
-            national_id='DS1234567',
         )
 
         now = timezone.localtime()
@@ -758,7 +943,6 @@ class MedicalRecordAutoAppointmentTests(MedicalApiTestCase):
         )
         self.patient = Patient.objects.create(
             user=self.patient_user,
-            national_id='RA1234567',
         )
 
         self.url = reverse('medical-record-list')
@@ -899,7 +1083,6 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'slot_id': str(slot.id),
             'first_name': 'Ali',
             'last_name': 'Valiyev',
-            'passport_id': 'AA7000001',
             'phone_number': '+998901111000',
         }, format='json')
 
@@ -924,7 +1107,6 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'slot_id': str(slot.id),
             'first_name': 'Ali',
             'last_name': 'Valiyev',
-            'passport_id': 'AA1234567',
             'phone_number': '+998901111111',
         }, format='json')
 
@@ -958,7 +1140,6 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'slot_id': str(slot.id),
             'first_name': 'Ali',
             'last_name': 'Valiyev',
-            'passport_id': 'AA7654321',
             'phone_number': '+998901111112',
         }, format='json')
 
@@ -996,7 +1177,6 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'slot_id': str(slot.id),
             'first_name': 'Ali',
             'last_name': 'Valiyev',
-            'passport_id': 'AA7654399',
             'phone_number': '+998901111119',
         }, format='json')
 
@@ -1024,7 +1204,6 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'slot_id': str(slot.id),
             'first_name': 'Ali',
             'last_name': 'Valiyev',
-            'passport_id': 'AA7654301',
             'phone_number': '+998901111101',
         }, format='json')
 
@@ -1067,7 +1246,6 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'slot_id': str(slot.id),
             'first_name': 'Ali',
             'last_name': 'Valiyev',
-            'passport_id': 'AA7654302',
             'phone_number': '+998901111102',
         }, format='json')
 
@@ -1104,7 +1282,6 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'slot_id': str(slot.id),
             'first_name': 'Ali',
             'last_name': 'Valiyev',
-            'passport_id': 'AA7654303',
             'phone_number': '+998901111103',
         }, format='json')
 
@@ -1191,7 +1368,7 @@ class QueueDecisionTests(MedicalApiTestCase):
             first_name='Queue',
             last_name='One',
         )
-        self.patient1 = Patient.objects.create(user=self.patient1_user, national_id='CC1234567')
+        self.patient1 = Patient.objects.create(user=self.patient1_user)
 
         self.patient2_user = CustomUser.objects.create_user(
             username='patient_queue_2',
@@ -1201,7 +1378,7 @@ class QueueDecisionTests(MedicalApiTestCase):
             first_name='Queue',
             last_name='Two',
         )
-        self.patient2 = Patient.objects.create(user=self.patient2_user, national_id='DD1234567')
+        self.patient2 = Patient.objects.create(user=self.patient2_user)
 
         now = safe_queue_base_now()
         self.appt1 = Appointment.objects.create(
@@ -1398,7 +1575,7 @@ class QueueDecisionTests(MedicalApiTestCase):
             first_name='Queue',
             last_name='Three',
         )
-        self.patient3 = Patient.objects.create(user=self.patient3_user, national_id='EE1234567')
+        self.patient3 = Patient.objects.create(user=self.patient3_user)
 
         old_appt2_dt = self.appt2.scheduled_date
         self.appt3 = Appointment.objects.create(
@@ -1445,8 +1622,9 @@ class QueueDecisionTests(MedicalApiTestCase):
 
         chat_ids = [entry['chat_id'] for entry in sent_messages]
         self.assertIn(100001, chat_ids)
-        self.assertIn(100002, chat_ids)
         self.assertIn(100003, chat_ids)
+        self.assertNotIn(100002, chat_ids)
+        self.assertTrue(any(entry['chat_id'] == 100003 and 'Oldingizda faqat 1 ta bemor bor' in entry['text'] for entry in sent_messages))
 
 
 class TelegramRescheduleDayButtonsTests(MedicalApiTestCase):
@@ -1500,7 +1678,6 @@ class TelegramRescheduleDayButtonsTests(MedicalApiTestCase):
         )
         patient = Patient.objects.create(
             user=patient_user,
-            national_id='BB1234567',
         )
 
         self.telegram_user_id = 900001
@@ -1606,7 +1783,7 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
             first_name='Arrive',
             last_name='One',
         )
-        self.patient1 = Patient.objects.create(user=self.patient1_user, national_id='FF1234567')
+        self.patient1 = Patient.objects.create(user=self.patient1_user)
 
         self.patient2_user = CustomUser.objects.create_user(
             username='patient_arrive_2',
@@ -1616,7 +1793,7 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
             first_name='Arrive',
             last_name='Two',
         )
-        self.patient2 = Patient.objects.create(user=self.patient2_user, national_id='GG1234567')
+        self.patient2 = Patient.objects.create(user=self.patient2_user)
 
         self.patient3_user = CustomUser.objects.create_user(
             username='patient_arrive_3',
@@ -1626,7 +1803,7 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
             first_name='Arrive',
             last_name='Three',
         )
-        self.patient3 = Patient.objects.create(user=self.patient3_user, national_id='HH1234567')
+        self.patient3 = Patient.objects.create(user=self.patient3_user)
 
         now = safe_queue_base_now()
         self.appt1 = Appointment.objects.create(
@@ -1706,8 +1883,8 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
         self.assertTrue(any('Qabulga borishingiz tasdiqlandi' in text for text in own_texts))
         self.assertFalse(any('Navbat vaqtingiz yangilandi' in text for text in own_texts))
 
-        self.assertTrue(any(m['chat_id'] == 910002 and 'Navbat vaqtingiz yangilandi' in m['text'] for m in sent_messages))
-        self.assertTrue(any(m['chat_id'] == 910003 and 'Navbat vaqtingiz yangilandi' in m['text'] for m in sent_messages))
+        self.assertTrue(any(m['chat_id'] == 910002 and 'Oldingizda faqat 1 ta bemor bor' in m['text'] for m in sent_messages))
+        self.assertTrue(any(m['chat_id'] == 910003 and 'Oldingizda faqat 2 ta odam qoldi' in m['text'] for m in sent_messages))
 
     def test_arrive_recalculates_and_notifies_even_when_selected_is_in_progress(self):
         self.doctor.slot_minutes = 30
@@ -1748,8 +1925,8 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
 
         own_texts = [m['text'] for m in sent_messages if m['chat_id'] == 910001]
         self.assertFalse(any('Navbat vaqtingiz yangilandi' in text for text in own_texts))
-        self.assertTrue(any(m['chat_id'] == 910002 and 'Navbat vaqtingiz yangilandi' in m['text'] for m in sent_messages))
-        self.assertTrue(any(m['chat_id'] == 910003 and 'Navbat vaqtingiz yangilandi' in m['text'] for m in sent_messages))
+        self.assertTrue(any(m['chat_id'] == 910002 and 'Oldingizda faqat 1 ta bemor bor' in m['text'] for m in sent_messages))
+        self.assertTrue(any(m['chat_id'] == 910003 and 'Oldingizda faqat 2 ta odam qoldi' in m['text'] for m in sent_messages))
 
     def test_arrive_shifts_only_following_patients(self):
         now = safe_queue_base_now()
@@ -1773,7 +1950,7 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
             first_name='Arrive',
             last_name='Zero',
         )
-        patient0 = Patient.objects.create(user=patient0_user, national_id='ZZ1234567')
+        patient0 = Patient.objects.create(user=patient0_user)
         appt0 = Appointment.objects.create(
             patient=patient0,
             doctor=self.doctor,

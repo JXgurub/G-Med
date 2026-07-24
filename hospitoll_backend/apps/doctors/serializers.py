@@ -573,18 +573,6 @@ class DoctorCreateSerializer(serializers.ModelSerializer):
         if value is None:
             return None
         normalized = re.sub(r"\s+", "", str(value).strip().upper())
-        if normalized and (
-            Patient.objects.annotate(
-                national_norm=Replace(
-                    Replace(Upper('national_id'), Value(' '), Value('')),
-                    Value('\t'),
-                    Value(''),
-                )
-            )
-            .filter(national_norm=normalized)
-            .exists()
-        ):
-            raise serializers.ValidationError("Bu pasport/ID bazadagi boshqa odamga tegishli.")
         return normalized or None
 
     def _find_existing_doctors_by_identity(self, pinfl, passport_id):

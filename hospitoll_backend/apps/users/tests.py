@@ -339,7 +339,6 @@ class PatientPasswordResetFlowTests(APITestCase):
         )
         self.patient = Patient.objects.create(
             user=self.user,
-            national_id='AA9988776',
             phone_number='+998901234560',
             is_active=True,
         )
@@ -350,7 +349,6 @@ class PatientPasswordResetFlowTests(APITestCase):
         response = self.client.post(
             url,
             {
-                'passport_id': 'AA9988776',
                 'phone_number': '+998901234560',
             },
             format='json',
@@ -392,7 +390,6 @@ class PatientPasswordResetFlowTests(APITestCase):
             response = self.client.post(
                 url,
                 {
-                    'passport_id': 'AA9988776',
                     'phone_number': '+998901234560',
                 },
                 format='json',
@@ -416,7 +413,6 @@ class PatientPasswordResetFlowTests(APITestCase):
             request_res = self.client.post(
                 request_url,
                 {
-                    'passport_id': 'AA9988776',
                     'phone_number': '+998901234560',
                 },
                 format='json',
@@ -430,7 +426,6 @@ class PatientPasswordResetFlowTests(APITestCase):
         verify_res = self.client.post(
             verify_url,
             {
-                'passport_id': 'AA9988776',
                 'phone_number': '+998901234560',
                 'code': code,
             },

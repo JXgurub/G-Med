@@ -111,7 +111,6 @@ const buildPatientHistory = (records, patients, doctor) => {
         id: patient.id,
         fullName: fullName || 'Bemor',
         phone: patient.phone_number || patient.user?.phone_number || '',
-        passportId: patient.national_id || '',
         gender: patient.gender || '',
         dateOfBirth: patient.date_of_birth || null,
         age: storedAge || calcAgeFromDob(patient.date_of_birth),
@@ -258,7 +257,7 @@ export const DoctorProvider = ({ children }) => {
     try {
       // Backend provides a dedicated endpoint for today's queue
       const items = await medicalApi.getTodaysAppointments()
-      const excludedStatuses = new Set(['pending_telegram_confirmation', 'cancelled', 'completed', 'no_show'])
+      const excludedStatuses = new Set(['pending_telegram_confirmation', 'cancelled', 'completed', 'no_show', 'in_progress'])
       const todays = (items || []).filter((item) => !excludedStatuses.has(item.status))
       const patientIds = [...new Set(todays.map((item) => item.patient))]
       const patientMap = {}
@@ -270,11 +269,10 @@ export const DoctorProvider = ({ children }) => {
             : 'Bemor'
           patientMap[id] = {
             fullName: fullName || 'Bemor',
-            passportId: patient.national_id || '',
             phone: patient.user?.phone_number || patient.phone_number || ''
           }
         } catch (error) {
-          patientMap[id] = { fullName: 'Bemor', passportId: '', phone: '' }
+          patientMap[id] = { fullName: 'Bemor', phone: '' }
         }
       }))
 
@@ -296,7 +294,7 @@ export const DoctorProvider = ({ children }) => {
         })
         .map((item) => ({
         ...item,
-        patient_info: patientMap[item.patient] || item.patient_info || { fullName: 'Bemor', passportId: '', phone: '' }
+        patient_info: patientMap[item.patient] || item.patient_info || { fullName: 'Bemor', phone: '' }
       }))
       setOnlineAppointments(mapped)
       await loadDoctorDashboardStats()
@@ -520,7 +518,6 @@ export const DoctorProvider = ({ children }) => {
         first_name: firstName || 'Bemor',
         last_name: normalizedLastName,
         phone_number: patientInfo.phone,
-        national_id: normalizePassportId(patientInfo.passportId),
         city: patientInfo.city || '',
         address: patientInfo.address || ''
       }
@@ -552,12 +549,8 @@ export const DoctorProvider = ({ children }) => {
       setPatientHistory(buildPatientHistory(updatedRecords, updatedPatients, doctor))
       return record
     } catch (error) {
-      // Check for duplicate patient error
       if (error?.response?.status === 400) {
         const errorData = error.response.data
-        if (errorData?.national_id) {
-          throw new Error(`Bu passport ID'li bemor allaqachon ro'yxatdan o'tgan. Qidiruv funksiyasidan topib, ularni tanlang.`)
-        }
         if (errorData?.email) {
           throw new Error(`Bu email allaqachon ishlatilib bo'lgan.`)
         }
@@ -595,15 +588,13 @@ export const DoctorProvider = ({ children }) => {
   const searchPatientByPassport = (passportId) => {
     if (!passportId || passportId.trim() === '') return []
     const searchTerm = String(passportId).toLowerCase().trim()
-    const passportSearch = normalizePassportId(passportId)
     const phoneSearch = normalizePhone(passportId)
 
     return Object.values(patientHistory)
       .filter((p) => {
-        const passportMatch = p.passportId && normalizePassportId(p.passportId).includes(passportSearch)
         const nameMatch = p.fullName && p.fullName.toLowerCase().includes(searchTerm)
         const phoneMatch = p.phone && normalizePhone(p.phone).includes(phoneSearch)
-        return passportMatch || nameMatch || phoneMatch
+        return nameMatch || phoneMatch
       })
       .sort((a, b) => b.addedAt - a.addedAt)
   }
@@ -611,8 +602,7 @@ export const DoctorProvider = ({ children }) => {
   const searchPatientInDatabase = async (passportId) => {
     if (!passportId || passportId.trim() === '') return []
     try {
-      const nationalId = normalizePassportId(passportId)
-      const allPatients = await patientsApi.getAll({ national_id: nationalId })
+      const allPatients = await patientsApi.getAll({ q: passportId.trim() })
       const results = allPatients?.results || allPatients || []
       
       // Map the API response to match our patient format
@@ -624,7 +614,6 @@ export const DoctorProvider = ({ children }) => {
         return {
           id: p.id,
           fullName: fullName || 'Bemor',
-          passportId: p.national_id || '',
           phone: p.user?.phone_number || p.phone_number || '',
           age: normalizeAge(p.age) || calcAgeFromDob(p.date_of_birth),
           gender: p.gender || '',

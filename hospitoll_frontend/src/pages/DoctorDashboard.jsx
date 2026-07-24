@@ -8,11 +8,6 @@ import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './DoctorDashboard.css'
 
-const normalizePassportId = (value) => {
-  if (value === null || value === undefined) return ''
-  return String(value).replace(/\s+/g, '').trim().toUpperCase()
-}
-
 const FIRST_WORK_YEAR_MIN = 1950
 
 const formatBirthDateLabel = (dateValue) => {
@@ -93,13 +88,6 @@ const createInitialNewVisitForm = () => ({
   medicines: ''
 })
 
-const createInitialPasswordModal = () => ({
-  open: false,
-  patientId: null,
-  patientName: '',
-  appointmentId: null
-})
-
 const createInitialQueueCancelConfirm = () => ({
   open: false,
   appointment: null,
@@ -110,7 +98,6 @@ const DEFAULT_PHONE_PREFIX = '+998'
 const createInitialPatientForm = () => ({
   fullName: '',
   phone: DEFAULT_PHONE_PREFIX,
-  passportId: '',
   complaint: '',
   diagnosis: '',
   medicines: '',
@@ -166,9 +153,6 @@ const DoctorDashboard = () => {
   const [priceInputClearedOnFocus, setPriceInputClearedOnFocus] = useState({})
   const [newVisitForm, setNewVisitForm] = useState(createInitialNewVisitForm)
   const [showNewVisitForm, setShowNewVisitForm] = useState(false)
-  const [passwordModal, setPasswordModal] = useState(createInitialPasswordModal)
-  const [newPassword, setNewPassword] = useState('')
-  const [passwordSaving, setPasswordSaving] = useState(false)
   const [queueDecisionLoading, setQueueDecisionLoading] = useState({})
   const [queueCancelConfirm, setQueueCancelConfirm] = useState(createInitialQueueCancelConfirm)
   const [selectedAvatarFile, setSelectedAvatarFile] = useState(null)
@@ -193,8 +177,20 @@ const DoctorDashboard = () => {
   })
   const avatarFileInputRef = useRef(null)
   const avatarActionWrapRef = useRef(null)
+  const noticeTimerRef = useRef(null)
   const [patientForm, setPatientForm] = useState(createInitialPatientForm)
+  const [notice, setNotice] = useState({ open: false, type: 'info', text: '' })
   const currentYear = new Date().getFullYear()
+
+  const showNotice = (text, type = 'info') => {
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current)
+    }
+    setNotice({ open: true, type, text: String(text || '') })
+    noticeTimerRef.current = window.setTimeout(() => {
+      setNotice((prev) => ({ ...prev, open: false }))
+    }, 2800)
+  }
 
   const [staffInbox, setStaffInbox] = useState([])
   const [staffInboxLoading, setStaffInboxLoading] = useState(false)
@@ -302,6 +298,14 @@ const DoctorDashboard = () => {
     return () => document.removeEventListener('keydown', handleEscape)
   }, [queueCancelConfirm.open])
 
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        window.clearTimeout(noticeTimerRef.current)
+      }
+    }
+  }, [])
+
   if (loading) {
     return <div style={{ padding: '20px', textAlign: 'center' }}>Yuklanyapti...</div>
   }
@@ -312,12 +316,12 @@ const DoctorDashboard = () => {
 
   const handleCheckIn = async () => {
     await checkInDoctor()
-    alert('Ishga keldiniz! ✅')
+    showNotice('Ishga keldiniz! ✅', 'success')
   }
 
   const handleCheckOut = async () => {
     await checkOutDoctor()
-    alert('Ishdan chiqib ketdingiz! 👋')
+    showNotice('Ishdan chiqib ketdingiz! 👋', 'success')
   }
 
   const formatPrice = (value) => {
@@ -348,7 +352,7 @@ const DoctorDashboard = () => {
     const rawValue = String(priceInputs[specialtyPriceId] ?? '').trim()
     const newPrice = parseCurrencyInput(rawValue)
     if (!rawValue || !Number.isFinite(newPrice) || newPrice < 0) {
-      alert('Iltimos, to\'g\'ri narx kiriting')
+      showNotice('Iltimos, to\'g\'ri narx kiriting', 'warning')
       return
     }
     try {
@@ -356,9 +360,9 @@ const DoctorDashboard = () => {
       setPriceInputs({})
       setPriceInputClearedOnFocus({})
       setEditingPriceId(null)
-      alert('✓ Narx yangilandi!')
+      showNotice('✓ Narx yangilandi!', 'success')
     } catch (error) {
-      alert('Narxni yangilashda xatolik: ' + (error.message || ''))
+      showNotice('Narxni yangilashda xatolik: ' + (error.message || ''), 'error')
     }
   }
 
@@ -400,10 +404,10 @@ const DoctorDashboard = () => {
         await updateDoctorProfileSettings(payload)
       }
 
-      alert('Sozlamalar saqlandi ✅')
+      showNotice('Sozlamalar saqlandi ✅', 'success')
       setShowSettingsPanel(false)
     } catch (error) {
-      alert(getApiErrorMessage(error))
+      showNotice(getApiErrorMessage(error), 'error')
     } finally {
       setSettingsSaving(false)
     }
@@ -415,7 +419,7 @@ const DoctorDashboard = () => {
     // If we're adding an existing patient
     if (existingPatientSelected) {
       if (!existingPatientSelected.complaint) {
-        alert('Bemor shikoyatini kiriting')
+        showNotice('Bemor shikoyatini kiriting', 'warning')
         return
       }
       
@@ -433,21 +437,21 @@ const DoctorDashboard = () => {
         setExistingPatientSelected(null)
         setShowAddPatient(false)
         setPatientForm(createInitialPatientForm())
-        alert(`Bemor qo'shildi! ✅`)
+        showNotice("Bemor qo'shildi! ✅", 'success')
       } catch (error) {
-        alert('Bemor qo\'shishda xatolik yuz berdi: ' + (error.message || ''))
+        showNotice('Bemor qo\'shishda xatolik yuz berdi: ' + (error.message || ''), 'error')
       }
       return
     }
     
     // New patient creation
-    if (!patientForm.fullName || !patientForm.phone || !patientForm.passportId || !patientForm.complaint) {
-      alert('Bemor ismi, passport ID, telefon va shikoyatni to\'ldiring')
+    if (!patientForm.fullName || !patientForm.phone || !patientForm.complaint) {
+      showNotice('Bemor ismi, telefon va shikoyatni to\'ldiring', 'warning')
       return
     }
 
     if (!patientForm.password) {
-      alert('Bemor uchun parol kiriting')
+      showNotice('Bemor uchun parol kiriting', 'warning')
       return
     }
 
@@ -459,9 +463,9 @@ const DoctorDashboard = () => {
       await addPatient(patientPayload)
       setPatientForm(createInitialPatientForm())
       setShowAddPatient(false)
-      alert(`${patientForm.fullName} qo'shildi! ✅`)
+      showNotice(`${patientForm.fullName} qo'shildi! ✅`, 'success')
     } catch (error) {
-      alert('Bemor qo\'shishda xatolik yuz berdi: ' + (error.message || 'Noma\'lum xatolik'))
+      showNotice('Bemor qo\'shishda xatolik yuz berdi: ' + (error.message || 'Noma\'lum xatolik'), 'error')
     }
   }
 
@@ -531,7 +535,7 @@ const DoctorDashboard = () => {
   const handleAddNewVisit = async (e) => {
     e.preventDefault()
     if (!canPractice) {
-      alert('Siz klinikada faol emassiz. Faqat profilingizni tahrirlashingiz mumkin.')
+      showNotice('Siz klinikada faol emassiz. Faqat profilingizni tahrirlashingiz mumkin.', 'warning')
       return
     }
 
@@ -539,9 +543,9 @@ const DoctorDashboard = () => {
       try {
         await Promise.resolve(addVisitToPatient(selectedPatient.id, newVisitForm))
         setSelectedPatient(getPatientHistory(selectedPatient.id))
-        alert('Yangi tashrif qo\'shildi! ✅')
+        showNotice('Yangi tashrif qo\'shildi! ✅', 'success')
       } catch (error) {
-        alert(error?.message || 'Yangi tashrif qo\'shishda xatolik')
+        showNotice(error?.message || 'Yangi tashrif qo\'shishda xatolik', 'error')
         return
       }
     }
@@ -550,95 +554,17 @@ const DoctorDashboard = () => {
     setNewVisitForm(createInitialNewVisitForm())
   }
 
-  const openVisitFormForAppointmentPatient = (appointment, patient) => {
-    const user = patient?.user
-    const fullName = user
-      ? `${user.first_name || ''} ${user.last_name || ''}`.trim()
-      : appointment.patient_info?.fullName || 'Bemor'
-
-    setSelectedPatient(null)
-    setExistingPatientSelected({
-      id: patient.id,
-      fullName: fullName || 'Bemor',
-      passportId: normalizePassportId(patient.national_id || appointment.patient_info?.passportId || ''),
-      phone: user?.phone_number || patient.phone_number || appointment.patient_info?.phone || '',
-      age: '',
-      gender: patient.gender || '',
-      email: user?.email || '',
-      isExisting: true,
-      appointmentId: appointment.id,
-      complaint: appointment.reason || '',
-      diagnosis: '',
-      medicines: ''
-    })
-    setShowAddPatient(true)
-    setShowSearchResults(false)
-    setSearchQuery('')
-    setTimeout(() => {
-      document.querySelector('.patients-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    }, 50)
-  }
-
   const handleAcceptAppointment = async (appointment) => {
     try {
-      let patient = null
-      try {
-        if (appointment?.patient) {
-          patient = await patientsApi.getById(appointment.patient)
-        }
-      } catch (e) {
-        patient = null
-      }
-
-      // Fallback: try finding patient by passportId if direct lookup failed
-      if (!patient) {
-        const passportId = appointment.patient_info?.passportId
-        if (passportId) {
-          const results = await searchPatientInDatabase(passportId)
-          if (results && results.length > 0) {
-            patient = await patientsApi.getById(results[0].id)
-          }
-        }
-      }
-
-      if (!patient) {
-        alert('Bemor bazadan topilmadi. Iltimos, bemorni ro\'yxatdan o\'tkazing.')
-        return
-      }
-
-      const user = patient?.user
-      const hasPassword = user?.has_usable_password
-
-      if (!patient?.national_id && !appointment.patient_info?.passportId) {
-        alert('Pasport ID topilmadi. Iltimos, bemor ma\'lumotlarini to\'ldiring.')
-        return
-      }
-
-      // If patient has no usable password, require doctor to set it manually.
-      if (!hasPassword) {
-        setNewPassword('')
-        setPasswordModal({
-          open: true,
-          patientId: patient.id,
-          patientName: user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() : 'Bemor',
-          appointmentId: appointment.id
-        })
-        return
-      }
-
-      // Mark as accepted (in_progress) and notify patient via Telegram
       await applyQueueDecision(appointment.id, 'enter', {
         notify_current: false,
         notify_all_shifted: true,
       })
       await acceptOnlineAppointment(appointment.id)
-      const passportId = patient?.national_id || appointment.patient_info?.passportId || ''
-      await notifyOnlineAppointmentReady(appointment.id, { passport_id: passportId })
-
-      // Open complaint/diagnosis/medicines form immediately (appointment will be completed on submit).
-      openVisitFormForAppointmentPatient(appointment, patient)
+      await notifyOnlineAppointmentReady(appointment.id)
+      await loadOnlineAppointments(doctor.id)
     } catch (error) {
-      alert(error.message || 'Qabul qilishda xatolik')
+      showNotice(error.message || 'Qabul qilishda xatolik', 'error')
     }
   }
 
@@ -652,13 +578,9 @@ const DoctorDashboard = () => {
     try {
       const result = await applyQueueDecision(appointment.id, decision)
       await loadOnlineAppointments(doctor.id)
-
-      if (result?.queue_updated > 0 || result?.notified_count > 0) {
-        alert(`Navbat yangilandi: ${result.queue_updated || 0} ta, Telegram xabar: ${result.notified_count || 0} ta`)
-      }
     } catch (e) {
       const detail = e?.response?.data?.detail
-      alert(detail || 'Navbat boshqarishda xatolik yuz berdi')
+      showNotice(detail || 'Navbat boshqarishda xatolik yuz berdi', 'error')
     } finally {
       setQueueDecisionLoading((prev) => ({ ...prev, [loadingKey]: false }))
     }
@@ -667,7 +589,7 @@ const DoctorDashboard = () => {
   const handleQueueDecision = async (appointment, decision) => {
     const queueLeaderId = onlineAppointments?.[0]?.id
     if ((decision === 'enter' || decision === 'wait') && queueLeaderId && appointment?.id !== queueLeaderId) {
-      alert('Avval navbatdagi 1-bemor bilan ishlang. Kerak bo\'lsa navbatni yangilang.')
+      showNotice('Avval navbatdagi 1-bemor bilan ishlang. Kerak bo\'lsa navbatni yangilang.', 'warning')
       return
     }
 
@@ -690,48 +612,6 @@ const DoctorDashboard = () => {
     setQueueCancelConfirm(createInitialQueueCancelConfirm())
   }
 
-  const closePasswordModal = () => {
-    setPasswordModal(createInitialPasswordModal())
-    setNewPassword('')
-  }
-
-  const handleSetPasswordAndAccept = async () => {
-    if (!newPassword || newPassword.length < 6) {
-      alert('Parol kamida 6 ta belgidan iborat bo‘lishi kerak')
-      return
-    }
-    setPasswordSaving(true)
-    try {
-      await patientsApi.setPassword(passwordModal.patientId, { password: newPassword })
-      // After setting password, accept appointment + notify patient via Telegram.
-      const appointment = onlineAppointments.find((a) => a.id === passwordModal.appointmentId)
-      if (appointment) {
-        const patient = await patientsApi.getById(passwordModal.patientId)
-        await applyQueueDecision(passwordModal.appointmentId, 'enter', {
-          notify_current: false,
-          notify_all_shifted: true,
-        })
-        await acceptOnlineAppointment(passwordModal.appointmentId)
-        const passportId = patient?.national_id || appointment.patient_info?.passportId || ''
-        await notifyOnlineAppointmentReady(passwordModal.appointmentId, { passport_id: passportId, password: newPassword })
-        openVisitFormForAppointmentPatient(appointment, patient)
-      } else {
-        await applyQueueDecision(passwordModal.appointmentId, 'enter', {
-          notify_current: false,
-          notify_all_shifted: true,
-        })
-        await acceptOnlineAppointment(passwordModal.appointmentId)
-        await notifyOnlineAppointmentReady(passwordModal.appointmentId, { password: newPassword })
-        alert('Parol o\u2018rnatildi va bemor qabul qilindi \u2705')
-      }
-      closePasswordModal()
-    } catch (error) {
-      alert(error.message || 'Parolni saqlashda xatolik')
-    } finally {
-      setPasswordSaving(false)
-    }
-  }
-
   const closePatientHistory = () => {
     setSelectedPatient(null)
     setShowNewVisitForm(false)
@@ -747,7 +627,7 @@ const DoctorDashboard = () => {
 
   const handleAvatarSave = async () => {
     if (!selectedAvatarFile) {
-      alert('Rasm faylini tanlang')
+      showNotice('Rasm faylini tanlang', 'warning')
       return
     }
 
@@ -756,9 +636,9 @@ const DoctorDashboard = () => {
       await uploadDoctorProfileImage(selectedAvatarFile)
       setSelectedAvatarFile(null)
       setShowAvatarMenu(false)
-      alert('Profil rasmi saqlandi ✅')
+      showNotice('Profil rasmi saqlandi ✅', 'success')
     } catch (error) {
-      alert(error?.message || 'Profil rasmini saqlashda xatolik')
+      showNotice(error?.message || 'Profil rasmini saqlashda xatolik', 'error')
     } finally {
       setAvatarSaving(false)
     }
@@ -780,9 +660,9 @@ const DoctorDashboard = () => {
       setSelectedAvatarFile(null)
       setAvatarPreviewUrl('')
       setShowAvatarMenu(false)
-      alert('Profil rasmi o\'chirildi ✅')
+      showNotice("Profil rasmi o'chirildi ✅", 'success')
     } catch (error) {
-      alert(error?.message || 'Profil rasmini o\'chirishda xatolik')
+      showNotice(error?.message || 'Profil rasmini o\'chirishda xatolik', 'error')
     } finally {
       setAvatarSaving(false)
     }
@@ -812,6 +692,12 @@ const DoctorDashboard = () => {
 
   return (
     <div className="doctor-dashboard">
+      {notice.open && (
+        <div className={`doctor-notice doctor-notice-${notice.type}`} role="status" aria-live="polite">
+          {notice.text}
+        </div>
+      )}
+
       {/* Header */}
       <div className="dash-header">
         <div className="header-left">
@@ -1283,7 +1169,8 @@ const DoctorDashboard = () => {
                           <div className="appointment-info">
                             <h4>{appointment.patient_info?.fullName || 'Bemor'}</h4>
                             <p>📌 Navbat raqami: #{queueLabel}</p>
-                            <p>📋 {appointment.patient_info?.passportId || 'ID yo\'q'} • 📱 {appointment.patient_info?.phone || 'Telefon yo\'q'}</p>
+                            {queueLocked && <p className="queue-lock-note">⚠️ Avval 1-navbatdagi bemor bilan ishlang</p>}
+                            <p>📱 {appointment.patient_info?.phone || 'Telefon yo\'q'}</p>
                             <p>🗓 {dateLabel} • ⏰ {timeLabel}</p>
                             {appointment.reason && <p>📝 {appointment.reason}</p>}
                           </div>
@@ -1335,7 +1222,7 @@ const DoctorDashboard = () => {
                 <div className="queue-panel-header">
                   <h4>Bemor qidirish</h4>
                   <span className="queue-hint">
-                    Passport ID yoki telefon <span className="queue-hint-icon">🔍</span>
+                    Ism yoki telefon <span className="queue-hint-icon">🔍</span>
                   </span>
                 </div>
 
@@ -1343,7 +1230,7 @@ const DoctorDashboard = () => {
                   <div className="search-wrapper">
                     <input
                       type="text"
-                      placeholder="Passport ID, ism, telefon yoki ID qidiring..."
+                      placeholder="Ism yoki telefon bo'yicha qidiring..."
                       value={searchQuery}
                       onChange={handleSearch}
                       className="search-input"
@@ -1373,7 +1260,7 @@ const DoctorDashboard = () => {
                               <div className="result-info">
                                 <p className="result-name">{patient.fullName}</p>
                                 <p className="result-detail">
-                                  📋 {patient.passportId || "ID noma'lum"} • 📱 {patient.phone}
+                                  📱 {patient.phone}
                                   {patient.age && ` • 👤 ${patient.age} y.`}
                                 </p>
                                 <p className="result-status" style={{ color: '#059669', fontSize: '0.85rem', marginTop: '4px' }}>
@@ -1401,7 +1288,7 @@ const DoctorDashboard = () => {
                               <div className="result-info">
                                 <p className="result-name">{patient.fullName}</p>
                                 <p className="result-detail">
-                                  📋 {patient.passportId || "ID noma'lum"} • 📱 {patient.phone}
+                                  📱 {patient.phone}
                                   {patient.age && ` • 👤 ${patient.age} y.`}
                                 </p>
                               </div>
@@ -1422,7 +1309,7 @@ const DoctorDashboard = () => {
                       ) : (
                         <>
                           <p>❌ Bemor topilmadi</p>
-                          <p className="suggestion">Passport ID, ismni yoki telefonni tekshiring</p>
+                          <p className="suggestion">Ism yoki telefonni tekshiring</p>
                         </>
                       )}
                     </div>
@@ -1454,10 +1341,6 @@ const DoctorDashboard = () => {
                   <div className="info-row">
                     <span className="label">F.I.O:</span>
                     <span className="value">{existingPatientSelected.fullName}</span>
-                  </div>
-                  <div className="info-row">
-                    <span className="label">Passport ID:</span>
-                    <span className="value">{existingPatientSelected.passportId}</span>
                   </div>
                   <div className="info-row">
                     <span className="label">Telefon:</span>
@@ -1522,16 +1405,6 @@ const DoctorDashboard = () => {
                     placeholder="Bemor ismi"
                     value={patientForm.fullName}
                     onChange={(e) => setPatientForm({ ...patientForm, fullName: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <input
-                    type="text"
-                    placeholder="Passport ID"
-                    value={patientForm.passportId}
-                    onChange={(e) => setPatientForm({ ...patientForm, passportId: normalizePassportId(e.target.value) })}
-                    className="passport-uppercase"
                     required
                   />
                 </div>
@@ -1644,10 +1517,6 @@ const DoctorDashboard = () => {
 
             <div className="modal-body">
               <div className="patient-basic-info">
-                <div className="info-item">
-                  <span className="label">Passport ID:</span>
-                  <span className="value">{selectedPatient.passportId || '—'}</span>
-                </div>
                 <div className="info-item">
                   <span className="label">Yosh:</span>
                   <span className="value">{selectedPatient.age ? `${selectedPatient.age} yoshda` : '—'}</span>
@@ -1790,38 +1659,6 @@ const DoctorDashboard = () => {
 
             <div className="modal-footer">
               <button className="btn-close-modal" onClick={closePatientHistory}>Yopish</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {passwordModal.open && (
-        <div className="modal-overlay" onClick={closePasswordModal}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">
-                <h2>Yangi parol o‘rnatish</h2>
-                <p className="patient-phone">{passwordModal.patientName}</p>
-              </div>
-              <button className="btn-close" onClick={closePasswordModal}>✕</button>
-            </div>
-            <div className="modal-body">
-              <div className="form-group">
-                <label>Yangi parol</label>
-                <PasswordInput
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Kamida 6 ta belgi"
-                />
-              </div>
-            </div>
-            <div className="form-buttons">
-              <button className="btn-submit" onClick={handleSetPasswordAndAccept} disabled={passwordSaving}>
-                {passwordSaving ? 'Saqlanmoqda...' : 'Saqlash va qabul qilish'}
-              </button>
-              <button className="btn-cancel" onClick={closePasswordModal}>
-                Bekor qilish
-              </button>
             </div>
           </div>
         </div>

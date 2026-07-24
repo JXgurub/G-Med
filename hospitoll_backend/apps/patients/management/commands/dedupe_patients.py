@@ -6,15 +6,14 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 
 
-def _norm_passport(value: str | None) -> str:
+def _norm_phone(value: str | None) -> str:
     if not value:
         return ''
-    value = str(value).strip().upper()
-    return re.sub(r"\s+", "", value)
+    return re.sub(r"\D+", "", str(value))
 
 
 class Command(BaseCommand):
-    help = "Deduplicate Patient rows by normalized national_id (ignore whitespace/case). Dry-run by default."
+    help = "Deduplicate Patient rows by normalized phone number. Dry-run by default."
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -31,42 +30,36 @@ class Command(BaseCommand):
         patients = list(Patient.objects.select_related('user').all())
         groups: dict[str, list[Patient]] = {}
         for patient in patients:
-            key = _norm_passport(patient.national_id)
+            raw_phone = getattr(patient, 'phone_number', '') or getattr(getattr(patient, 'user', None), 'phone_number', '')
+            key = _norm_phone(raw_phone)
             if not key:
                 continue
             groups.setdefault(key, []).append(patient)
 
         duplicate_groups = {k: v for k, v in groups.items() if len(v) > 1}
         if not duplicate_groups:
-            self.stdout.write(self.style.SUCCESS('No duplicate passport IDs found.'))
+            self.stdout.write(self.style.SUCCESS('No duplicate patient phone numbers found.'))
             return
 
         self.stdout.write(f"Found {len(duplicate_groups)} duplicate passport group(s).")
         if not apply_changes:
             self.stdout.write(self.style.WARNING('DRY-RUN mode (use --apply to make changes).'))
 
-        for passport_norm, group in duplicate_groups.items():
+        for phone_norm, group in duplicate_groups.items():
             # Choose keeper: prefer the one with most related objects; fallback oldest created.
             keeper = self._pick_keeper(group)
             others = [p for p in group if p.id != keeper.id]
 
             self.stdout.write("\n" + ('-' * 72))
-            self.stdout.write(f"PASSPORT: {passport_norm}")
-            self.stdout.write(f"KEEP   : {keeper.id} | user={getattr(keeper.user, 'email', None)} | national_id={keeper.national_id}")
+            self.stdout.write(f"PHONE: {phone_norm}")
+            self.stdout.write(f"KEEP   : {keeper.id} | user={getattr(keeper.user, 'email', None)}")
             for dup in others:
-                self.stdout.write(f"DUP    : {dup.id} | user={getattr(dup.user, 'email', None)} | national_id={dup.national_id}")
+                self.stdout.write(f"DUP    : {dup.id} | user={getattr(dup.user, 'email', None)}")
 
             if not apply_changes:
                 continue
 
             with transaction.atomic():
-                # First clear duplicate national_id values to avoid UNIQUE constraint conflicts
-                # when normalizing the keeper.
-                for dup in others:
-                    if dup.national_id:
-                        dup.national_id = None
-                        dup.save(update_fields=['national_id'])
-
                 for dup in others:
                     self._merge_patient_into(dup, keeper)
 
@@ -168,11 +161,10 @@ class Command(BaseCommand):
         try:
             dup.delete()
         except Exception:
-            # If delete fails (e.g. protected relations), make it non-duplicate and inactive.
+            # If delete fails (e.g. protected relations), make it inactive.
             try:
                 dup.is_active = False
-                dup.national_id = f"DUP-{dup.id}"
-                dup.save(update_fields=['is_active', 'national_id'])
+                dup.save(update_fields=['is_active'])
             except Exception:
                 pass
 

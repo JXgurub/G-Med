@@ -262,7 +262,7 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             first_name='Scope',
             last_name='Patient',
         )
-        patient = Patient.objects.create(user=patient_user, national_id='99887766554433')
+        patient = Patient.objects.create(user=patient_user)
 
         old_appointment = Appointment.objects.create(
             patient=patient,
@@ -658,7 +658,7 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.assertIn('pinfl', response_json)
         self.assertIn('14', str(response_json['pinfl']))
 
-    def test_create_doctor_rejects_passport_id_used_by_patient(self):
+    def test_create_doctor_allows_passport_id_even_if_patient_exists(self):
         patient_user = CustomUser.objects.create_user(
             username='patient-passport-owner',
             email='patient.passport.owner@example.com',
@@ -667,10 +667,7 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             first_name='Patient',
             last_name='Owner',
         )
-        Patient.objects.create(
-            user=patient_user,
-            national_id='AA1234567',
-        )
+        Patient.objects.create(user=patient_user)
 
         self.auth_as(self.owner_a)
         create_url = reverse('doctor-list')
@@ -693,10 +690,8 @@ class DoctorEmploymentLifecycleTests(APITestCase):
 
         response = self.client.post(create_url, payload, format='json')
 
-        self.assertEqual(response.status_code, 400)
-        response_json = response.json()
-        self.assertIn('passport_id', response_json)
-        self.assertIn('boshqa odamga tegishli', str(response_json['passport_id']).lower())
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()['passport_id'], 'AA1234567')
 
     def test_clinic_owner_can_update_doctor_lunch_schedule(self):
         self.auth_as(self.owner_a)

@@ -10,6 +10,17 @@ const isMobileDevice = () => {
   return window.matchMedia('(max-width: 900px)').matches && window.matchMedia('(pointer: coarse)').matches
 }
 
+const getManualInstallHint = () => {
+  const ua = window.navigator.userAgent || ''
+  const isIOS = /iPad|iPhone|iPod/.test(ua)
+
+  if (isIOS) {
+    return "Safari menyusidagi Share tugmasini bosib 'Add to Home Screen' ni tanlang."
+  }
+
+  return "Brauzer menyusini ochib 'Install app' yoki 'Add to Home screen' ni tanlang."
+}
+
 const PwaStatusWidget = () => {
   const location = useLocation()
   const [deferredPrompt, setDeferredPrompt] = useState(null)
@@ -18,6 +29,7 @@ const PwaStatusWidget = () => {
   const [offlineReady, setOfflineReady] = useState(false)
   const [isMobile, setIsMobile] = useState(isMobileDevice())
   const [bottomOffset, setBottomOffset] = useState(16)
+  const [installHelp, setInstallHelp] = useState('')
 
   useEffect(() => {
     let readyTimeoutId = null
@@ -113,12 +125,16 @@ const PwaStatusWidget = () => {
   }, [location?.pathname])
 
   const canInstall = useMemo(
-    () => !isWorkDashboardRoute && isMobile && !!deferredPrompt && !isInstalled,
-    [isWorkDashboardRoute, isMobile, deferredPrompt, isInstalled]
+    () => !isWorkDashboardRoute && isMobile && !isInstalled,
+    [isWorkDashboardRoute, isMobile, isInstalled]
   )
 
   const handleInstall = async () => {
-    if (!deferredPrompt) return
+    if (!deferredPrompt) {
+      setInstallHelp(getManualInstallHint())
+      window.setTimeout(() => setInstallHelp(''), 7000)
+      return
+    }
 
     deferredPrompt.prompt()
     const choice = await deferredPrompt.userChoice
@@ -126,6 +142,7 @@ const PwaStatusWidget = () => {
       setIsInstalled(true)
     }
     setDeferredPrompt(null)
+    setInstallHelp('')
   }
 
   return (
@@ -139,6 +156,12 @@ const PwaStatusWidget = () => {
       {offlineReady && (
         <div className="pwa-ready-toast" style={{ bottom: `${bottomOffset + 48}px` }} role="status" aria-live="polite">
           Offline rejim tayyor ✅
+        </div>
+      )}
+
+      {installHelp && (
+        <div className="pwa-install-help" style={{ bottom: `${bottomOffset + 52}px` }} role="status" aria-live="polite">
+          {installHelp}
         </div>
       )}
 

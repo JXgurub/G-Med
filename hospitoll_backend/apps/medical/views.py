@@ -122,16 +122,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         mode = (request.data or {}).get('mode')
         mode = str(mode).strip().lower() if mode is not None else ''
 
-        passport_id = (request.data or {}).get('passport_id')
-        password = (request.data or {}).get('password')
-        if not passport_id:
-            passport_id = getattr(appointment.patient, 'national_id', None) or ''
-        passport_id = str(passport_id).strip() if passport_id is not None else ''
-        password = str(password).strip() if password is not None else ''
-
-        frontend_url = (getattr(settings, 'FRONTEND_URL', '') or '').rstrip('/')
-        login_url = f"{frontend_url}/patient-login" if frontend_url else "/patient-login"
-
         from .telegram_bot_service import TelegramBotService
 
         try:
@@ -150,29 +140,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
             return Response({'sent': True})
 
-        text = (
-            "✅ Doktor sizni qabul qildi.\n\n"
-            "Doktorni baholash va o'zinggizning kasallik tarixinggiz va yozilgan dorilarni "
-            f"ko'rmoqchi bo'lsanggiz shu {login_url} link orqali pasport idsi va parolni "
-            "tergan xolatda ko'rishinggiz mumkin.\n\n"
-        )
-        text += f"Pasport ID: {passport_id}\n"
-        if password:
-            text += f"Parol: {password}\n"
-        else:
-            has_existing_password = bool(
-                getattr(getattr(appointment, 'patient', None), 'user', None)
-                and appointment.patient.user.has_usable_password()
-            )
-            if has_existing_password:
-                text += (
-                    "Parol: (sizda oldindan parol mavjud, shu parol orqali bemalol kirishingiz mumkin. "
-                    "Yoki sayt orqali yangi parol o'rnatishingiz mumkin)\n"
-                )
-            else:
-                text += "Parol: (hali o‘rnatilmagan. Doktor sizga parol o‘rnatib yuboradi)\n"
-
-        client.send_message(int(appointment.telegram_chat_id), text)
+        service.send_doctor_rating_prompt(appointment)
         return Response({'sent': True})
 
     def _normalize_phone(self, phone: str) -> str:
@@ -220,7 +188,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             Appointment.Status.SCHEDULED,
             Appointment.Status.CONFIRMED,
             Appointment.Status.WAITING,
-            Appointment.Status.IN_PROGRESS,
         )
 
     def _format_local_dt(self, dt) -> str:
@@ -363,6 +330,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                                 'old_dt': current_local,
                                 'new_dt': new_local,
                                 'delta_minutes': delta_minutes,
+                                'new_position': int(item.queue_position or 0),
                             }
                         )
 
@@ -448,6 +416,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                                 'old_dt': current_local,
                                 'new_dt': new_local,
                                 'delta_minutes': delta_minutes,
+                                'new_position': int(item.queue_position or 0),
                             }
                         )
 
@@ -500,6 +469,37 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     }
 
             selected_appointment_id = str(appointment.id)
+            two_left_target_ids = [
+                rec['id']
+                for rec in shifted_records
+                if rec.get('chat_id') and int(rec.get('new_position') or 0) == 3 and rec.get('id') != selected_appointment_id
+            ]
+            one_left_target_ids = [
+                rec['id']
+                for rec in shifted_records
+                if rec.get('chat_id') and int(rec.get('new_position') or 0) == 2 and rec.get('id') != selected_appointment_id
+            ]
+            notifiable_two_left_ids: set[str] = set()
+            notifiable_one_left_ids: set[str] = set()
+            if two_left_target_ids:
+                notifiable_two_left_ids = {
+                    str(item_id)
+                    for item_id in Appointment.objects.filter(
+                        id__in=two_left_target_ids,
+                        telegram_two_left_notified_at__isnull=True,
+                        status__in=status_filter,
+                    ).values_list('id', flat=True)
+                }
+            if one_left_target_ids:
+                notifiable_one_left_ids = {
+                    str(item_id)
+                    for item_id in Appointment.objects.filter(
+                        id__in=one_left_target_ids,
+                        telegram_one_left_notified_at__isnull=True,
+                        status__in=status_filter,
+                    ).values_list('id', flat=True)
+                }
+
             for rec in shifted_records:
                 if not rec['chat_id']:
                     continue
@@ -515,18 +515,24 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 if rec.get('id') in recently_arrived_ids:
                     continue
 
-                if not notify_all_shifted and decision != 'cancel' and abs(rec['delta_minutes']) < 15:
-                    continue
-
-                trend_text = 'kechikdi' if rec['delta_minutes'] > 0 else 'oldinga surildi'
-                client.send_message(
-                    rec['chat_id'],
-                    "⏱️ Navbat vaqtingiz yangilandi.\n"
-                    f"Eski vaqt: {rec['old_dt'].strftime('%d.%m.%Y %H:%M')}\n"
-                    f"Yangi vaqt: {rec['new_dt'].strftime('%d.%m.%Y %H:%M')}\n"
-                    f"Sabab: navbat {trend_text}.",
-                )
-                notified_count += 1
+                if rec.get('id') in notifiable_two_left_ids and int(rec.get('new_position') or 0) == 3:
+                    client.send_message(
+                        rec['chat_id'],
+                        "🔔 Navbatingiz yaqinlashdi!\n"
+                        "Oldingizda faqat 2 ta odam qoldi.\n"
+                        f"🕒 Taxminiy vaqt: {rec['new_dt'].strftime('%d.%m.%Y %H:%M')}",
+                    )
+                    Appointment.objects.filter(id=rec['id']).update(telegram_two_left_notified_at=timezone.now())
+                    notified_count += 1
+                elif rec.get('id') in notifiable_one_left_ids and int(rec.get('new_position') or 0) == 2:
+                    client.send_message(
+                        rec['chat_id'],
+                        "🔔 Navbatingiz juda yaqinlashdi!\n"
+                        "Oldingizda faqat 1 ta bemor bor.\n"
+                        f"🕒 Taxminiy vaqt: {rec['new_dt'].strftime('%d.%m.%Y %H:%M')}",
+                    )
+                    Appointment.objects.filter(id=rec['id']).update(telegram_one_left_notified_at=timezone.now())
+                    notified_count += 1
         except Exception:
             # Telegram best-effort: queue update should not fail if bot is unavailable.
             pass
@@ -778,9 +784,9 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         specialty_price_id = validated.get('specialty_price_id')
         first_name = str(validated['first_name']).strip()
         last_name = str(validated['last_name']).strip()
-        passport_id = str(validated['passport_id']).strip()
         phone_number = str(validated.get('phone_number', '') or '').strip()
         reason = str(validated.get('reason', '') or '').strip()
+        phone_norm = self._normalize_phone(phone_number)
 
         if doctor.clinic_id != clinic.id:
             return Response({'detail': 'Doktor klinikaga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -820,8 +826,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             if slot.status != 'available':
                 return Response({'detail': 'Tanlangan vaqt band qilingan.'}, status=status.HTTP_409_CONFLICT)
 
-            passport_norm = re.sub(r"\s+", "", (passport_id or '').strip().upper())
-            patient = Patient.objects.select_related('user').filter(national_id__iexact=passport_norm).first()
+            patient = Patient.objects.select_related('user').filter(phone_number=phone_norm).first()
             if patient:
                 if getattr(patient, 'requires_deposit', False):
                     return Response({'detail': 'Keyingi navbat uchun depozit talab qilinadi.'}, status=status.HTTP_409_CONFLICT)
@@ -837,32 +842,31 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                         status=status.HTTP_409_CONFLICT
                     )
             if not patient:
-                base_email = f"{passport_norm}@guest.hospitoll.local"
+                base_email = f"{phone_norm or uuid4()}@guest.hospitoll.local"
                 if CustomUser.objects.filter(email=base_email).exists():
-                    base_email = f"{passport_id}-{timezone.now().strftime('%H%M%S')}@guest.hospitoll.local"
+                    base_email = f"{phone_norm or 'guest'}-{timezone.now().strftime('%H%M%S')}@guest.hospitoll.local"
                 user = CustomUser.objects.create_user(
                     username=base_email,
                     email=base_email,
                     password=None,
                     first_name=first_name,
                     last_name=last_name,
-                    phone_number=phone_number,
+                    phone_number=phone_norm,
                     role='patient'
                 )
                 user.set_unusable_password()
                 user.save(update_fields=['password'])
                 patient = Patient.objects.create(
                     user=user,
-                    national_id=passport_norm,
-                    phone_number=phone_number
+                    phone_number=phone_norm
                 )
             else:
                 if patient.user and (patient.user.first_name != first_name or patient.user.last_name != last_name):
                     patient.user.first_name = first_name
                     patient.user.last_name = last_name
                     patient.user.save(update_fields=['first_name', 'last_name'])
-                if phone_number and patient.phone_number != phone_number:
-                    patient.phone_number = phone_number
+                if phone_norm and patient.phone_number != phone_norm:
+                    patient.phone_number = phone_norm
                     patient.save(update_fields=['phone_number'])
 
             expires_at = timezone.now() + timedelta(minutes=20)
@@ -1091,6 +1095,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         qs = Appointment.objects.filter(
             doctor=doctor,
             scheduled_date__date=today,
+            status__in=self._queue_active_statuses(),
         ).select_related('patient', 'clinic', 'slot').order_by('scheduled_date', 'created_at', 'queue_position')
         return Response(AppointmentSerializer(qs, many=True).data)
 
