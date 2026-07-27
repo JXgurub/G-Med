@@ -28,24 +28,34 @@ from core.error_logging import ErrorLogger
 
 
 DEFAULT_SPECIALIZATIONS = [
-    ('Kardiologiya', 'CARDIO'),
-    ('Nevrologiya', 'NEURO'),
-    ('Pediatriya', 'PEDI'),
-    ('Terapiya', 'THERAPY'),
-    ('Ginekologiya', 'GYNE'),
-    ('Urologiya', 'URO'),
-    ('Dermatologiya', 'DERMA'),
-    ('Otorinolaringologiya', 'ENT'),
-    ('Oftalmologiya', 'OPHTH'),
-    ('Travmatologiya', 'TRAUMA'),
-    ('Ortopediya', 'ORTHO'),
-    ('Endokrinologiya', 'ENDO'),
+    ('Allergologiya va Immunologiya', 'ALLERGY_IMMUNO'),
+    ('Andrologiya', 'ANDRO'),
     ('Gastroenterologiya', 'GASTRO'),
-    ('Pulmonologiya', 'PULMO'),
+    ('Gematologiya', 'HEMATO'),
+    ('Ginekologiya va Akusherlik', 'GYNE'),
+    ('Dermatologiya', 'DERMA'),
+    ('Diabetologiya', 'DIABETO'),
+    ('Endokrinologiya', 'ENDO'),
+    ('Kardiologiya', 'CARDIO'),
+    ('Mammologiya', 'MAMMO'),
     ('Nefrologiya', 'NEPHRO'),
-    ('Reabilitatsiya', 'REHAB'),
+    ('Nevrologiya', 'NEURO'),
+    ('Narkologiya', 'NARCO'),
     ('Onkologiya', 'ONCO'),
-    ('Psixiatriya', 'PSYCH'),
+    ('Ortopediya va Travmatologiya', 'ORTHO'),
+    ('Otorinolaringologiya (LOR)', 'ENT'),
+    ('Oftalmologiya', 'OPHTH'),
+    ('Pediatriya', 'PEDI'),
+    ('Proktologiya', 'PROCTO'),
+    ('Psixiatriya va Psixoterapiya', 'PSYCH'),
+    ('Pulmonologiya', 'PULMO'),
+    ('Reabilitatologiya', 'REHAB'),
+    ('Revmatologiya', 'RHEUM'),
+    ('Stomatologiya', 'DENT'),
+    ('Terapiya', 'THERAPY'),
+    ('Urologiya', 'URO'),
+    ('Flebologiya', 'PHLEBO'),
+    ('Xirurgiya', 'SURGERY'),
 ]
 
 
@@ -128,6 +138,30 @@ class DoctorViewSet(viewsets.ModelViewSet):
             for pair, slot in existing_pairs.items():
                 if pair not in desired_slots and slot.status == 'available':
                     slot.delete()
+
+    @staticmethod
+    def _is_within_working_window(doctor, now_local):
+        day_key = now_local.strftime('%a')
+        working_days = [d.strip() for d in (doctor.working_days or '').split(',') if d.strip()]
+        if working_days and day_key not in working_days:
+            return False
+
+        start_time = doctor.available_from
+        end_time = doctor.available_until
+        if not start_time or not end_time or start_time >= end_time:
+            return False
+
+        current_time = now_local.time()
+        if current_time < start_time or current_time >= end_time:
+            return False
+
+        lunch_start = doctor.lunch_break_start
+        lunch_end = doctor.lunch_break_end
+        if lunch_start and lunch_end and lunch_start < lunch_end:
+            if lunch_start <= current_time < lunch_end:
+                return False
+
+        return True
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
@@ -531,8 +565,14 @@ class DoctorViewSet(viewsets.ModelViewSet):
                 'is_checked_in': True,
                 'checked_in_at': doctor.checked_in_at.isoformat() if doctor.checked_in_at else None
             }, status=400)
-        
+
         now = timezone.now()
+        now_local = localtime(now)
+        if not self._is_within_working_window(doctor, now_local):
+            return Response({
+                'detail': 'Doktor faqat o\'z ish kuni va ish vaqtida "Ishga keldim" tugmasini bosishi mumkin.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+        
         doctor.is_checked_in = True
         doctor.checked_in_at = now
         doctor.checked_out_at = None
@@ -722,17 +762,34 @@ class SpecializationViewSet(viewsets.ModelViewSet):
     serializer_class = SpecializationSerializer
 
     def _ensure_default_specializations(self):
-        if Specialization.objects.exists():
-            return
-
         for name, code in DEFAULT_SPECIALIZATIONS:
-            Specialization.objects.get_or_create(
+            specialization = Specialization.objects.filter(code=code).first()
+            if not specialization:
+                specialization = Specialization.objects.filter(name__iexact=name).first()
+
+            if specialization:
+                updates = []
+                if specialization.name != name:
+                    specialization.name = name
+                    updates.append('name')
+                if specialization.code != code:
+                    specialization.code = code
+                    updates.append('code')
+                if not specialization.description:
+                    specialization.description = 'Auto-seeded default specialization'
+                    updates.append('description')
+                if not specialization.is_active:
+                    specialization.is_active = True
+                    updates.append('is_active')
+                if updates:
+                    specialization.save(update_fields=updates)
+                continue
+
+            Specialization.objects.create(
                 code=code,
-                defaults={
-                    'name': name,
-                    'description': 'Auto-seeded default specialization',
-                    'is_active': True,
-                }
+                name=name,
+                description='Auto-seeded default specialization',
+                is_active=True,
             )
 
     def get_permissions(self):
@@ -784,6 +841,14 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
         if not doctor.is_checked_in:
             return Response([], status=status.HTTP_200_OK)
+
+        target_is_today = target_date == localdate()
+        if target_is_today:
+            checked_in_at_local = localtime(doctor.checked_in_at) if doctor.checked_in_at else None
+            if not checked_in_at_local or checked_in_at_local.date() != target_date:
+                return Response([], status=status.HTTP_200_OK)
+            if not DoctorViewSet._is_within_working_window(doctor, localtime()):
+                return Response([], status=status.HTTP_200_OK)
 
         duration_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
         if requested_duration is not None:
@@ -886,7 +951,7 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             status='available'
         ).order_by('start_time')
 
-        if target_date == localdate():
+        if target_is_today:
             now = localtime()
             open_time = (start_dt + timedelta(minutes=10)).time()
             close_time = (end_dt - timedelta(minutes=30)).time()

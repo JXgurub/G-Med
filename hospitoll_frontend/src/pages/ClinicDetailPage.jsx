@@ -81,16 +81,37 @@ const ClinicDetailPage = () => {
   }
 
   const getSpecialtyIcon = (specName) => {
-    if (specName.includes('Kardio')) return '❤️'
-    if (specName.includes('Nevro')) return '🧠'
-    if (specName.includes('Terapevt')) return '🩺'
-    if (specName.includes('Pediatr')) return '👶'
-    if (specName.includes('Stomatolog') || specName.includes('Dentist')) return '🦷'
-    if (specName.includes('Oftalmolog')) return '👁️'
-    if (specName.includes('LOR') || specName.includes('ENT')) return '👂'
-    if (specName.includes('Dermatolog')) return '🧴'
-    if (specName.includes('Ortoped')) return '🦴'
-    if (specName.includes('Ginekolog')) return '👩‍⚕️'
+    const value = String(specName || '').toLowerCase()
+
+    if (value.includes('allerg') || value.includes('immun')) return '🛡️'
+    if (value.includes('andro')) return '♂️'
+    if (value.includes('gastro')) return '🫁'
+    if (value.includes('gemat') || value.includes('hemat')) return '🩸'
+    if (value.includes('ginek') || value.includes('akusher')) return '🤰'
+    if (value.includes('dermat')) return '🧴'
+    if (value.includes('diabet')) return '🩹'
+    if (value.includes('endokrin') || value.includes('endocrin')) return '⚕️'
+    if (value.includes('kardio') || value.includes('cardio')) return '❤️'
+    if (value.includes('mammo')) return '🎗️'
+    if (value.includes('nefro') || value.includes('nephro')) return '🫘'
+    if (value.includes('nevro') || value.includes('neuro')) return '🧠'
+    if (value.includes('narkolog')) return '🧩'
+    if (value.includes('onkolog') || value.includes('onco')) return '🎗️'
+    if (value.includes('ortoped') || value.includes('travmat')) return '🦴'
+    if (value.includes('otorino') || value.includes('lor') || value.includes('ent')) return '👂'
+    if (value.includes('oftalm') || value.includes('ophth')) return '👁️'
+    if (value.includes('pediatr')) return '👶'
+    if (value.includes('proktolog')) return '🩺'
+    if (value.includes('psix') || value.includes('psichi') || value.includes('psy')) return '🧘'
+    if (value.includes('pulmono') || value.includes('pneumo')) return '🫁'
+    if (value.includes('reabil')) return '♿'
+    if (value.includes('revmat') || value.includes('rheum')) return '🦵'
+    if (value.includes('stomat') || value.includes('dent')) return '🦷'
+    if (value.includes('terap')) return '🩺'
+    if (value.includes('uro')) return '💧'
+    if (value.includes('fleb') || value.includes('phleb')) return '🩻'
+    if (value.includes('xirurg') || value.includes('jarroh') || value.includes('surgery')) return '🔪'
+
     return '⚕️'
   }
 

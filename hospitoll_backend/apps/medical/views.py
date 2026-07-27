@@ -1156,9 +1156,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 compensation_value = Decimal(active_employment.compensation_value)
 
         today_local = now.date()
+        accepted_statuses = [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]
+
         visits_qs = MedicalRecord.objects.filter(
             doctor=doctor,
             clinic_id=doctor.clinic_id,
+        )
+
+        accepted_appointments_qs = Appointment.objects.filter(
+            doctor=doctor,
+            clinic_id=doctor.clinic_id,
+            status__in=accepted_statuses,
         )
 
         today_24h_patients = 0
@@ -1181,10 +1189,16 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 effective_session_start = stats_window_start
 
             if session_end > effective_session_start:
-                today_24h_patients = visits_qs.filter(
+                today_appointments_count = accepted_appointments_qs.filter(
+                    scheduled_date__gte=effective_session_start,
+                    scheduled_date__lte=session_end,
+                ).count()
+                today_standalone_records_count = visits_qs.filter(
                     created_at__gte=effective_session_start,
                     created_at__lte=session_end,
+                    appointment__isnull=True,
                 ).count()
+                today_24h_patients = today_appointments_count + today_standalone_records_count
 
         base = Appointment.objects.filter(
             doctor=doctor,
@@ -1197,31 +1211,35 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW],
         ).count()
 
-        monthly_records = visits_qs.filter(
+        monthly_appointments = accepted_appointments_qs.filter(
+            scheduled_date__gte=stats_window_start,
+            scheduled_date__lte=now,
+        )
+
+        monthly_standalone_records = visits_qs.filter(
             created_at__gte=stats_window_start,
             created_at__lte=now,
-        ).select_related('appointment')
-        monthly_arrived_patients = monthly_records.count()
+            appointment__isnull=True,
+        )
+
+        monthly_arrived_patients = monthly_appointments.count() + monthly_standalone_records.count()
 
         monthly_effective_revenue = Decimal('0.00')
-        for record in monthly_records:
-            appointment_fee = Decimal('0')
-            appointment = record.appointment
-            if appointment:
-                appointment_fee = Decimal(appointment.consultation_fee or 0)
-
+        for appointment in monthly_appointments:
+            appointment_fee = Decimal(appointment.consultation_fee or 0)
             effective_fee = appointment_fee if appointment_fee > 0 else _resolve_default_consultation_fee_for_doctor(doctor)
             monthly_effective_revenue += effective_fee
+
+        monthly_effective_revenue += (
+            _resolve_default_consultation_fee_for_doctor(doctor) * monthly_standalone_records.count()
+        )
 
         if compensation_type == 'percent':
             monthly_estimated_balance = (monthly_effective_revenue * compensation_value) / Decimal('100')
         else:
             monthly_estimated_balance = compensation_value
 
-        legacy_monthly_patients = visits_qs.filter(
-            created_at__gte=stats_window_start,
-            created_at__lte=now,
-        ).count()
+        legacy_monthly_patients = monthly_arrived_patients
 
         mismatch_delta = int(monthly_arrived_patients) - int(legacy_monthly_patients)
         if mismatch_delta != 0:
@@ -1385,18 +1403,33 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         active_doctors = doctors_qs.filter(is_active=True).count()
         total_doctors = doctors_qs.count()
 
-        monthly_records = (
+        accepted_statuses = [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]
+
+        monthly_appointments = (
+            Appointment.objects.filter(
+                clinic=clinic,
+                scheduled_date__gte=month_start,
+                scheduled_date__lte=now,
+                doctor__isnull=False,
+                status__in=accepted_statuses,
+            )
+            .select_related('doctor__user')
+            .order_by('scheduled_date')
+        )
+
+        monthly_standalone_records = (
             MedicalRecord.objects.filter(
                 clinic=clinic,
                 created_at__gte=month_start,
                 created_at__lte=now,
                 doctor__isnull=False,
+                appointment__isnull=True,
             )
-            .select_related('doctor__user', 'appointment')
+            .select_related('doctor__user')
             .order_by('created_at')
         )
 
-        monthly_arrived_patients = monthly_records.count()
+        monthly_arrived_patients = monthly_appointments.count() + monthly_standalone_records.count()
 
         monthly_work_records = DoctorWorkRecord.objects.filter(
             doctor__clinic=clinic,
@@ -1406,16 +1439,13 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         monthly_total_hours = round(sum(float(record.work_duration) for record in monthly_work_records), 2)
 
         per_doctor_totals: dict[str, dict[str, Any]] = {}
-        for record in monthly_records:
-            doctor = record.doctor
-            if not doctor:
-                continue
 
-            doctor_id = str(doctor.id)
+        def ensure_doctor_bucket(target_doctor):
+            doctor_id = str(target_doctor.id)
             if doctor_id not in per_doctor_totals:
-                first_name = (getattr(doctor.user, 'first_name', '') or '').strip() if doctor.user_id else ''
-                last_name = (getattr(doctor.user, 'last_name', '') or '').strip() if doctor.user_id else ''
-                username = (getattr(doctor.user, 'username', '') or '').strip() if doctor.user_id else ''
+                first_name = (getattr(target_doctor.user, 'first_name', '') or '').strip() if target_doctor.user_id else ''
+                last_name = (getattr(target_doctor.user, 'last_name', '') or '').strip() if target_doctor.user_id else ''
+                username = (getattr(target_doctor.user, 'username', '') or '').strip() if target_doctor.user_id else ''
                 full_name = f"{first_name} {last_name}".strip() or username or 'Doktor'
                 per_doctor_totals[doctor_id] = {
                     'doctor_id': doctor_id,
@@ -1423,13 +1453,26 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     'seen_patients': 0,
                     'estimated_revenue': Decimal('0.00'),
                 }
+            return doctor_id
 
-            appointment_fee = Decimal('0')
-            appointment = record.appointment
-            if appointment:
-                appointment_fee = Decimal(appointment.consultation_fee or 0)
+        for appointment in monthly_appointments:
+            doctor = appointment.doctor
+            if not doctor:
+                continue
 
+            doctor_id = ensure_doctor_bucket(doctor)
+            appointment_fee = Decimal(appointment.consultation_fee or 0)
             effective_fee = appointment_fee if appointment_fee > 0 else _resolve_default_consultation_fee_for_doctor(doctor)
+            per_doctor_totals[doctor_id]['seen_patients'] += 1
+            per_doctor_totals[doctor_id]['estimated_revenue'] += effective_fee
+
+        for record in monthly_standalone_records:
+            doctor = record.doctor
+            if not doctor:
+                continue
+
+            doctor_id = ensure_doctor_bucket(doctor)
+            effective_fee = _resolve_default_consultation_fee_for_doctor(doctor)
             per_doctor_totals[doctor_id]['seen_patients'] += 1
             per_doctor_totals[doctor_id]['estimated_revenue'] += effective_fee
 

@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import ClinicHeader from '../components/ClinicHeader'
 import ClinicServices from './ClinicServices'
 import ClinicDoctors from '../components/ClinicDoctors'
-import api, { clinicsApi, doctorsApi } from '../services/api'
+import api, { clinicsApi, doctorsApi, resolveMediaUrl } from '../services/api'
 import './ClinicPublic.css'
 
 const ClinicPublic = () => {
@@ -20,7 +20,7 @@ const ClinicPublic = () => {
         setClinic({
           id: clinicData.id,
           name: clinicData.name,
-          bannerImage: clinicData.banner_image || '',
+          bannerImage: resolveMediaUrl(clinicData.banner_image),
           rating: clinicData.rating || 0,
           reviewCount: clinicData.total_ratings || 0,
           address: clinicData.address || '',

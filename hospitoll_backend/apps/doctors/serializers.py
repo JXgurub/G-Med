@@ -254,6 +254,10 @@ class DoctorSerializer(serializers.ModelSerializer):
 
         return default_fee
 
+    @staticmethod
+    def _accepted_appointment_statuses():
+        return [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]
+
     def _get_monthly_effective_revenue_decimal(self, obj):
         scope_key = self._get_scope_clinic_id() or 'all'
         cache_key = f'_monthly_effective_revenue_{scope_key}'
@@ -268,21 +272,33 @@ class DoctorSerializer(serializers.ModelSerializer):
         else:
             end_of_month = (today.replace(month=today.month + 1, day=1) - timedelta(days=1))
 
-        records = MedicalRecord.objects.filter(
+        accepted_statuses = self._accepted_appointment_statuses()
+
+        appointments = Appointment.objects.filter(
+            doctor=obj,
+            scheduled_date__date__gte=start_of_month,
+            scheduled_date__date__lte=end_of_month,
+            status__in=accepted_statuses,
+        )
+        appointments = self._scope_filter_queryset(appointments)
+
+        records_without_appointment = MedicalRecord.objects.filter(
             doctor=obj,
             created_at__date__gte=start_of_month,
             created_at__date__lte=end_of_month,
-        ).select_related('appointment')
-        records = self._scope_filter_queryset(records)
+            appointment__isnull=True,
+        )
+        records_without_appointment = self._scope_filter_queryset(records_without_appointment)
 
         doctor_default_fee = self._resolve_default_consultation_fee_for_doctor(obj)
         total_revenue = Decimal('0')
 
-        for record in records:
-            appointment = record.appointment
-            appointment_fee = Decimal(appointment.consultation_fee or 0) if appointment else Decimal('0')
+        for appointment in appointments:
+            appointment_fee = Decimal(appointment.consultation_fee or 0)
             effective_fee = appointment_fee if appointment_fee > 0 else doctor_default_fee
             total_revenue += effective_fee
+
+        total_revenue += doctor_default_fee * records_without_appointment.count()
 
         setattr(obj, cache_key, total_revenue)
         return total_revenue
@@ -365,16 +381,28 @@ class DoctorSerializer(serializers.ModelSerializer):
         return None
 
     def get_today_patients(self, obj):
-        """Count total patient visits (medical records) created today"""
+        """Count today's accepted appointments + standalone medical records."""
         today = localdate()  # Get today's date in configured timezone
-        queryset = MedicalRecord.objects.filter(
+        accepted_statuses = self._accepted_appointment_statuses()
+
+        appointments_qs = Appointment.objects.filter(
             doctor=obj,
-            created_at__date=today
+            scheduled_date__date=today,
+            status__in=accepted_statuses,
         )
-        return self._scope_filter_queryset(queryset).count()
+        appointments_qs = self._scope_filter_queryset(appointments_qs)
+
+        standalone_records_qs = MedicalRecord.objects.filter(
+            doctor=obj,
+            created_at__date=today,
+            appointment__isnull=True,
+        )
+        standalone_records_qs = self._scope_filter_queryset(standalone_records_qs)
+
+        return appointments_qs.count() + standalone_records_qs.count()
 
     def get_monthly_patients(self, obj):
-        """Count total patient visits (medical records) created in current month"""
+        """Count monthly accepted appointments + standalone medical records."""
         today = localdate()
         start_of_month = today.replace(day=1)
         if today.month == 12:
@@ -382,12 +410,25 @@ class DoctorSerializer(serializers.ModelSerializer):
         else:
             end_of_month = (today.replace(month=today.month + 1, day=1) - timedelta(days=1))
 
-        queryset = MedicalRecord.objects.filter(
+        accepted_statuses = self._accepted_appointment_statuses()
+
+        appointments_qs = Appointment.objects.filter(
+            doctor=obj,
+            scheduled_date__date__gte=start_of_month,
+            scheduled_date__date__lte=end_of_month,
+            status__in=accepted_statuses,
+        )
+        appointments_qs = self._scope_filter_queryset(appointments_qs)
+
+        standalone_records_qs = MedicalRecord.objects.filter(
             doctor=obj,
             created_at__date__gte=start_of_month,
-            created_at__date__lte=end_of_month
+            created_at__date__lte=end_of_month,
+            appointment__isnull=True,
         )
-        return self._scope_filter_queryset(queryset).count()
+        standalone_records_qs = self._scope_filter_queryset(standalone_records_qs)
+
+        return appointments_qs.count() + standalone_records_qs.count()
 
     def get_today_appointments(self, obj):
         """Count completed appointments today"""

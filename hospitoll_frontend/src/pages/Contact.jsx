@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { siteSettingsApi } from '../services/api'
+import { resolveMediaUrl } from '../services/api'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import './Contact.css'
 
@@ -117,8 +118,8 @@ const Contact = () => {
             </div>
 
             <div className="contact-hero-right">
-              {data?.image ? (
-                <img src={data.image} alt="Bog'lanish" className="contact-hero-image" />
+              {resolveMediaUrl(data?.image) ? (
+                <img src={resolveMediaUrl(data.image)} alt="Bog'lanish" className="contact-hero-image" />
               ) : (
                 <div className="contact-hero-image-placeholder">Bog'lanish rasmi</div>
               )}

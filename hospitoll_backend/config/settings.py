@@ -271,7 +271,7 @@ FRONTEND_URL = config('FRONTEND_URL', default='http://localhost:3000')
 TELEGRAM_BOT_TOKEN = config('TELEGRAM_BOT_TOKEN', default='')
 TELEGRAM_BOT_USERNAME = config('TELEGRAM_BOT_USERNAME', default='hosptol_bot')
 TELEGRAM_WEBHOOK_SECRET = config('TELEGRAM_WEBHOOK_SECRET', default='')
-ADMIN_TELEGRAM_URL = config('ADMIN_TELEGRAM_URL', default='')
+ADMIN_TELEGRAM_URL = config('ADMIN_TELEGRAM_URL', default='https://t.me/JXgroup_bot')
 
 # Celery Configuration
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', default='redis://localhost:6379/0')

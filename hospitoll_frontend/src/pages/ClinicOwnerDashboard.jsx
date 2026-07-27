@@ -5,6 +5,7 @@ import { clinicsApi, doctorsApi, medicalApi } from '../services/api'
 import useSmartAutoRefresh from '../hooks/useSmartAutoRefresh'
 import DashboardSidebar from '../components/DashboardSidebar'
 import PasswordInput from '../components/PasswordInput'
+import { resolveMediaUrl } from '../services/api'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './ClinicOwnerDashboard.css'
@@ -1743,7 +1744,7 @@ const ClinicOwnerDashboard = () => {
                     {bannerPreviewUrl || clinicOwner.banner_image ? (
                       <img
                         className="banner-preview"
-                        src={bannerPreviewUrl || clinicOwner.banner_image}
+                        src={bannerPreviewUrl || resolveMediaUrl(clinicOwner.banner_image)}
                         alt="Klinika fon rasmi"
                       />
                     ) : (

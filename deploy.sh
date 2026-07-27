@@ -20,7 +20,7 @@ bash "${ROOT_DIR}/scripts/prod-preflight.sh"
 echo "[2/8] Loading .env.production..."
 set -a
 # shellcheck disable=SC1090
-source "$ENV_FILE"
+source <(tr -d '\r' < "$ENV_FILE")
 set +a
 
 echo "[3/8] Building and starting containers..."

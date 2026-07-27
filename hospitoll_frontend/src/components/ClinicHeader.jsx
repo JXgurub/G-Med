@@ -1,4 +1,5 @@
 import { useNavigate } from 'react-router-dom'
+import { resolveMediaUrl } from '../services/api'
 import './ClinicHeader.css'
 
 const ClinicHeader = ({ clinic }) => {
@@ -29,11 +30,11 @@ const ClinicHeader = ({ clinic }) => {
 
   return (
     <div className="clinic-header">
-      {clinic.bannerImage && (
+      {resolveMediaUrl(clinic.bannerImage) && (
         <div
           className="clinic-header-banner"
           aria-hidden="true"
-          style={{ backgroundImage: `url(${clinic.bannerImage})` }}
+          style={{ backgroundImage: `url(${resolveMediaUrl(clinic.bannerImage)})` }}
         />
       )}
       <div className="clinic-header-content">

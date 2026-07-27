@@ -1120,7 +1120,7 @@ const DoctorDashboard = () => {
                 <p className="stat-label">Mening bahom</p>
                 <p className="stat-value">{ratingDisplay}/5</p>
                 <p className="stat-detail" style={{fontSize: '0.75rem', color: '#6b7280'}}>
-                  {doctor?.total_ratings || 0} ta baho
+                  {doctor?.totalRatings || 0} ta baho
                 </p>
               </div>
             </div>

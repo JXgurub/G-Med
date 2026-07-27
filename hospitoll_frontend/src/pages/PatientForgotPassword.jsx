@@ -4,7 +4,7 @@ import { authApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
 import './DoctorForgotPassword.css'
 
-const ADMIN_TELEGRAM_URL = 'https://t.me/G_Med_group'
+const ADMIN_TELEGRAM_URL = 'https://t.me/JXgroup_bot'
 const CODE_MAX_SECONDS = 120
 const BOT_LINK_HIDE_SECONDS = 3600
 const BOT_LINK_HIDE_STORAGE_KEY = 'patient_reset_bot_link_hidden_until'

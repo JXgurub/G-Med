@@ -1,6 +1,5 @@
 from datetime import timedelta
 
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
@@ -13,18 +12,11 @@ LOCK_RULES = {
     3: {'max_attempts': 2, 'block_seconds': 60 * 60},
 }
 MAX_STAGE = 3
+NEW_ADMIN_BOT_URL = 'https://t.me/JXgroup_bot'
 
 
 def _admin_telegram_link() -> str:
-    admin_url = str(getattr(settings, 'ADMIN_TELEGRAM_URL', '') or '').strip()
-    if admin_url:
-        return admin_url
-
-    bot_username = str(getattr(settings, 'TELEGRAM_BOT_USERNAME', '') or '').strip().lstrip('@')
-    if bot_username:
-        return f"https://t.me/{bot_username}"
-
-    return ''
+    return NEW_ADMIN_BOT_URL
 
 
 def _seconds_left(dt_value) -> int:

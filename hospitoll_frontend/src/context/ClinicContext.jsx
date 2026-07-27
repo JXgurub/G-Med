@@ -150,10 +150,27 @@ export const ClinicProvider = ({ children }) => {
 
   const fetchSpecializations = async () => {
     try {
-      const data = await doctorsApi.getSpecializations()
-      const results = data?.results || data || []
-      setSpecializations(results)
-      return results
+      const firstPage = await doctorsApi.getSpecializations({ page: 1 })
+
+      if (Array.isArray(firstPage)) {
+        setSpecializations(firstPage)
+        return firstPage
+      }
+
+      const firstResults = Array.isArray(firstPage?.results) ? firstPage.results : []
+      const allResults = [...firstResults]
+      const totalCount = Number(firstPage?.count || firstResults.length)
+      const pageSize = firstResults.length > 0 ? firstResults.length : (totalCount || 1)
+      const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+
+      for (let page = 2; page <= totalPages; page += 1) {
+        const nextPage = await doctorsApi.getSpecializations({ page })
+        const nextResults = Array.isArray(nextPage?.results) ? nextPage.results : []
+        allResults.push(...nextResults)
+      }
+
+      setSpecializations(allResults)
+      return allResults
     } catch (error) {
       console.error('Error fetching specializations:', error)
       setSpecializations([])

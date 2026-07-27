@@ -807,3 +807,43 @@ class DoctorEmploymentLifecycleTests(APITestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), [])
+
+    def test_check_in_is_blocked_outside_doctor_working_hours(self):
+        now_local = timezone.localtime()
+        start_candidate = (now_local + timedelta(hours=2)).replace(second=0, microsecond=0)
+        end_candidate = (now_local + timedelta(hours=3)).replace(second=0, microsecond=0)
+
+        start_time = start_candidate.time()
+        end_time = end_candidate.time()
+        if end_time <= start_time:
+            start_time = datetime.strptime('00:00', '%H:%M').time()
+            end_time = datetime.strptime('00:30', '%H:%M').time()
+
+        self.doctor.is_checked_in = False
+        self.doctor.available_from = start_time
+        self.doctor.available_until = end_time
+        self.doctor.working_days = now_local.strftime('%a')
+        self.doctor.save(update_fields=['is_checked_in', 'available_from', 'available_until', 'working_days', 'updated_at'])
+
+        self.auth_as(self.doctor_user)
+        response = self.client.post(reverse('doctor-check-in'), {}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('ish kuni va ish vaqtida', str(response.json().get('detail', '')).lower())
+        self.doctor.refresh_from_db()
+        self.assertFalse(self.doctor.is_checked_in)
+
+    def test_available_endpoint_returns_empty_for_stale_previous_day_check_in(self):
+        today = timezone.localdate()
+        self.doctor.is_checked_in = True
+        self.doctor.checked_in_at = timezone.now() - timedelta(days=1)
+        self.doctor.available_from = datetime.strptime('00:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('23:30', '%H:%M').time()
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri,Sat,Sun'
+        self.doctor.save(update_fields=['is_checked_in', 'checked_in_at', 'available_from', 'available_until', 'working_days', 'updated_at'])
+
+        url = reverse('doctor-availability-available')
+        response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': today.isoformat()})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])

@@ -384,7 +384,7 @@ export const doctorsApi = {
   getRatings: (params) => api.get('/doctors/ratings/', typeof params === 'string' ? { doctor: params } : params),
   addRating: (data) => api.post('/doctors/ratings/', data),
   updateRating: (id, data) => api.patch(`/doctors/ratings/${id}/`, data),
-  getSpecializations: () => api.get('/doctors/specializations/'),
+  getSpecializations: (params) => api.get('/doctors/specializations/', params),
   createSpecialization: (data) => api.post('/doctors/specializations/', data),
   getMySpecializations: () => api.get('/doctors/specialty-prices/my_specializations/'),
   updateSpecialtyPrice: (specialtyPriceId, data) => api.patch(`/doctors/specialty-prices/${specialtyPriceId}/`, data),

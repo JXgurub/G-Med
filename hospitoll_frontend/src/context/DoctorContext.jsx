@@ -82,6 +82,7 @@ const mapDoctorProfile = async (doctorData) => {
     specialization: doctorData.specializations?.map((s) => s.name).join(', ') || 'N/A',
     experience: doctorData.years_of_experience || 0,
     rating: doctorData.rating || 0,
+    totalRatings: Number(doctorData.total_ratings || 0),
     todayAppointments: doctorData.today_appointments || 0,
     todayPatients: doctorData.today_patients || 0,
     monthlyPatients: doctorData.monthly_patients || 0,
