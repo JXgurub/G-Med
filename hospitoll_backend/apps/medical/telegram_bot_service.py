@@ -1,6 +1,7 @@
 import logging
 import re
 import secrets
+from uuid import UUID
 from urllib.parse import unquote_plus
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -116,6 +117,11 @@ class TelegramBotService:
             self._handle_myappointments(ctx)
             return
 
+        if text.startswith('/doctorpatients'):
+            logger.info("Telegram /doctorpatients received user_id=%s chat_id=%s", ctx.user_id, ctx.chat_id)
+            self._send_doctor_daily_patients(chat_id=ctx.chat_id, telegram_user_id=ctx.user_id)
+            return
+
         if text.startswith("/doctorlink"):
             self._handle_doctor_link(ctx)
             return
@@ -142,8 +148,14 @@ class TelegramBotService:
             ctx.chat_id,
             "Buyruqlar:\n"
             "• /myappointments — yaqin randevular\n"
+            "• /doctorpatients — bugungi bemorlar ro'yxati\n"
             "• /doctorlink <tel> <passport> <pinfl> — doktor akkauntni bog'lash\n"
             "Token bilan tasdiqlash uchun: /start &lt;telegram_token&gt;",
+            reply_markup={
+                "inline_keyboard": [
+                    [{"text": "📋 Ro'yxatdagi odamlarni ko'rish", "callback_data": "doctorpatients:today"}],
+                ]
+            },
         )
 
     def _normalize_start_token(self, raw_token: str) -> str:
@@ -157,6 +169,25 @@ class TelegramBotService:
         token = token.split('&', 1)[0].strip()
         token = token.replace('`', '').replace('"', '').replace("'", '')
         return token
+
+    def _normalize_appointment_token(self, token: str) -> str:
+        """Normalize appointment start payload into canonical UUID string.
+
+        Accepts canonical UUID (36 chars), compact hex UUID (32 chars),
+        and payloads that include extra URL/query noise.
+        """
+        raw = str(token or '').strip()
+        if not raw:
+            return ''
+
+        uuid_pattern = r'([0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+        match = re.search(uuid_pattern, raw)
+        candidate = match.group(1) if match else raw
+
+        try:
+            return str(UUID(candidate))
+        except (ValueError, TypeError, AttributeError):
+            return raw
 
     def send_doctor_rating_prompt(self, appointment: Appointment) -> None:
         chat_id = int(getattr(appointment, 'telegram_chat_id', 0) or 0)
@@ -319,7 +350,57 @@ class TelegramBotService:
         self._require_client().send_message(
             ctx.chat_id,
             "✅ Doktor akkauntingiz Telegram botga ulandi. Endi parol tiklash kodi shu yerga yuboriladi.",
+            reply_markup={
+                "inline_keyboard": [
+                    [{"text": "📋 Ro'yxatdagi odamlarni ko'rish", "callback_data": "doctorpatients:today"}],
+                ]
+            },
         )
+
+    def _send_doctor_daily_patients(self, chat_id: int, telegram_user_id: int, target_date=None) -> None:
+        doctor = (
+            Doctor.objects.select_related('user', 'clinic')
+            .filter(telegram_user_id=telegram_user_id, is_active=True)
+            .order_by('-updated_at')
+            .first()
+        )
+        if not doctor:
+            self._require_client().send_message(
+                chat_id,
+                "Doktor akkaunti bog'lanmagan. Avval /doctorlink <tel> <passport> <pinfl> yuboring.",
+            )
+            return
+
+        day = target_date or timezone.localdate()
+        appointments = self._get_doctor_day_queue_items(doctor=doctor, day=day)
+
+        if not appointments:
+            self._require_client().send_message(
+                chat_id,
+                f"📋 {day.strftime('%d.%m.%Y')} uchun bemorlar ro'yxati bo'sh.",
+            )
+            return
+
+        lines = [f"📋 {day.strftime('%d.%m.%Y')} kunidagi bemorlar ro'yxati:"]
+        for idx, appt in enumerate(appointments, start=1):
+            when = timezone.localtime(appt.scheduled_date).strftime('%H:%M')
+            patient_name = (
+                appt.patient.user.get_full_name().strip()
+                if getattr(appt, 'patient', None) and getattr(appt.patient, 'user', None)
+                else 'Bemor'
+            )
+            patient_phone = ''
+            if getattr(appt, 'patient', None):
+                patient_phone = (getattr(appt.patient, 'phone_number', '') or '').strip()
+                if not patient_phone and getattr(appt.patient, 'user', None):
+                    patient_phone = (getattr(appt.patient.user, 'phone_number', '') or '').strip()
+
+            line = f"{idx}. #{idx} • {patient_name} • {when}"
+            if patient_phone:
+                line += f" • {patient_phone}"
+            lines.append(line)
+
+        self._require_client().send_message(chat_id, "\n".join(lines))
 
     def _handle_start(self, ctx: TelegramMessageContext, token: str) -> None:
         if not token:
@@ -342,9 +423,9 @@ class TelegramBotService:
             self._handle_patient_reset_start(ctx, token[3:])
             return
 
+        appointment_token = self._normalize_appointment_token(token)
         try:
-            # token is UUID
-            appointment = Appointment.objects.select_related("doctor", "clinic", "patient").get(telegram_token=token)
+            appointment = Appointment.objects.select_related("doctor", "clinic", "patient").get(telegram_token=appointment_token)
         except Appointment.DoesNotExist:
             self._require_client().send_message(ctx.chat_id, "Token noto‘g‘ri yoki ishlatilgan.")
             return
@@ -641,13 +722,45 @@ class TelegramBotService:
         lines: list[str] = ["📅 Yaqin randevular:"]
         keyboard: list[list[dict[str, str]]] = []
 
+        queue_cache: dict[tuple[str, str], list[Appointment]] = {}
+
+        def _get_dashboard_queue_for_day(appt: Appointment) -> list[Appointment]:
+            doctor = getattr(appt, 'doctor', None)
+            if not doctor or not getattr(appt, 'scheduled_date', None):
+                return []
+
+            appointment_day = timezone.localtime(appt.scheduled_date).date()
+            cache_key = (str(doctor.id), appointment_day.isoformat())
+            if cache_key not in queue_cache:
+                queue_cache[cache_key] = self._get_doctor_day_queue_items(doctor=doctor, day=appointment_day)
+
+            return queue_cache[cache_key]
+
+        def _ahead_from_dashboard_queue(appt: Appointment) -> list[Appointment]:
+            ordered_items = _get_dashboard_queue_for_day(appt)
+            ordered_ids = [str(item.id) for item in ordered_items]
+            try:
+                index = ordered_ids.index(str(appt.id))
+            except ValueError:
+                return []
+            return ordered_items[:index]
+
+        def _full_name_for_appt(appt: Appointment) -> str:
+            patient = getattr(appt, 'patient', None)
+            user = getattr(patient, 'user', None) if patient else None
+            if user:
+                full_name = user.get_full_name().strip()
+                if full_name:
+                    return full_name
+            return 'Bemor'
+
         for appt in upcoming:
             when = timezone.localtime(appt.scheduled_date).strftime("%d.%m.%Y %H:%M")
             doctor_name = appt.doctor_name or (appt.doctor.user.get_full_name() if appt.doctor else "Doktor")
             clinic_name = appt.clinic_name or (appt.clinic.name if appt.clinic else "Klinika")
             short_id = str(appt.id)[:8]
-            queue_position = int(getattr(appt, 'queue_position', 0) or 0)
-            ahead_count = max(queue_position - 1, 0)
+            ahead_items = _ahead_from_dashboard_queue(appt)
+            ahead_count = len(ahead_items)
             if appt.status == Appointment.Status.IN_PROGRESS:
                 lines.append(f"• ✅ <b>Doktor qabul qilgan</b> — {clinic_name} — {doctor_name} (#{short_id})")
             elif appt.status == Appointment.Status.COMPLETED:
@@ -655,6 +768,10 @@ class TelegramBotService:
             else:
                 lines.append(f"• <b>{when}</b> — {clinic_name} — {doctor_name} (#{short_id})")
                 lines.append(f"   Oldinda: {ahead_count} ta odam")
+                if ahead_items:
+                    lines.append("   Oldindagi bemorlar:")
+                    for idx, ahead_appt in enumerate(ahead_items, start=1):
+                        lines.append(f"   #{idx} {_full_name_for_appt(ahead_appt)}")
 
             # After doctor starts/finishes the visit, patient cannot manage queue/time from bot.
             if appt.status not in [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]:
@@ -669,6 +786,25 @@ class TelegramBotService:
             ctx.chat_id,
             "\n".join(lines),
             reply_markup={"inline_keyboard": keyboard},
+        )
+
+    def _active_queue_statuses(self) -> tuple[str, ...]:
+        return (
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+            Appointment.Status.WAITING,
+        )
+
+    def _get_doctor_day_queue_items(self, doctor: Doctor, day) -> list[Appointment]:
+        # Keep queue source/order aligned with doctor dashboard "today" endpoint.
+        return list(
+            Appointment.objects.filter(
+                doctor=doctor,
+                scheduled_date__date=day,
+                status__in=self._active_queue_statuses(),
+            )
+            .select_related('patient__user')
+            .order_by('scheduled_date', 'created_at', 'queue_position')
         )
 
     def _handle_callback_query(self, cq: dict[str, Any]) -> None:
@@ -763,6 +899,13 @@ class TelegramBotService:
                     state_id=None,
                 )
                 client.answer_callback_query(callback_id, "O‘zgartirildi" if ok else "Band yoki mos emas")
+                return
+
+            if data.startswith('doctorpatients:'):
+                day_mode = data.split(':', 1)[1] if ':' in data else 'today'
+                target_date = timezone.localdate() if day_mode == 'today' else timezone.localdate()
+                self._send_doctor_daily_patients(chat_id=chat_id, telegram_user_id=user_id, target_date=target_date)
+                client.answer_callback_query(callback_id, "Ro'yxat yuborildi")
                 return
 
             if data.startswith("cancel:"):

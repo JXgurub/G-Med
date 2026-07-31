@@ -504,6 +504,16 @@ export const DoctorProvider = ({ children }) => {
     }
   }
 
+  const cancelTodaysAppointments = async () => {
+    if (!doctor?.id) {
+      return { cancelled_count: 0, released_slots_count: 0 }
+    }
+
+    const response = await doctorsApi.cancelTodaysAppointments()
+    await loadOnlineAppointments(doctor.id)
+    return response
+  }
+
   const addPatient = async (patientInfo) => {
     if (!doctor) return null
 
@@ -703,6 +713,7 @@ export const DoctorProvider = ({ children }) => {
       logoutDoctor,
       checkInDoctor,
       checkOutDoctor,
+      cancelTodaysAppointments,
       addPatient,
       loadOnlineAppointments,
       acceptOnlineAppointment,

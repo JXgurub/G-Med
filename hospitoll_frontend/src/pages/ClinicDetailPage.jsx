@@ -9,6 +9,23 @@ const INITIAL_BOOKING_FORM = {
   phone: '+998'
 }
 
+const formatDateInputValue = (value) => {
+  const year = value.getFullYear()
+  const month = String(value.getMonth() + 1).padStart(2, '0')
+  const day = String(value.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const getDateWindow = () => {
+  const todayDate = new Date()
+  const tomorrowDate = new Date(todayDate)
+  tomorrowDate.setDate(tomorrowDate.getDate() + 1)
+  return {
+    today: formatDateInputValue(todayDate),
+    tomorrow: formatDateInputValue(tomorrowDate)
+  }
+}
+
 const ClinicDetailPage = () => {
   const { clinicId } = useParams()
   const navigate = useNavigate()
@@ -20,14 +37,16 @@ const ClinicDetailPage = () => {
   const [bookingOpen, setBookingOpen] = useState(false)
   const [selectedDoctor, setSelectedDoctor] = useState(null)
   const [selectedSpecialtyPriceId, setSelectedSpecialtyPriceId] = useState(null)
-  const [selectedDate, setSelectedDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [selectedDate, setSelectedDate] = useState(() => getDateWindow().today)
   const [availableSlots, setAvailableSlots] = useState([])
+  const [availabilityNotice, setAvailabilityNotice] = useState('')
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [bookingForm, setBookingForm] = useState({
     ...INITIAL_BOOKING_FORM
   })
   const [bookingLoading, setBookingLoading] = useState(false)
   const [bookingMessage, setBookingMessage] = useState(null)
+  const { today: minBookingDate, tomorrow: maxBookingDate } = getDateWindow()
 
   useEffect(() => {
     loadClinicDetails()
@@ -123,11 +142,21 @@ const ClinicDetailPage = () => {
 
   const fetchAvailability = async (doctorId, date) => {
     try {
-      const slots = await doctorsApi.getAvailability({ doctor: doctorId, date })
+      const response = await doctorsApi.getAvailability({ doctor: doctorId, date, include_meta: 1 })
+      const slots = Array.isArray(response) ? response : (response?.slots || [])
       setAvailableSlots(Array.isArray(slots) ? slots : [])
+
+      const isToday = date === minBookingDate
+      const dayClosed = Boolean(response && !Array.isArray(response) && response.day_closed)
+      if (isToday && dayClosed) {
+        setAvailabilityNotice(response?.message || 'Doktor bugun qabul qila olmaydi')
+      } else {
+        setAvailabilityNotice('')
+      }
     } catch (error) {
       console.error('Error loading availability:', error)
       setAvailableSlots([])
+      setAvailabilityNotice('')
     }
   }
 
@@ -136,26 +165,20 @@ const ClinicDetailPage = () => {
     setSelectedSpecialtyPriceId(specialtyPriceId)
     setSelectedSlot(null)
     setBookingMessage(null)
+    setAvailabilityNotice('')
     setBookingForm({ ...INITIAL_BOOKING_FORM })
-    const today = new Date().toISOString().split('T')[0]
+    const today = getDateWindow().today
     setSelectedDate(today)
     setBookingOpen(true)
-    if (!doctorData?.is_checked_in) {
-      setAvailableSlots([])
-      return
-    }
     await fetchAvailability(doctorData.id, today)
   }
 
   const handleDateChange = async (event) => {
-    const nextDate = event.target.value
+    const rawDate = event.target.value
+    const nextDate = rawDate < minBookingDate ? minBookingDate : rawDate > maxBookingDate ? maxBookingDate : rawDate
     setSelectedDate(nextDate)
     setSelectedSlot(null)
     if (selectedDoctor?.id) {
-      if (!selectedDoctor?.is_checked_in) {
-        setAvailableSlots([])
-        return
-      }
       await fetchAvailability(selectedDoctor.id, nextDate)
     }
   }
@@ -339,18 +362,20 @@ const ClinicDetailPage = () => {
             <div className="booking-modal-body">
               <div className="booking-section">
                 <label>Sana</label>
-                <input type="date" value={selectedDate} onChange={handleDateChange} />
+                <input
+                  type="date"
+                  value={selectedDate}
+                  min={minBookingDate}
+                  max={maxBookingDate}
+                  onChange={handleDateChange}
+                />
               </div>
 
               <div className="booking-section">
                 <label>Bo'sh vaqtlar</label>
                 <div className="booking-slots">
                   {availableSlots.length === 0 && (
-                    <div className="booking-empty">
-                      {selectedDoctor?.is_checked_in
-                        ? "Bo'sh vaqtlar topilmadi"
-                        : "Doktor hozir ishga kelmagan, navbatlar vaqtincha yopiq"}
-                    </div>
+                    <div className="booking-empty">Bo'sh vaqtlar topilmadi</div>
                   )}
                   {availableSlots.map((slot) => (
                     <button
@@ -363,6 +388,12 @@ const ClinicDetailPage = () => {
                   ))}
                 </div>
               </div>
+
+              {availabilityNotice && (
+                <div className="booking-message" style={{ marginTop: '10px', background: '#fff1f2', color: '#b91c1c', borderColor: '#fecdd3' }}>
+                  {availabilityNotice}
+                </div>
+              )}
 
               <div className="booking-fields-grid">
                 <div className="booking-section">

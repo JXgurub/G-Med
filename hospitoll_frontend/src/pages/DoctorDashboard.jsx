@@ -117,8 +117,7 @@ const DoctorDashboard = () => {
     onlineAppointments,
     appointmentsLoading,
     loading,
-    checkInDoctor,
-    checkOutDoctor,
+    cancelTodaysAppointments,
     addPatient,
     loadOnlineAppointments,
     acceptOnlineAppointment,
@@ -155,6 +154,8 @@ const DoctorDashboard = () => {
   const [showNewVisitForm, setShowNewVisitForm] = useState(false)
   const [queueDecisionLoading, setQueueDecisionLoading] = useState({})
   const [queueCancelConfirm, setQueueCancelConfirm] = useState(createInitialQueueCancelConfirm)
+  const [cancelTodayConfirmOpen, setCancelTodayConfirmOpen] = useState(false)
+  const [cancelTodayLoading, setCancelTodayLoading] = useState(false)
   const [selectedAvatarFile, setSelectedAvatarFile] = useState(null)
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState('')
   const [avatarSaving, setAvatarSaving] = useState(false)
@@ -286,17 +287,18 @@ const DoctorDashboard = () => {
   }, [showAvatarMenu])
 
   useEffect(() => {
-    if (!queueCancelConfirm.open) return
+    if (!queueCancelConfirm.open && !cancelTodayConfirmOpen) return
 
     const handleEscape = (event) => {
       if (event.key === 'Escape') {
         setQueueCancelConfirm(createInitialQueueCancelConfirm())
+        setCancelTodayConfirmOpen(false)
       }
     }
 
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
-  }, [queueCancelConfirm.open])
+  }, [queueCancelConfirm.open, cancelTodayConfirmOpen])
 
   useEffect(() => {
     return () => {
@@ -314,14 +316,30 @@ const DoctorDashboard = () => {
     return null
   }
 
-  const handleCheckIn = async () => {
-    await checkInDoctor()
-    showNotice('Ishga keldiniz! ✅', 'success')
+  const handleRequestCancelTodaysAppointments = () => {
+    if (!canPractice) {
+      showNotice('Siz klinikada faol emassiz. Bugungi qabulni bekor qila olmaysiz.', 'warning')
+      return
+    }
+    setCancelTodayConfirmOpen(true)
   }
 
-  const handleCheckOut = async () => {
-    await checkOutDoctor()
-    showNotice('Ishdan chiqib ketdingiz! 👋', 'success')
+  const handleConfirmCancelTodaysAppointments = async () => {
+    setCancelTodayLoading(true)
+    try {
+      const result = await cancelTodaysAppointments()
+      const cancelledCount = Number(result?.cancelled_count || 0)
+      if (cancelledCount > 0) {
+        showNotice(`Bugungi ${cancelledCount} ta qabul bekor qilindi.`, 'success')
+      } else {
+        showNotice('Bugun bekor qilinadigan qabul topilmadi.', 'info')
+      }
+      setCancelTodayConfirmOpen(false)
+    } catch (error) {
+      showNotice(getApiErrorMessage(error, 'Bugungi qabullarni bekor qilishda xatolik yuz berdi'), 'error')
+    } finally {
+      setCancelTodayLoading(false)
+    }
   }
 
   const formatPrice = (value) => {
@@ -872,24 +890,21 @@ const DoctorDashboard = () => {
               </div>
             )}
 
-            {doctorStatus?.isCheckedIn ? (
-              <div className="check-status active">
-                <div className="status-badge">✅ Ishga keldingiz</div>
+            <div className={`check-status ${doctorStatus?.isCheckedIn ? 'active' : 'inactive'}`}>
+              {doctorStatus?.isCheckedIn && <div className="status-badge">✅ Hozir ishda</div>}
+              {doctorStatus?.isCheckedIn && doctorStatus?.checkedInTime && doctorStatus?.checkedInDate && (
                 <p className="time-info">
                   {doctorStatus.checkedInTime} • {doctorStatus.checkedInDate}
                 </p>
-                <button className="btn-checkout" onClick={handleCheckOut}>
-                  Ishdan Chiqish
-                </button>
-              </div>
-            ) : (
-              <div className="check-status inactive">
-                <div className="status-badge">❌ Ishga kelmadingiz</div>
-                <button className="btn-checkin" onClick={handleCheckIn} disabled={!canPractice}>
-                  Ishga Kelganini Tasdiqlash
-                </button>
-              </div>
-            )}
+              )}
+              <button
+                className="btn-cancel-today"
+                onClick={handleRequestCancelTodaysAppointments}
+                disabled={!canPractice || cancelTodayLoading}
+              >
+                {cancelTodayLoading ? 'Bekor qilinmoqda...' : 'Bugungi navbatni yopish'}
+              </button>
+            </div>
 
             {showSettingsPanel && (
               <form onSubmit={handleSaveSettings} className="doctor-settings-form">
@@ -1692,6 +1707,46 @@ const DoctorDashboard = () => {
               </button>
               <button className="btn-cancel" onClick={() => setQueueCancelConfirm(createInitialQueueCancelConfirm())}>
                 Yo‘q
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cancelTodayConfirmOpen && (
+        <div
+          className="modal-overlay"
+          onClick={() => {
+            if (!cancelTodayLoading) setCancelTodayConfirmOpen(false)
+          }}
+        >
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title">
+                <h2>Bugungi navbatni yopish</h2>
+                <p className="patient-phone">Bugunga belgilangan navbatlar bekor qilinadi</p>
+              </div>
+              <button
+                className="btn-close"
+                onClick={() => {
+                  if (!cancelTodayLoading) setCancelTodayConfirmOpen(false)
+                }}
+                disabled={cancelTodayLoading}
+              >
+                ✕
+              </button>
+            </div>
+            <div className="modal-body">
+              <p style={{ margin: 0, color: 'var(--text-dark)', fontWeight: 600 }}>
+                Bugungi navbatlarni bekor qilib, yangi navbatni yopamizmi?
+              </p>
+            </div>
+            <div className="form-buttons">
+              <button className="btn-submit" onClick={handleConfirmCancelTodaysAppointments} disabled={cancelTodayLoading}>
+                {cancelTodayLoading ? 'Bajarilmoqda...' : 'Ha, yopish'}
+              </button>
+              <button className="btn-cancel" onClick={() => setCancelTodayConfirmOpen(false)} disabled={cancelTodayLoading}>
+                Yo‘q, qoldirish
               </button>
             </div>
           </div>

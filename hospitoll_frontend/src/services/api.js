@@ -380,6 +380,7 @@ export const doctorsApi = {
   terminate: (id) => api.post(`/doctors/${id}/terminate/`, {}),
   checkIn: () => api.post('/doctors/check_in/', {}),
   checkOut: () => api.post('/doctors/check_out/', {}),
+  cancelTodaysAppointments: () => api.post('/doctors/cancel_today_appointments/', {}),
   getWorkStats: () => api.get('/doctors/work_stats/'),
   getRatings: (params) => api.get('/doctors/ratings/', typeof params === 'string' ? { doctor: params } : params),
   addRating: (data) => api.post('/doctors/ratings/', data),

@@ -792,8 +792,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor klinikaga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
         if not doctor.is_active or not clinic.is_active_status:
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
-        if not doctor.is_checked_in:
-            return Response({'detail': 'Doktor hali ishga kelmagan.'}, status=status.HTTP_400_BAD_REQUEST)
         if slot.doctor_id != doctor.id:
             return Response({'detail': 'Slot ushbu doktorga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -801,10 +799,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         if scheduled_dt < timezone.now():
             return Response({'detail': 'Tanlangan vaqt allaqachon o‘tib ketgan.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Limit booking to at most 3 days ahead (today + next 3 days)
-        max_date = timezone.localdate() + timedelta(days=3)
+        # Limit booking to today and tomorrow only
+        max_date = timezone.localdate() + timedelta(days=1)
         if slot.date > max_date:
-            return Response({'detail': 'Onlayn navbatni faqat 3 kun ichida olish mumkin.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'Onlayn navbatni faqat bugun va ertaga olish mumkin.'}, status=status.HTTP_400_BAD_REQUEST)
 
         slot_duration = int((
             datetime.combine(slot.date, slot.end_time) - datetime.combine(slot.date, slot.start_time)
@@ -914,7 +912,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             pass
 
         bot_username = getattr(settings, 'TELEGRAM_BOT_USERNAME', '') or 'hosptol_bot'
-        bot_link = f"https://t.me/{bot_username}?start={appointment.telegram_token}"
+        token_payload = appointment.telegram_token.hex if appointment.telegram_token else ''
+        bot_link = f"https://t.me/{bot_username}?start={token_payload}"
 
         return Response({
             'appointment': AppointmentSerializer(appointment).data,
@@ -944,18 +943,16 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor klinikaga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
         if not doctor.is_active or not clinic.is_active_status:
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
-        if not doctor.is_checked_in:
-            return Response({'detail': 'Doktor hali ishga kelmagan.'}, status=status.HTTP_400_BAD_REQUEST)
 
         tz = timezone.get_current_timezone()
         scheduled_dt = timezone.make_aware(datetime.combine(target_date, target_time), tz)
         if scheduled_dt < timezone.now():
             return Response({'detail': 'Tanlangan vaqt allaqachon o‘tib ketgan.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Limit booking to at most 3 days ahead (today + next 3 days)
-        max_date = timezone.localdate() + timedelta(days=3)
+        # Limit booking to today and tomorrow only
+        max_date = timezone.localdate() + timedelta(days=1)
         if target_date > max_date:
-            return Response({'detail': 'Onlayn navbatni faqat 3 kun ichida olish mumkin.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'detail': 'Onlayn navbatni faqat bugun va ertaga olish mumkin.'}, status=status.HTTP_400_BAD_REQUEST)
 
         duration_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
         if duration_minutes not in (15, 20, 30):
@@ -1076,7 +1073,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             pass
 
         bot_username = getattr(settings, 'TELEGRAM_BOT_USERNAME', '') or 'hosptol_bot'
-        bot_link = f"https://t.me/{bot_username}?start={appointment.telegram_token}"
+        token_payload = appointment.telegram_token.hex if appointment.telegram_token else ''
+        bot_link = f"https://t.me/{bot_username}?start={token_payload}"
 
         return Response({
             'appointment': AppointmentSerializer(appointment).data,

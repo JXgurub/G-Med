@@ -3,6 +3,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
+from uuid import uuid4
 
 from django.urls import reverse
 from django.utils import timezone
@@ -1063,7 +1064,7 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             is_checked_in=True,
         )
 
-    def test_online_booking_rejects_when_doctor_not_checked_in(self):
+    def test_online_booking_allows_when_doctor_not_checked_in(self):
         self.doctor.is_checked_in = False
         self.doctor.save(update_fields=['is_checked_in'])
 
@@ -1086,9 +1087,31 @@ class BookingWindowLunchTests(MedicalApiTestCase):
             'phone_number': '+998901111000',
         }, format='json')
 
+        self.assertEqual(response.status_code, 201)
+
+    def test_online_booking_rejects_date_after_tomorrow(self):
+        target_date = timezone.localdate() + timedelta(days=2)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='10:00',
+            end_time='10:30',
+            status='available',
+        )
+
+        url = reverse('appointment-online-booking')
+        response = self.client.post(url, {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'slot_id': str(slot.id),
+            'first_name': 'Ali',
+            'last_name': 'Valiyev',
+            'phone_number': '+998901111333',
+        }, format='json')
+
         self.assertEqual(response.status_code, 400)
         response_json = self.body(response)
-        self.assertIn('ishga kelmagan', str(response_json.get('detail', '')).lower())
+        self.assertIn('bugun va ertaga', str(response_json.get('detail', '')).lower())
 
     def test_online_booking_rejects_lunch_time_slot(self):
         target_date = timezone.localdate() + timedelta(days=1)
@@ -1307,6 +1330,23 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         self.assertEqual(response.status_code, 400)
         response_json = self.body(response)
         self.assertIn('abet', str(response_json.get('detail', '')).lower())
+
+    def test_public_booking_rejects_date_after_tomorrow(self):
+        target_date = timezone.localdate() + timedelta(days=2)
+
+        url = reverse('appointment-public-booking')
+        response = self.client.post(url, {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'full_name': 'Ali Valiyev',
+            'phone_number': '+998901111444',
+            'date': target_date.isoformat(),
+            'time': '10:00',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        response_json = self.body(response)
+        self.assertIn('bugun va ertaga', str(response_json.get('detail', '')).lower())
 
     def test_availability_endpoint_excludes_lunch_slots(self):
         target_date = timezone.localdate() + timedelta(days=1)
@@ -1737,6 +1777,93 @@ class TelegramRescheduleDayButtonsTests(MedicalApiTestCase):
         self.assertTrue(answered_callbacks)
         self.assertEqual(answered_callbacks[-1]['text'], 'Bo‘sh vaqtlar')
 
+class TelegramStartTokenNormalizationTests(MedicalApiTestCase):
+    def setUp(self):
+        owner_user = CustomUser.objects.create_user(
+            username='clinic_owner_tg_start',
+            email='clinic.tg.start@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='Owner',
+        )
+        clinic = Clinic.objects.create(
+            owner=owner_user,
+            name='Telegram Start Clinic',
+            slug='telegram-start-clinic',
+            address='Test address',
+            phone_number='+998901234501',
+            email='clinic.tg.start@test.uz',
+            registration_number='REG-TG-START-001',
+            status='active',
+        )
+
+        doctor_user = CustomUser.objects.create_user(
+            username='doctor_tg_start_user',
+            email='doctor.tg.start@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Start',
+            last_name='Doctor',
+        )
+        doctor = Doctor.objects.create(
+            user=doctor_user,
+            clinic=clinic,
+            license_number='LIC-TG-START-001',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+            available_from='09:00',
+            available_until='18:00',
+        )
+
+        patient_user = CustomUser.objects.create_user(
+            username='patient_tg_start_user',
+            email='patient.tg.start@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Start',
+            last_name='Patient',
+        )
+        patient = Patient.objects.create(user=patient_user)
+
+        self.telegram_user_id = 909001
+        self.telegram_chat_id = 909001
+        self.appointment = Appointment.objects.create(
+            patient=patient,
+            doctor=doctor,
+            clinic=clinic,
+            status=Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+            scheduled_date=timezone.now() + timedelta(hours=2),
+            duration_minutes=30,
+            telegram_token=uuid4(),
+            telegram_token_expires_at=timezone.now() + timedelta(minutes=20),
+        )
+
+    def test_start_accepts_compact_uuid_payload(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        compact_token = self.appointment.telegram_token.hex
+        service.handle_update({
+            'message': {
+                'from': {'id': self.telegram_user_id},
+                'chat': {'id': self.telegram_chat_id},
+                'text': f'/start {compact_token}',
+            }
+        })
+
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, Appointment.Status.SCHEDULED)
+        self.assertIsNone(self.appointment.telegram_token)
+        self.assertEqual(self.appointment.telegram_user_id, self.telegram_user_id)
+        self.assertEqual(self.appointment.telegram_chat_id, self.telegram_chat_id)
+        self.assertTrue(any('Tasdiqlandi' in item.get('text', '') for item in sent_messages))
+
 
 class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
     def setUp(self):
@@ -1784,7 +1911,6 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
             last_name='One',
         )
         self.patient1 = Patient.objects.create(user=self.patient1_user)
-
         self.patient2_user = CustomUser.objects.create_user(
             username='patient_arrive_2',
             email='patient.arrive.2@example.com',
@@ -1990,3 +2116,377 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
         self.assertEqual(int((self.appt2.scheduled_date - self.appt1.scheduled_date).total_seconds() // 60), 30)
         self.assertEqual(int((self.appt3.scheduled_date - self.appt2.scheduled_date).total_seconds() // 60), 30)
         self.assertFalse(any(m['chat_id'] == 910000 and 'Navbat vaqtingiz yangilandi' in m['text'] for m in sent_messages))
+
+
+class TelegramDoctorPatientsListTests(MedicalApiTestCase):
+    def setUp(self):
+        owner_user = CustomUser.objects.create_user(
+            username='clinic_owner_doc_list',
+            email='clinic.doc.list@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='Owner',
+        )
+        clinic = Clinic.objects.create(
+            owner=owner_user,
+            name='Doctor List Clinic',
+            slug='doctor-list-clinic',
+            address='Test address',
+            phone_number='+998901234502',
+            email='clinic.doc.list@test.uz',
+            registration_number='REG-DOC-LIST-001',
+            status='active',
+        )
+
+        doctor_user = CustomUser.objects.create_user(
+            username='doctor_list_user',
+            email='doctor.list@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='List',
+            last_name='Doctor',
+        )
+        self.telegram_user_id = 900777
+        self.telegram_chat_id = 900777
+        self.doctor = Doctor.objects.create(
+            user=doctor_user,
+            clinic=clinic,
+            license_number='LIC-DOC-LIST-001',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+            telegram_user_id=self.telegram_user_id,
+            telegram_chat_id=self.telegram_chat_id,
+        )
+
+        patient_user_1 = CustomUser.objects.create_user(
+            username='patient_doc_list_1',
+            email='patient.doc.list.1@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Ali',
+            last_name='Valiyev',
+            phone_number='+998901111001',
+        )
+        patient_user_2 = CustomUser.objects.create_user(
+            username='patient_doc_list_2',
+            email='patient.doc.list.2@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Hasan',
+            last_name='Karimov',
+            phone_number='+998901111002',
+        )
+
+        patient_1 = Patient.objects.create(user=patient_user_1, phone_number='+998901111001')
+        patient_2 = Patient.objects.create(user=patient_user_2, phone_number='+998901111002')
+
+        today = timezone.localdate()
+        Appointment.objects.create(
+            patient=patient_2,
+            doctor=self.doctor,
+            clinic=clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=timezone.make_aware(datetime.combine(today, datetime.strptime('10:30', '%H:%M').time())),
+            duration_minutes=30,
+        )
+        Appointment.objects.create(
+            patient=patient_1,
+            doctor=self.doctor,
+            clinic=clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=1,
+            scheduled_date=timezone.make_aware(datetime.combine(today, datetime.strptime('09:30', '%H:%M').time())),
+            duration_minutes=30,
+        )
+
+    def test_doctorpatients_command_returns_sorted_numbered_list(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service.handle_update({
+            'message': {
+                'from': {'id': self.telegram_user_id},
+                'chat': {'id': self.telegram_chat_id},
+                'text': '/doctorpatients',
+            }
+        })
+
+        self.assertTrue(sent_messages)
+        text = sent_messages[-1]['text']
+        self.assertIn("bemorlar ro'yxati", text.lower())
+        self.assertIn('1. #1', text)
+        self.assertIn('09:30', text)
+        self.assertIn('2. #2', text)
+        self.assertIn('10:30', text)
+
+    def test_doctorpatients_callback_sends_list(self):
+        sent_messages = []
+        answered_callbacks = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda callback_query_id, text=None: answered_callbacks.append(
+                {'callback_query_id': callback_query_id, 'text': text}
+            ),
+        )
+
+        service.handle_update({
+            'callback_query': {
+                'id': 'cb-doc-list',
+                'data': 'doctorpatients:today',
+                'from': {'id': self.telegram_user_id},
+                'message': {'chat': {'id': self.telegram_chat_id}},
+            }
+        })
+
+        self.assertTrue(sent_messages)
+        self.assertIn("bemorlar ro'yxati", sent_messages[-1]['text'].lower())
+        self.assertTrue(answered_callbacks)
+        self.assertEqual(answered_callbacks[-1]['text'], "Ro'yxat yuborildi")
+
+    def test_doctorpatients_sorts_by_time_and_uses_sequential_numbers(self):
+        Appointment.objects.filter(doctor=self.doctor).delete()
+
+        patient_user_early = CustomUser.objects.create_user(
+            username='patient_doc_list_early',
+            email='patient.doc.list.early@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Early',
+            last_name='Patient',
+            phone_number='+998901111003',
+        )
+        patient_user_late = CustomUser.objects.create_user(
+            username='patient_doc_list_late',
+            email='patient.doc.list.late@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Late',
+            last_name='Patient',
+            phone_number='+998901111004',
+        )
+
+        patient_early = Patient.objects.create(user=patient_user_early, phone_number='+998901111003')
+        patient_late = Patient.objects.create(user=patient_user_late, phone_number='+998901111004')
+
+        today = timezone.localdate()
+        Appointment.objects.create(
+            patient=patient_late,
+            doctor=self.doctor,
+            clinic=self.doctor.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=1,
+            scheduled_date=timezone.make_aware(datetime.combine(today, datetime.strptime('14:30', '%H:%M').time())),
+            duration_minutes=30,
+        )
+        Appointment.objects.create(
+            patient=patient_early,
+            doctor=self.doctor,
+            clinic=self.doctor.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=timezone.make_aware(datetime.combine(today, datetime.strptime('14:00', '%H:%M').time())),
+            duration_minutes=30,
+        )
+
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service.handle_update({
+            'message': {
+                'from': {'id': self.telegram_user_id},
+                'chat': {'id': self.telegram_chat_id},
+                'text': '/doctorpatients',
+            }
+        })
+
+        self.assertTrue(sent_messages)
+        lines = sent_messages[-1]['text'].splitlines()
+        patient_lines = [line for line in lines if line[:1].isdigit()]
+        self.assertEqual(len(patient_lines), 2)
+        self.assertIn('1. #1 • Early Patient • 14:00', patient_lines[0])
+        self.assertIn('2. #2 • Late Patient • 14:30', patient_lines[1])
+
+
+class TelegramMyAppointmentsQueueOrderTests(MedicalApiTestCase):
+    def setUp(self):
+        owner_user = CustomUser.objects.create_user(
+            username='clinic_owner_myappts_queue',
+            email='clinic.myappts.queue@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='Owner',
+        )
+        clinic = Clinic.objects.create(
+            owner=owner_user,
+            name='MyAppointments Queue Clinic',
+            slug='myappointments-queue-clinic',
+            address='Test address',
+            phone_number='+998901234503',
+            email='clinic.myappts.queue@test.uz',
+            registration_number='REG-MYAPPTS-QUEUE-001',
+            status='active',
+        )
+
+        doctor_user = CustomUser.objects.create_user(
+            username='doctor_myappts_queue_user',
+            email='doctor.myappts.queue@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Queue',
+            last_name='Doctor',
+        )
+        self.doctor = Doctor.objects.create(
+            user=doctor_user,
+            clinic=clinic,
+            license_number='LIC-MYAPPTS-QUEUE-001',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+        )
+
+        patient_user_target = CustomUser.objects.create_user(
+            username='patient_myappts_target',
+            email='patient.myappts.target@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Charos',
+            last_name='Hudaniyev',
+            phone_number='+9989223456789',
+        )
+        self.target_patient = Patient.objects.create(user=patient_user_target, phone_number='+9989223456789')
+
+        patient_user_before_1 = CustomUser.objects.create_user(
+            username='patient_myappts_before_1',
+            email='patient.myappts.before.1@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Shaxlo',
+            last_name='Karimova',
+            phone_number='+9989219999902',
+        )
+        patient_before_1 = Patient.objects.create(user=patient_user_before_1, phone_number='+9989219999902')
+
+        patient_user_before_2 = CustomUser.objects.create_user(
+            username='patient_myappts_before_2',
+            email='patient.myappts.before.2@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Farangiz',
+            last_name='Farimuva',
+            phone_number='+9989223456788',
+        )
+        patient_before_2 = Patient.objects.create(user=patient_user_before_2, phone_number='+9989223456788')
+
+        patient_user_before_3 = CustomUser.objects.create_user(
+            username='patient_myappts_before_3',
+            email='patient.myappts.before.3@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Dilshoda',
+            last_name='Raximova',
+            phone_number='+9989334567890',
+        )
+        patient_before_3 = Patient.objects.create(user=patient_user_before_3, phone_number='+9989334567890')
+
+        patient_user_after = CustomUser.objects.create_user(
+            username='patient_myappts_after',
+            email='patient.myappts.after@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Umida',
+            last_name='Karimova',
+            phone_number='+998911234567',
+        )
+        patient_after = Patient.objects.create(user=patient_user_after, phone_number='+998911234567')
+
+        now = timezone.localtime().replace(second=0, microsecond=0)
+        Appointment.objects.create(
+            patient=patient_before_1,
+            doctor=self.doctor,
+            clinic=clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=5,
+            scheduled_date=now + timedelta(minutes=10),
+            duration_minutes=30,
+        )
+        Appointment.objects.create(
+            patient=patient_before_2,
+            doctor=self.doctor,
+            clinic=clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=1,
+            scheduled_date=now + timedelta(minutes=20),
+            duration_minutes=30,
+        )
+        Appointment.objects.create(
+            patient=patient_before_3,
+            doctor=self.doctor,
+            clinic=clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=now + timedelta(minutes=25),
+            duration_minutes=30,
+        )
+        self.target_appointment = Appointment.objects.create(
+            patient=self.target_patient,
+            doctor=self.doctor,
+            clinic=clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=9,
+            scheduled_date=now + timedelta(minutes=30),
+            duration_minutes=30,
+            telegram_user_id=991234,
+            telegram_chat_id=991234,
+        )
+        Appointment.objects.create(
+            patient=patient_after,
+            doctor=self.doctor,
+            clinic=clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=now + timedelta(minutes=60),
+            duration_minutes=30,
+        )
+
+    def test_myappointments_uses_dashboard_queue_order_for_ahead_count(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service.handle_update({
+            'message': {
+                'from': {'id': 991234},
+                'chat': {'id': 991234},
+                'text': '/myappointments',
+            }
+        })
+
+        self.assertTrue(sent_messages)
+        text = sent_messages[-1]['text']
+        self.assertIn('Yaqin randevular', text)
+        self.assertIn('Oldinda: 3 ta odam', text)
+        self.assertIn('Oldindagi bemorlar:', text)
+        self.assertIn('#1 Shaxlo Karimova', text)
+        self.assertIn('#2 Farangiz Farimuva', text)
+        self.assertIn('#3 Dilshoda Raximova', text)
+        self.assertNotIn('Oldinda: 8 ta odam', text)

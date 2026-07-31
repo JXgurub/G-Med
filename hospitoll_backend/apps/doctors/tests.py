@@ -3,6 +3,7 @@ from django.utils import timezone
 from datetime import timedelta, datetime, date
 from rest_framework.test import APITestCase
 from typing import Any, cast
+from unittest.mock import patch
 
 from apps.users.models import CustomUser
 from apps.clinics.models import Clinic
@@ -792,7 +793,7 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             end = datetime.strptime(slot['end_time'][:5], '%H:%M')
             self.assertFalse(start < blocked_end and end > blocked_start)
 
-    def test_available_endpoint_returns_empty_when_doctor_not_checked_in(self):
+    def test_available_endpoint_returns_schedule_slots_when_doctor_not_checked_in(self):
         target_date = self._next_weekday()
 
         self.doctor.is_checked_in = False
@@ -806,7 +807,9 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': target_date.isoformat()})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), [])
+        data = response.json()
+        self.assertTrue(len(data) > 0)
+        self.assertEqual(data[0]['start_time'][:5], '09:00')
 
     def test_check_in_is_blocked_outside_doctor_working_hours(self):
         now_local = timezone.localtime()
@@ -833,11 +836,11 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.doctor.refresh_from_db()
         self.assertFalse(self.doctor.is_checked_in)
 
-    def test_available_endpoint_returns_empty_for_stale_previous_day_check_in(self):
+    def test_available_endpoint_returns_today_slots_even_with_stale_previous_day_check_in(self):
         today = timezone.localdate()
         self.doctor.is_checked_in = True
         self.doctor.checked_in_at = timezone.now() - timedelta(days=1)
-        self.doctor.available_from = datetime.strptime('00:00', '%H:%M').time()
+        self.doctor.available_from = datetime.strptime('08:00', '%H:%M').time()
         self.doctor.available_until = datetime.strptime('23:30', '%H:%M').time()
         self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri,Sat,Sun'
         self.doctor.save(update_fields=['is_checked_in', 'checked_in_at', 'available_from', 'available_until', 'working_days', 'updated_at'])
@@ -846,7 +849,137 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': today.isoformat()})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), [])
+        self.assertTrue(len(response.json()) > 0)
+
+    def test_doctor_can_cancel_only_todays_active_appointments(self):
+        today = timezone.localdate()
+        tomorrow = today + timedelta(days=1)
+
+        patient_user = CustomUser.objects.create_user(
+            username='cancel-today-patient',
+            email='cancel.today.patient@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Cancel',
+            last_name='Patient',
+        )
+        patient = Patient.objects.create(user=patient_user)
+
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri,Sat,Sun'
+        self.doctor.available_from = datetime.strptime('10:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
+        self.doctor.slot_minutes = 30
+        self.doctor.save(update_fields=['working_days', 'available_from', 'available_until', 'slot_minutes', 'updated_at'])
+
+        booked_slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=today,
+            start_time=datetime.strptime('10:00', '%H:%M').time(),
+            end_time=datetime.strptime('10:30', '%H:%M').time(),
+            status='booked',
+        )
+
+        cancellable_today = Appointment.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_a,
+            slot=booked_slot,
+            status=Appointment.Status.CONFIRMED,
+            scheduled_date=timezone.make_aware(datetime.combine(today, datetime.strptime('10:00', '%H:%M').time())),
+        )
+        done_today = Appointment.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_a,
+            status=Appointment.Status.COMPLETED,
+            scheduled_date=timezone.make_aware(datetime.combine(today, datetime.strptime('11:00', '%H:%M').time())),
+        )
+        tomorrow_appointment = Appointment.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_a,
+            status=Appointment.Status.WAITING,
+            scheduled_date=timezone.make_aware(datetime.combine(tomorrow, datetime.strptime('12:00', '%H:%M').time())),
+        )
+
+        self.auth_as(self.doctor_user)
+        response = self.client.post(reverse('doctor-cancel-today-appointments'), {}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get('cancelled_count'), 1)
+        self.assertEqual(response.json().get('released_slots_count'), 1)
+        self.assertGreaterEqual(int(response.json().get('closed_slots_count') or 0), 2)
+
+        cancellable_today.refresh_from_db()
+        done_today.refresh_from_db()
+        tomorrow_appointment.refresh_from_db()
+        booked_slot.refresh_from_db()
+
+        self.assertEqual(cancellable_today.status, Appointment.Status.CANCELLED)
+        self.assertEqual(done_today.status, Appointment.Status.COMPLETED)
+        self.assertEqual(tomorrow_appointment.status, Appointment.Status.WAITING)
+        self.assertEqual(booked_slot.status, 'unavailable')
+
+    def test_cancel_today_closes_all_today_slots_and_returns_day_closed_meta(self):
+        today = timezone.localdate()
+
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri,Sat,Sun'
+        self.doctor.available_from = datetime.strptime('10:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
+        self.doctor.slot_minutes = 30
+        self.doctor.save(update_fields=['working_days', 'available_from', 'available_until', 'slot_minutes', 'updated_at'])
+
+        patient_user = CustomUser.objects.create_user(
+            username='close-day-patient',
+            email='close.day.patient@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Close',
+            last_name='Patient',
+        )
+        patient = Patient.objects.create(user=patient_user)
+
+        booked_slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=today,
+            start_time=datetime.strptime('10:00', '%H:%M').time(),
+            end_time=datetime.strptime('10:30', '%H:%M').time(),
+            status='booked',
+        )
+        Appointment.objects.create(
+            patient=patient,
+            doctor=self.doctor,
+            clinic=self.clinic_a,
+            slot=booked_slot,
+            status=Appointment.Status.CONFIRMED,
+            scheduled_date=timezone.make_aware(datetime.combine(today, datetime.strptime('10:00', '%H:%M').time())),
+            telegram_chat_id=998900001,
+        )
+
+        sent_messages = []
+        fake_client = type('FakeClient', (), {
+            'send_message': lambda self, chat_id, text, reply_markup=None: sent_messages.append((chat_id, text)),
+        })()
+
+        self.auth_as(self.doctor_user)
+        with patch('apps.doctors.views.TelegramBotService._require_client', return_value=fake_client):
+            close_response = self.client.post(reverse('doctor-cancel-today-appointments'), {}, format='json')
+
+        self.assertEqual(close_response.status_code, 200)
+        self.assertGreaterEqual(int(close_response.json().get('closed_slots_count') or 0), 2)
+        self.assertEqual(int(close_response.json().get('notified_count') or 0), 1)
+
+        availability_response = self.client.get(reverse('doctor-availability-available'), {
+            'doctor': str(self.doctor.id),
+            'date': today.isoformat(),
+            'include_meta': '1',
+        })
+        self.assertEqual(availability_response.status_code, 200)
+        payload = availability_response.json()
+        self.assertTrue(payload.get('day_closed'))
+        self.assertIn('qabul qila olmaydi', str(payload.get('message', '')).lower())
+        self.assertEqual(payload.get('slots'), [])
+        self.assertTrue(any('qabul o\'tkaza olmaydi' in text for _, text in sent_messages))
 
     def test_clinic_owner_can_reorder_doctors_for_public_listing(self):
         second_user = CustomUser.objects.create_user(

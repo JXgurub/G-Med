@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 import re
 
 from .models import Doctor, Specialization, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization, DoctorEmployment
+from apps.medical.models import Appointment
+from apps.medical.telegram_bot_service import TelegramBotService
 from apps.patients.models import PatientDoctorRating
 from .serializers import (
     DoctorSerializer,
@@ -139,6 +141,50 @@ class DoctorViewSet(viewsets.ModelViewSet):
                 if pair not in desired_slots and slot.status == 'available':
                     slot.delete()
 
+    def _close_today_schedule_slots(self, doctor, target_date):
+        """Mark all expected schedule slots for target_date as unavailable."""
+        desired_slots = self._build_schedule_slots_for_date(doctor, target_date)
+        if not desired_slots:
+            return 0
+
+        desired_by_start = {start_time: end_time for start_time, end_time in desired_slots}
+        existing_slots = list(
+            DoctorAvailability.objects.filter(
+                doctor=doctor,
+                date=target_date,
+                start_time__in=desired_by_start.keys(),
+            )
+        )
+        existing_by_start = {slot.start_time: slot for slot in existing_slots}
+        closed_count = 0
+
+        for start_time, end_time in desired_slots:
+            slot = existing_by_start.get(start_time)
+            if slot:
+                update_fields = []
+                if slot.end_time != end_time:
+                    slot.end_time = end_time
+                    update_fields.append('end_time')
+                if slot.status != 'unavailable':
+                    slot.status = 'unavailable'
+                    update_fields.append('status')
+                if update_fields:
+                    slot.save(update_fields=update_fields)
+                if slot.status == 'unavailable':
+                    closed_count += 1
+                continue
+
+            DoctorAvailability.objects.create(
+                doctor=doctor,
+                date=target_date,
+                start_time=start_time,
+                end_time=end_time,
+                status='unavailable',
+            )
+            closed_count += 1
+
+        return closed_count
+
     @staticmethod
     def _is_within_working_window(doctor, now_local):
         day_key = now_local.strftime('%a')
@@ -166,7 +212,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
             return [permissions.AllowAny()]
-        if self.action in ['my', 'check_in', 'check_out', 'terminate']:
+        if self.action in ['my', 'check_in', 'check_out', 'cancel_today_appointments', 'terminate']:
             return [permissions.IsAuthenticated()]
         return [permissions.IsAuthenticated()]
 
@@ -705,6 +751,111 @@ class DoctorViewSet(viewsets.ModelViewSet):
             'doctor': serializer.data
         }, status=200)
 
+    @action(detail=False, methods=['post'])
+    def cancel_today_appointments(self, request):
+        """Cancel all active appointments for current doctor for today (local date)."""
+        if not request.user.is_authenticated or not request.user.is_doctor:
+            return Response({'detail': 'Doktor topilmadi.'}, status=404)
+
+        doctor = Doctor.objects.filter(user=request.user).first()
+        if not doctor:
+            return Response({'detail': 'Doktor topilmadi.'}, status=404)
+
+        if not doctor.clinic_id:
+            return Response({
+                'detail': 'Siz hozircha klinikaga biriktirilmagansiz. Faqat profilingizni tahrirlashingiz mumkin.'
+            }, status=403)
+
+        if not doctor.is_active:
+            return Response({
+                'detail': 'Sizning hisobingiz vaqtincha to\'xtatilgan. Klinika egasi bilan bog\'laning.'
+            }, status=403)
+
+        today = localdate()
+        cancellable_statuses = [
+            Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+            Appointment.Status.WAITING,
+        ]
+
+        cancelled_count = 0
+        released_slots_count = 0
+        notified_count = 0
+        notification_targets = []
+
+        with transaction.atomic():
+            appointments = list(
+                Appointment.objects.select_for_update()
+                .select_related('slot')
+                .filter(
+                    doctor=doctor,
+                    scheduled_date__date=today,
+                    status__in=cancellable_statuses,
+                )
+            )
+
+            for appointment in appointments:
+                if appointment.slot_id and appointment.slot and appointment.slot.status == 'booked':
+                    appointment.slot.status = 'unavailable'
+                    appointment.slot.save(update_fields=['status'])
+                    released_slots_count += 1
+
+                if appointment.telegram_chat_id:
+                    notification_targets.append({
+                        'chat_id': int(appointment.telegram_chat_id),
+                        'doctor_name': appointment.doctor_name or doctor.user.get_full_name() or 'Doktor',
+                    })
+
+                appointment.status = Appointment.Status.CANCELLED
+                appointment.telegram_token = None
+                appointment.telegram_token_expires_at = None
+                appointment.save(update_fields=['status', 'telegram_token', 'telegram_token_expires_at', 'updated_at'])
+                cancelled_count += 1
+
+            closed_slots_count = self._close_today_schedule_slots(doctor, today)
+
+        if notification_targets:
+            try:
+                bot_service = TelegramBotService()
+                client = bot_service._require_client()
+                for target in notification_targets:
+                    doctor_name = target['doctor_name']
+                    message = (
+                        "Hurmatli bemor!\n\n"
+                        f"Afsuski, bugun <b>Dr. {doctor_name}</b> qabul o'tkaza olmaydi.\n\n"
+                        "Shu sababli sizning qabulingiz bekor qilindi.\n\n"
+                        "Keltirilgan noqulaylik uchun uzr so'raymiz.\n\n"
+                        "Iltimos, G-MED orqali o'zingizga qulay yangi vaqtni tanlang yoki klinika bilan bog'laning."
+                    )
+                    client.send_message(target['chat_id'], message)
+                    notified_count += 1
+            except Exception as notify_error:
+                ErrorLogger.log_exception(notify_error, {
+                    'source': 'doctor_cancel_today_appointments_notify',
+                    'doctor_id': str(getattr(doctor, 'id', '')),
+                    'user_id': str(getattr(request.user, 'id', '')),
+                    'path': request.path,
+                    'targets_count': len(notification_targets),
+                })
+
+        if cancelled_count == 0 and closed_slots_count == 0:
+            return Response({
+                'detail': 'Bugun yopiladigan navbat topilmadi.',
+                'cancelled_count': 0,
+                'released_slots_count': 0,
+                'closed_slots_count': 0,
+                'notified_count': 0,
+            }, status=status.HTTP_200_OK)
+
+        return Response({
+            'detail': f'Bugungi navbat yopildi. Bekor qilingan qabullar: {cancelled_count} ta, yopilgan slotlar: {closed_slots_count} ta.',
+            'cancelled_count': cancelled_count,
+            'released_slots_count': released_slots_count,
+            'closed_slots_count': closed_slots_count,
+            'notified_count': notified_count,
+        }, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'])
     def terminate(self, request, pk=None):
         """Clinic owner can only fire doctor from their clinic, without deleting profile."""
@@ -881,6 +1032,7 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
         doctor_id = request.query_params.get('doctor')
         date_str = request.query_params.get('date')
         requested_duration = request.query_params.get('duration_minutes')
+        include_meta = str(request.query_params.get('include_meta', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
         if not doctor_id or not date_str:
             return Response({'detail': 'doctor va date parametrlari kerak.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -892,16 +1044,7 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
         if not doctor.is_active or not doctor.clinic or not doctor.clinic.is_active_status:
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
-        if not doctor.is_checked_in:
-            return Response([], status=status.HTTP_200_OK)
-
         target_is_today = target_date == localdate()
-        if target_is_today:
-            checked_in_at_local = localtime(doctor.checked_in_at) if doctor.checked_in_at else None
-            if not checked_in_at_local or checked_in_at_local.date() != target_date:
-                return Response([], status=status.HTTP_200_OK)
-            if not DoctorViewSet._is_within_working_window(doctor, localtime()):
-                return Response([], status=status.HTTP_200_OK)
 
         duration_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
         if requested_duration is not None:
@@ -930,6 +1073,7 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
                 lunch_end_dt = None
         step = timedelta(minutes=duration_minutes)
         slot_cursor = start_dt
+        schedule_start_times = []
 
         if start_dt >= end_dt:
             return Response([], status=status.HTTP_200_OK)
@@ -955,6 +1099,8 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             if lunch_start_dt and lunch_end_dt and (slot_cursor < lunch_end_dt and slot_end_dt > lunch_start_dt):
                 slot_cursor += step
                 continue
+
+            schedule_start_times.append(slot_cursor.time())
 
             overlaps_blocked = any(
                 self._ranges_overlap(slot_cursor, slot_end_dt, blocked_start, blocked_end)
@@ -1004,16 +1150,40 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             status='available'
         ).order_by('start_time')
 
+        day_closed = False
+        if target_is_today and schedule_start_times:
+            status_by_start = {
+                start: status
+                for start, status in DoctorAvailability.objects.filter(
+                    doctor=doctor,
+                    date=target_date,
+                    start_time__in=schedule_start_times,
+                ).values_list('start_time', 'status')
+            }
+            day_closed = all(status_by_start.get(start_time) == 'unavailable' for start_time in schedule_start_times)
+
         if target_is_today:
             now = localtime()
             open_time = (start_dt + timedelta(minutes=10)).time()
             close_time = (end_dt - timedelta(minutes=30)).time()
             if now.time() > close_time:
+                if include_meta:
+                    return Response({
+                        'slots': [],
+                        'day_closed': day_closed,
+                        'message': 'Doktor bugun qabul qila olmaydi' if day_closed else '',
+                    }, status=status.HTTP_200_OK)
                 return Response([], status=status.HTTP_200_OK)
             min_time = open_time if now.time() < open_time else now.time()
             slots = slots.filter(start_time__gte=min_time, start_time__lte=close_time)
 
         serializer = DoctorAvailabilitySerializer(slots, many=True)
+        if include_meta:
+            return Response({
+                'slots': serializer.data,
+                'day_closed': day_closed,
+                'message': 'Doktor bugun qabul qila olmaydi' if day_closed and target_is_today else '',
+            }, status=status.HTTP_200_OK)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
