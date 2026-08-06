@@ -1,8 +1,9 @@
 # Multi-stage build for Hospitoll Backend
 # Stage 1: Builder
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
+ENV PIP_ROOT_USER_ACTION=ignore
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -21,6 +22,7 @@ RUN pip wheel --no-cache-dir --no-deps --wheel-dir /app/wheels -r requirements.t
 FROM python:3.11-slim
 
 WORKDIR /app
+ENV PIP_ROOT_USER_ACTION=ignore
 
 # Install runtime dependencies only
 RUN apt-get update && apt-get install -y --no-install-recommends \

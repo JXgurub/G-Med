@@ -181,6 +181,48 @@ class Appointment(models.Model):
         blank=True,
         help_text=_('Set when patient taps "Boraman" on the 15-minute Telegram prompt')
     )
+
+    auto_turn_started_at = models.DateTimeField(
+        _('auto queue turn started at'),
+        null=True,
+        blank=True,
+        help_text=_('When this appointment became the active patient in automatic queue mode')
+    )
+
+    auto_turn_prompt_sent_at = models.DateTimeField(
+        _('auto queue prompt sent at'),
+        null=True,
+        blank=True,
+        help_text=_('When patient received "did you enter" prompt from automatic queue')
+    )
+
+    auto_turn_last_reminder_at = models.DateTimeField(
+        _('auto queue last reminder at'),
+        null=True,
+        blank=True,
+        help_text=_('Last reminder timestamp for unanswered automatic queue prompt')
+    )
+
+    auto_turn_response = models.CharField(
+        _('auto queue response'),
+        max_length=8,
+        choices=(
+            ('yes', _('Ha')),
+            ('wait', _('Kutyapman')),
+            ('cancel', _('Bekor qilish')),
+            ('no', _('Yo\'q (legacy)')),
+        ),
+        null=True,
+        blank=True,
+        help_text=_('Patient response to automatic queue entry prompt')
+    )
+
+    auto_turn_responded_at = models.DateTimeField(
+        _('auto queue responded at'),
+        null=True,
+        blank=True,
+        help_text=_('When patient answered automatic queue entry prompt')
+    )
     created_at = models.DateTimeField(
         _('created at'),
         auto_now_add=True

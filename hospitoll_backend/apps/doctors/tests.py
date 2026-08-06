@@ -523,12 +523,12 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         update_url = reverse('doctor-my-update')
 
         response = self.client.patch(update_url, {
-            'slot_minutes': 20,
+            'slot_minutes': 40,
         }, format='json')
 
         self.assertEqual(response.status_code, 200)
         self.doctor.refresh_from_db()
-        self.assertEqual(self.doctor.slot_minutes, 20)
+        self.assertEqual(self.doctor.slot_minutes, 40)
 
     def test_doctor_pinfl_immutable_once_set(self):
         self.auth_as(self.doctor_user)
@@ -760,6 +760,24 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             prev_end = datetime.strptime(ordered[idx - 1]['end_time'][:5], '%H:%M')
             curr_start = datetime.strptime(ordered[idx]['start_time'][:5], '%H:%M')
             self.assertGreaterEqual(curr_start, prev_end)
+
+    def test_available_endpoint_uses_doctor_40_minute_interval(self):
+        target_date = self._next_weekday()
+
+        self.doctor.is_checked_in = True
+        self.doctor.available_from = datetime.strptime('17:40', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('20:20', '%H:%M').time()
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri'
+        self.doctor.slot_minutes = 40
+        self.doctor.save(update_fields=['is_checked_in', 'available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
+
+        url = reverse('doctor-availability-available')
+        response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': target_date.isoformat()})
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual([slot['start_time'][:5] for slot in data], ['17:40', '18:20', '19:00', '19:40'])
+        self.assertEqual([slot['end_time'][:5] for slot in data], ['18:20', '19:00', '19:40', '20:20'])
 
     def test_available_endpoint_does_not_create_slots_overlapping_booked_slot(self):
         target_date = self._next_weekday()

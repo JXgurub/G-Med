@@ -9,6 +9,7 @@ import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './DoctorDashboard.css'
 
 const FIRST_WORK_YEAR_MIN = 1950
+const QUEUE_INTERVAL_OPTIONS = [10, 20, 30, 40, 50, 60, 80, 120]
 
 const formatBirthDateLabel = (dateValue) => {
   if (!dateValue) {
@@ -505,6 +506,10 @@ const DoctorDashboard = () => {
   const firstWorkYearNumber = parseFirstWorkYear(settingsForm.firstWorkYear, currentYear)
   const firstWorkMonthNumber = Number(doctor?.firstWorkMonth)
   const computedExperiencePreview = calculateExperiencePreview(firstWorkYearNumber, firstWorkMonthNumber) ?? (doctor?.yearsOfExperience || 0)
+  const selectedSlotMinutes = Number(settingsForm.slotMinutes || 30)
+  const queueIntervalOptions = QUEUE_INTERVAL_OPTIONS.includes(selectedSlotMinutes)
+    ? QUEUE_INTERVAL_OPTIONS
+    : [...QUEUE_INTERVAL_OPTIONS, selectedSlotMinutes].sort((a, b) => a - b)
 
   const handleSearch = async (e) => {
     const query = e.target.value
@@ -902,7 +907,9 @@ const DoctorDashboard = () => {
                 onClick={handleRequestCancelTodaysAppointments}
                 disabled={!canPractice || cancelTodayLoading}
               >
-                {cancelTodayLoading ? 'Bekor qilinmoqda...' : 'Bugungi navbatni yopish'}
+                <span className="btn-cancel-today-title">
+                  {cancelTodayLoading ? 'Bekor qilinmoqda...' : 'Bugungi navbatni yopish'}
+                </span>
               </button>
             </div>
 
@@ -994,14 +1001,14 @@ const DoctorDashboard = () => {
                         value={settingsForm.slotMinutes}
                         onChange={(e) => setSettingsForm((prev) => ({ ...prev, slotMinutes: Number(e.target.value) }))}
                       >
-                        <option value={15}>15 daqiqa</option>
-                        <option value={20}>20 daqiqa</option>
-                        <option value={30}>30 daqiqa</option>
+                        {queueIntervalOptions.map((minutes) => (
+                          <option key={minutes} value={minutes}>{minutes} daqiqa</option>
+                        ))}
                       </select>
                       <span className="doctor-queue-interval-badge">Hozirgi: {settingsForm.slotMinutes} daqiqa</span>
                     </div>
                     <p className="doctor-queue-interval-help">
-                      Bu qiymat `Kiring` va `Qabul qildim` tugmalaridan keyingi navbat vaqtlarini avtomatik qayta taqsimlashda ishlatiladi.
+                      Bu qiymat `Kiring` va `Keyingi bemor` tugmalaridan keyingi navbat vaqtlarini avtomatik qayta taqsimlashda ishlatiladi.
                     </p>
                   </div>
                 </div>
@@ -1196,7 +1203,7 @@ const DoctorDashboard = () => {
                               disabled={queueLocked}
                               title={queueLocked ? 'Faqat navbatdagi birinchi bemorni qabul qilish mumkin' : ''}
                             >
-                              Qabul qildim
+                              Keyingi bemor
                             </button>
                             <button
                               className={`btn-enter ${queueDecisionLoading[`${appointment.id}:enter`] ? 'is-loading' : ''}`}

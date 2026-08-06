@@ -48,7 +48,7 @@ if (( ${#missing[@]} > 0 )); then
     exit 1
 fi
 
-for optional_key in TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET EMAIL_HOST_PASSWORD; do
+for optional_key in TELEGRAM_BOT_TOKEN TELEGRAM_WEBHOOK_SECRET; do
     optional_value="${!optional_key:-}"
     case "$optional_value" in
         ""|change-this-*|"TODO"|"REPLACE_ME"|"example"|"example-*")

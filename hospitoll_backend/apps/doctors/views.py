@@ -61,6 +61,10 @@ DEFAULT_SPECIALIZATIONS = [
 ]
 
 
+def _allowed_slot_minutes() -> set[int]:
+    return {int(value) for value, _ in Doctor.SLOT_MINUTES_CHOICES}
+
+
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.select_related('user', 'clinic').prefetch_related('specializations')
     filterset_fields = ['clinic', 'is_active']
@@ -91,7 +95,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
                 lunch_end_dt = None
 
         duration_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
-        if duration_minutes not in (15, 20, 30):
+        if duration_minutes not in _allowed_slot_minutes():
             duration_minutes = 30
         step = timedelta(minutes=duration_minutes)
 
@@ -787,7 +791,6 @@ class DoctorViewSet(viewsets.ModelViewSet):
         with transaction.atomic():
             appointments = list(
                 Appointment.objects.select_for_update()
-                .select_related('slot')
                 .filter(
                     doctor=doctor,
                     scheduled_date__date=today,
@@ -796,10 +799,16 @@ class DoctorViewSet(viewsets.ModelViewSet):
             )
 
             for appointment in appointments:
-                if appointment.slot_id and appointment.slot and appointment.slot.status == 'booked':
-                    appointment.slot.status = 'unavailable'
-                    appointment.slot.save(update_fields=['status'])
-                    released_slots_count += 1
+                if appointment.slot_id:
+                    try:
+                        locked_slot = DoctorAvailability.objects.select_for_update().get(id=appointment.slot_id)
+                    except DoctorAvailability.DoesNotExist:
+                        locked_slot = None
+
+                    if locked_slot and locked_slot.status == 'booked':
+                        locked_slot.status = 'unavailable'
+                        locked_slot.save(update_fields=['status'])
+                        released_slots_count += 1
 
                 if appointment.telegram_chat_id:
                     notification_targets.append({
@@ -1053,7 +1062,7 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
                     return Response({'detail': 'duration_minutes ushbu doktor uchun ruxsat etilmagan.'}, status=status.HTTP_400_BAD_REQUEST)
             except Exception:
                 return Response({'detail': 'duration_minutes noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
-        if duration_minutes not in (15, 20, 30):
+        if duration_minutes not in _allowed_slot_minutes():
             duration_minutes = 30
 
         day_key = target_date.strftime('%a')

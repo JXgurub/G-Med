@@ -1,6 +1,7 @@
 import logging
 import re
 import secrets
+import sys
 from uuid import UUID
 from urllib.parse import unquote_plus
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Any
 import requests
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db import IntegrityError
 from django.db import models
@@ -22,6 +24,10 @@ from apps.patients.models import PatientDoctorRating
 from apps.users.models import ClinicResetTelegramSession, DoctorResetTelegramSession, PatientResetTelegramSession, PharmacyResetTelegramSession, PasswordResetCode
 
 logger = logging.getLogger(__name__)
+
+
+def _allowed_slot_minutes() -> set[int]:
+    return {int(value) for value, _ in Doctor.SLOT_MINUTES_CHOICES}
 
 
 @dataclass(frozen=True)
@@ -144,13 +150,22 @@ class TelegramBotService:
             self._handle_rating_comment(ctx, state)
             return
 
+        self._send_main_menu(ctx.chat_id)
+
+    def _send_main_menu(self, chat_id: int, extra_text: str | None = None) -> None:
+        lines = []
+        if extra_text:
+            lines.append(extra_text)
+            lines.append("")
+        lines.append("Buyruqlar:")
+        lines.append("• /myappointments — yaqin randevular")
+        lines.append("• /doctorpatients — bugungi bemorlar ro'yxati")
+        lines.append("• /doctorlink <tel> <passport> <pinfl> — doktor akkauntni bog'lash")
+        lines.append("Token bilan tasdiqlash uchun: /start <telegram_token>")
+
         self._require_client().send_message(
-            ctx.chat_id,
-            "Buyruqlar:\n"
-            "• /myappointments — yaqin randevular\n"
-            "• /doctorpatients — bugungi bemorlar ro'yxati\n"
-            "• /doctorlink <tel> <passport> <pinfl> — doktor akkauntni bog'lash\n"
-            "Token bilan tasdiqlash uchun: /start &lt;telegram_token&gt;",
+            chat_id,
+            "\n".join(lines).replace("<telegram_token>", "&lt;telegram_token&gt;"),
             reply_markup={
                 "inline_keyboard": [
                     [{"text": "📋 Ro'yxatdagi odamlarni ko'rish", "callback_data": "doctorpatients:today"}],
@@ -404,7 +419,17 @@ class TelegramBotService:
 
     def _handle_start(self, ctx: TelegramMessageContext, token: str) -> None:
         if not token:
-            self._require_client().send_message(ctx.chat_id, "Token topilmadi. Linkdagi /start &lt;token&gt; ni qayta bosing.")
+            linked_exists = Appointment.objects.filter(
+                telegram_user_id=ctx.user_id,
+                scheduled_date__gte=timezone.now(),
+            ).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW]).exists()
+            if linked_exists:
+                self._handle_myappointments(ctx)
+                return
+            self._send_main_menu(
+                ctx.chat_id,
+                "Botga xush kelibsiz. Randevuni tasdiqlash uchun linkdagi maxsus /start token bilan oching.",
+            )
             return
 
         if token.startswith('dr_'):
@@ -426,8 +451,22 @@ class TelegramBotService:
         appointment_token = self._normalize_appointment_token(token)
         try:
             appointment = Appointment.objects.select_related("doctor", "clinic", "patient").get(telegram_token=appointment_token)
-        except Appointment.DoesNotExist:
-            self._require_client().send_message(ctx.chat_id, "Token noto‘g‘ri yoki ishlatilgan.")
+        except (Appointment.DoesNotExist, ValidationError, ValueError):
+            linked_exists = Appointment.objects.filter(
+                telegram_user_id=ctx.user_id,
+                scheduled_date__gte=timezone.now(),
+            ).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW]).exists()
+            if linked_exists:
+                self._send_main_menu(
+                    ctx.chat_id,
+                    "Bu token yaroqsiz yoki ishlatilgan. Sizning faol randevularingiz quyida.",
+                )
+                self._handle_myappointments(ctx)
+                return
+            self._send_main_menu(
+                ctx.chat_id,
+                "Token noto‘g‘ri, muddati tugagan yoki ishlatilgan. Yangi link orqali qayta urinib ko'ring.",
+            )
             return
 
         if appointment.telegram_token_is_expired or appointment.status != Appointment.Status.PENDING_TELEGRAM_CONFIRMATION:
@@ -777,8 +816,8 @@ class TelegramBotService:
             if appt.status not in [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]:
                 keyboard.append(
                     [
-                        {"text": "❌ Cancel", "callback_data": f"cancel:{appt.id}"},
-                        {"text": "🗓 Reschedule", "callback_data": f"reschedule:{appt.id}"},
+                        {"text": "❌ Bekor qilish", "callback_data": f"cancel:{appt.id}"},
+                        {"text": "🗓 Vaqtni o‘zgartirish", "callback_data": f"reschedule:{appt.id}"},
                     ]
                 )
 
@@ -868,7 +907,7 @@ class TelegramBotService:
                     return
                 if appt.status in [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]:
                     self._require_client().send_message(chat_id, "⚠️ Doktor qabulni boshlab yuborgan. Endi navbat vaqtini o‘zgartirib bo‘lmaydi.")
-                    client.answer_callback_query(callback_id, "Locked")
+                    client.answer_callback_query(callback_id, "Mumkin emas")
                     return
 
                 self._send_reschedule_day_slots(chat_id=chat_id, appointment=appt, day_mode=day_mode)
@@ -916,10 +955,10 @@ class TelegramBotService:
                     return
                 if appt.status in [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]:
                     self._require_client().send_message(chat_id, "⚠️ Doktor qabulni boshlab yuborgan. Endi navbatni boshqarib bo‘lmaydi.")
-                    client.answer_callback_query(callback_id, "Locked")
+                    client.answer_callback_query(callback_id, "Mumkin emas")
                     return
                 self._cancel_appointment_from_bot(user_id, chat_id, appt_id)
-                client.answer_callback_query(callback_id, "Cancelled")
+                client.answer_callback_query(callback_id, "Bekor qilindi")
                 return
 
             if data.startswith("reschedule:"):
@@ -930,10 +969,10 @@ class TelegramBotService:
                     return
                 if appt.status in [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]:
                     self._require_client().send_message(chat_id, "⚠️ Doktor qabulni boshlab yuborgan. Endi navbat vaqtini o‘zgartirib bo‘lmaydi.")
-                    client.answer_callback_query(callback_id, "Locked")
+                    client.answer_callback_query(callback_id, "Mumkin emas")
                     return
                 self._start_reschedule_flow(user_id, chat_id, appt_id)
-                client.answer_callback_query(callback_id, "Reschedule")
+                client.answer_callback_query(callback_id, "Vaqtlar ochildi")
                 return
 
             if data.startswith('arrive:'):
@@ -944,10 +983,10 @@ class TelegramBotService:
                     return
                 if appt.status in [Appointment.Status.COMPLETED, Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW]:
                     self._require_client().send_message(chat_id, "⚠️ Doktor qabulni boshlab yuborgan. Endi navbatni boshqarib bo‘lmaydi.")
-                    client.answer_callback_query(callback_id, "Locked")
+                    client.answer_callback_query(callback_id, "Mumkin emas")
                     return
                 self._confirm_arrival_from_bot(user_id, chat_id, appt_id)
-                client.answer_callback_query(callback_id, 'OK')
+                client.answer_callback_query(callback_id, 'Tasdiqlandi')
                 return
 
             if data.startswith('cancel15:'):
@@ -958,10 +997,31 @@ class TelegramBotService:
                     return
                 if appt.status in [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]:
                     self._require_client().send_message(chat_id, "⚠️ Doktor qabulni boshlab yuborgan. Endi navbatni boshqarib bo‘lmaydi.")
-                    client.answer_callback_query(callback_id, "Locked")
+                    client.answer_callback_query(callback_id, "Mumkin emas")
                     return
                 self._cancel_appointment_from_bot(user_id, chat_id, appt_id, compress_queue=True)
-                client.answer_callback_query(callback_id, 'Cancelled')
+                client.answer_callback_query(callback_id, 'Bekor qilindi')
+                return
+
+            if data.startswith('autoq:'):
+                parts = data.split(':', 2)
+                if len(parts) != 3:
+                    client.answer_callback_query(callback_id, "Noto‘g‘ri format")
+                    return
+                response_value = parts[1]
+                appt_id = parts[2]
+                if response_value == 'no':
+                    response_value = 'wait'
+                if response_value not in {'yes', 'wait', 'cancel'}:
+                    client.answer_callback_query(callback_id, "Noto‘g‘ri javob")
+                    return
+                ok = self._handle_auto_queue_response(
+                    telegram_user_id=user_id,
+                    chat_id=chat_id,
+                    appointment_id=appt_id,
+                    response_value=response_value,
+                )
+                client.answer_callback_query(callback_id, "Qabul qilindi" if ok else "Holat yangilanmadi")
                 return
 
             client.answer_callback_query(callback_id)
@@ -971,6 +1031,102 @@ class TelegramBotService:
                 client.answer_callback_query(callback_id, "Error")
             except Exception:
                 pass
+
+    def _handle_auto_queue_response(self, telegram_user_id: int, chat_id: int, appointment_id: str, response_value: str) -> bool:
+        with transaction.atomic():
+            appt = Appointment.objects.select_for_update().filter(id=appointment_id).first()
+            if not appt or appt.telegram_user_id != telegram_user_id:
+                self._require_client().send_message(chat_id, "Randevu topilmadi yoki ruxsat yo‘q.")
+                return False
+
+            if appt.status in [Appointment.Status.CANCELLED, Appointment.Status.COMPLETED, Appointment.Status.NO_SHOW]:
+                self._require_client().send_message(
+                    chat_id,
+                    "ℹ️ Bu navbat allaqachon yakunlangan yoki bekor qilingan.",
+                )
+                return False
+
+            active_statuses = (
+                Appointment.Status.SCHEDULED,
+                Appointment.Status.CONFIRMED,
+                Appointment.Status.WAITING,
+                Appointment.Status.IN_PROGRESS,
+            )
+            queue_leader = (
+                Appointment.objects.select_for_update()
+                .filter(
+                    doctor_id=appt.doctor_id,
+                    scheduled_date__date=timezone.localdate(appt.scheduled_date),
+                    status__in=active_statuses,
+                )
+                .order_by('scheduled_date', 'created_at', 'queue_position')
+                .first()
+            )
+            if not queue_leader or queue_leader.id != appt.id:
+                self._require_client().send_message(
+                    chat_id,
+                    "ℹ️ Bu tugma hozir faol emas. Iltimos, yangi yuborilgan xabardagi tugmalardan foydalaning.",
+                )
+                return False
+
+            last_reminder_local = timezone.localtime(appt.auto_turn_last_reminder_at) if appt.auto_turn_last_reminder_at else None
+            last_response_local = timezone.localtime(appt.auto_turn_responded_at) if appt.auto_turn_responded_at else None
+            if appt.auto_turn_response == response_value and last_response_local is not None:
+                # Ignore repeated taps for the same prompt; allow a new response after a fresh reminder.
+                if last_reminder_local is None or last_reminder_local <= last_response_local:
+                    self._require_client().send_message(
+                        chat_id,
+                        "ℹ️ Javobingiz allaqachon qabul qilingan. Yangi so‘rov yuborilsa, qayta tanlashingiz mumkin.",
+                    )
+                    return True
+
+            first_response = appt.auto_turn_response is None
+            appt.auto_turn_response = response_value
+            appt.auto_turn_responded_at = timezone.now()
+            update_fields = ['auto_turn_response', 'auto_turn_responded_at', 'updated_at']
+            if response_value == 'yes' and appt.patient_arrival_confirmed_at is None:
+                appt.patient_arrival_confirmed_at = timezone.now()
+                update_fields.append('patient_arrival_confirmed_at')
+            appt.save(update_fields=update_fields)
+
+        if response_value == 'yes':
+            self._require_client().send_message(
+                chat_id,
+                "✅ Rahmat. Ma'lumotingiz qabul qilindi, navbat avtomatik davom etadi.",
+            )
+            if first_response:
+                self.send_doctor_rating_prompt(appt)
+        elif response_value == 'wait':
+            # No extra chat message here; queue cycle sends the final recalculated ETA.
+            pass
+        elif response_value == 'cancel':
+            self._require_client().send_message(
+                chat_id,
+                "❌ So‘rovingiz qabul qilindi. Navbat bekor qilinadi va qolgan bemorlarga yangi vaqt yuboriladi.",
+            )
+        else:
+            self._require_client().send_message(
+                chat_id,
+                "✅ Qabul qilindi. Navbat avtomatik yangilanadi va qolgan bemorlarga xabar beriladi.",
+            )
+
+        # Apply the latest automatic queue ordering logic immediately after callback.
+        try:
+            from .tasks import run_auto_queue_cycle
+
+            run_auto_queue_cycle.delay()  # type: ignore[attr-defined]
+        except Exception:
+            if 'test' in sys.argv:
+                logger.debug("Immediate auto-queue enqueue skipped in test environment")
+            else:
+                logger.warning("Failed to enqueue immediate auto-queue cycle after callback; running inline fallback")
+                try:
+                    from .tasks import run_auto_queue_cycle
+
+                    run_auto_queue_cycle()
+                except Exception:
+                    logger.exception("Inline auto-queue fallback failed after callback")
+        return True
 
     def _cancel_appointment_from_bot(self, telegram_user_id: int, chat_id: int, appointment_id: str, compress_queue: bool = False) -> None:
         with transaction.atomic():
@@ -1035,7 +1191,9 @@ class TelegramBotService:
             doctor_id = getattr(appt, 'doctor_id', None)
             if doctor_id:
                 appointment_date = timezone.localtime(appt.scheduled_date).date()
-                queue_step_minutes = 30
+                queue_step_minutes = int(getattr(getattr(appt, 'doctor', None), 'slot_minutes', 30) or 30)
+                if queue_step_minutes not in _allowed_slot_minutes():
+                    queue_step_minutes = 30
                 active_statuses = (
                     Appointment.Status.SCHEDULED,
                     Appointment.Status.CONFIRMED,
@@ -1049,7 +1207,7 @@ class TelegramBotService:
                         scheduled_date__date=appointment_date,
                         status__in=active_statuses,
                     )
-                    .order_by('queue_position', 'scheduled_date', 'created_at')
+                    .order_by('scheduled_date', 'created_at', 'queue_position')
                 )
 
                 target_position = int(getattr(appt, 'queue_position', 1) or 1)
@@ -1187,7 +1345,6 @@ class TelegramBotService:
                 "inline_keyboard": [
                     [{"text": "📅 Bugun", "callback_data": f"resday:{appt.id}:today"}],
                     [{"text": "📅 Ertaga", "callback_data": f"resday:{appt.id}:tomorrow"}],
-                    [{"text": "📅 Keyingi 3 kun", "callback_data": f"resday:{appt.id}:next3"}],
                 ]
             },
         )
@@ -1230,7 +1387,7 @@ class TelegramBotService:
 
     def _format_slot_suggestions(self, doctor, from_dt: datetime, exclude_appointment_id=None, limit: int = 5, day_offsets: list[int] | None = None) -> list[datetime]:
         duration_minutes = int(getattr(doctor, "slot_minutes", 30) or 30)
-        if duration_minutes not in (15, 20, 30):
+        if duration_minutes not in _allowed_slot_minutes():
             duration_minutes = 30
 
         tz = timezone.get_current_timezone()
@@ -1378,7 +1535,7 @@ class TelegramBotService:
             return False
 
         duration_minutes = int(getattr(doctor, "slot_minutes", 30) or 30)
-        if duration_minutes not in (15, 20, 30):
+        if duration_minutes not in _allowed_slot_minutes():
             duration_minutes = 30
 
         tz = timezone.get_current_timezone()

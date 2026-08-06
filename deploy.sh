@@ -24,7 +24,7 @@ source <(tr -d '\r' < "$ENV_FILE")
 set +a
 
 echo "[3/8] Building and starting containers..."
-"${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
+DOCKER_BUILDKIT=0 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --build
 
 echo "[4/8] Restarting nginx to refresh backend upstream resolution..."
 "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" restart nginx

@@ -1,13 +1,14 @@
 # Frontend Dockerfile - Multi-stage build
-FROM node:18-alpine as builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
+ENV BROWSERSLIST_IGNORE_OLD_DATA=1
 
 # Copy package files
 COPY package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 
 # Copy source
 COPY . .
@@ -16,12 +17,12 @@ COPY . .
 RUN npm run build
 
 # Production stage
-FROM node:18-alpine
+FROM node:20-alpine
 
 WORKDIR /app
 
 # Install serve to run static build
-RUN npm install -g serve
+RUN npm install -g serve --no-fund --no-audit
 
 # Copy built app from builder
 COPY --from=builder /app/dist ./dist

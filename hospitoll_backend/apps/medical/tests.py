@@ -6,7 +6,9 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from django.urls import reverse
+from django.test import override_settings
 from django.utils import timezone
+from django.core.cache import cache
 from rest_framework.test import APITestCase
 
 from apps.users.models import CustomUser
@@ -15,6 +17,11 @@ from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, Sp
 from apps.patients.models import Patient, PatientDoctorRating
 from apps.medical.models import Appointment, MedicalRecord
 from apps.medical.telegram_bot_service import TelegramBotService
+from apps.medical.tasks import (
+    run_auto_queue_cycle,
+    send_today_first_queue_reminders,
+    send_telegram_appointment_15min_prompt,
+)
 
 
 class MedicalApiTestCase(APITestCase):
@@ -338,7 +345,7 @@ class DoctorDashboardStatsTests(MedicalApiTestCase):
         self.assertEqual(response_json['monthly_cancelled_appointments'], 2)
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
 
-    def test_today_24h_is_zero_without_checkin_record(self):
+    def test_today_24h_counts_without_checkin_record_using_day_window(self):
         now = timezone.localtime()
         self._create_record(created_at=now - timedelta(hours=2))
 
@@ -346,7 +353,7 @@ class DoctorDashboardStatsTests(MedicalApiTestCase):
         response_json = self.body(response)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response_json['today_24h_patients'], 0)
+        self.assertEqual(response_json['today_24h_patients'], 1)
 
     def test_bot_cancelled_future_appointment_counts_in_monthly_cancelled(self):
         future_dt = timezone.localtime() + timedelta(days=2)
@@ -446,7 +453,7 @@ class DoctorDashboardStatsTests(MedicalApiTestCase):
         self.assertEqual(float(payload['monthly_estimated_balance']), 0.0)
 
     def test_dashboard_stats_scope_monthly_values_to_active_employment_window(self):
-        now = timezone.localtime().replace(second=0, microsecond=0)
+        now = timezone.localtime().replace(hour=10, minute=0, second=0, microsecond=0)
         active_started_at = now - timedelta(days=2)
 
         self.doctor.compensation_type = 'salary'
@@ -678,7 +685,7 @@ class ClinicDoctorStatsAuditTests(MedicalApiTestCase):
             user=self.patient_user,
         )
 
-        now = timezone.localtime().replace(second=0, microsecond=0)
+        now = timezone.localtime().replace(hour=10, minute=0, second=0, microsecond=0)
 
         MedicalRecord.objects.create(
             patient=self.patient,
@@ -1475,7 +1482,10 @@ class QueueDecisionTests(MedicalApiTestCase):
 
         self.assertGreater(self.appt1.scheduled_date, old_appt1_dt)
         self.assertGreater(self.appt2.scheduled_date, old_appt2_dt)
-        self.assertGreaterEqual(int((self.appt1.scheduled_date - old_appt1_dt).total_seconds() // 60), 15)
+        self.assertEqual(int((self.appt1.scheduled_date - old_appt1_dt).total_seconds() // 60), 15)
+        self.assertEqual(int((self.appt2.scheduled_date - old_appt2_dt).total_seconds() // 60), 15)
+        self.assertEqual(self.appt1.queue_position, 1)
+        self.assertEqual(self.appt2.queue_position, 2)
 
         chat_ids = [entry['chat_id'] for entry in sent_messages]
         self.assertIn(100001, chat_ids)
@@ -1864,6 +1874,63 @@ class TelegramStartTokenNormalizationTests(MedicalApiTestCase):
         self.assertEqual(self.appointment.telegram_chat_id, self.telegram_chat_id)
         self.assertTrue(any('Tasdiqlandi' in item.get('text', '') for item in sent_messages))
 
+    def test_start_without_token_shows_current_appointments_for_linked_user(self):
+        self.appointment.status = Appointment.Status.SCHEDULED
+        self.appointment.telegram_user_id = self.telegram_user_id
+        self.appointment.telegram_chat_id = self.telegram_chat_id
+        self.appointment.telegram_token = None
+        self.appointment.telegram_token_expires_at = None
+        self.appointment.save(update_fields=['status', 'telegram_user_id', 'telegram_chat_id', 'telegram_token', 'telegram_token_expires_at', 'updated_at'])
+
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service.handle_update({
+            'message': {
+                'from': {'id': self.telegram_user_id},
+                'chat': {'id': self.telegram_chat_id},
+                'text': '/start',
+            }
+        })
+
+        self.assertTrue(sent_messages)
+        self.assertIn('Yaqin randevular', sent_messages[-1]['text'])
+
+    def test_start_with_invalid_token_falls_back_to_menu_and_appointments_for_linked_user(self):
+        self.appointment.status = Appointment.Status.SCHEDULED
+        self.appointment.telegram_user_id = self.telegram_user_id
+        self.appointment.telegram_chat_id = self.telegram_chat_id
+        self.appointment.telegram_token = None
+        self.appointment.telegram_token_expires_at = None
+        self.appointment.save(update_fields=['status', 'telegram_user_id', 'telegram_chat_id', 'telegram_token', 'telegram_token_expires_at', 'updated_at'])
+
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service.handle_update({
+            'message': {
+                'from': {'id': self.telegram_user_id},
+                'chat': {'id': self.telegram_chat_id},
+                'text': '/start invalid-token',
+            }
+        })
+
+        self.assertGreaterEqual(len(sent_messages), 2)
+        self.assertIn('Bu token yaroqsiz yoki ishlatilgan.', sent_messages[0]['text'])
+        self.assertIn('Yaqin randevular', sent_messages[-1]['text'])
+
 
 class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
     def setUp(self):
@@ -1998,11 +2065,11 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
 
         self.assertEqual(
             int((self.appt2.scheduled_date - self.appt1.scheduled_date).total_seconds() // 60),
-            30,
+            20,
         )
         self.assertEqual(
             int((self.appt3.scheduled_date - self.appt2.scheduled_date).total_seconds() // 60),
-            30,
+            20,
         )
 
         own_texts = [m['text'] for m in sent_messages if m['chat_id'] == 910001]
@@ -2116,6 +2183,769 @@ class TelegramArrivalQueueUpdateTests(MedicalApiTestCase):
         self.assertEqual(int((self.appt2.scheduled_date - self.appt1.scheduled_date).total_seconds() // 60), 30)
         self.assertEqual(int((self.appt3.scheduled_date - self.appt2.scheduled_date).total_seconds() // 60), 30)
         self.assertFalse(any(m['chat_id'] == 910000 and 'Navbat vaqtingiz yangilandi' in m['text'] for m in sent_messages))
+
+
+class AutoQueueCycleTests(MedicalApiTestCase):
+    def setUp(self):
+        self.fixed_now = safe_queue_base_now()
+        owner_user = CustomUser.objects.create_user(
+            username='clinic_owner_auto_cycle',
+            email='clinic.auto.cycle@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='Owner',
+        )
+        self.clinic = Clinic.objects.create(
+            owner=owner_user,
+            name='Auto Queue Clinic',
+            slug='auto-queue-clinic',
+            address='Test address',
+            phone_number='+998901239901',
+            email='clinic.auto.queue@test.uz',
+            registration_number='REG-AUTO-QUEUE-001',
+            status='active',
+        )
+
+        doctor_user = CustomUser.objects.create_user(
+            username='doctor_auto_cycle_user',
+            email='doctor.auto.cycle@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Auto',
+            last_name='Doctor',
+        )
+        self.doctor = Doctor.objects.create(
+            user=doctor_user,
+            clinic=self.clinic,
+            license_number='LIC-AUTO-CYCLE-001',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+            available_from='00:00',
+            available_until='23:59',
+            slot_minutes=40,
+            is_checked_in=True,
+        )
+
+        self.p1_user = CustomUser.objects.create_user(
+            username='patient_auto_cycle_1',
+            email='patient.auto.cycle.1@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Auto',
+            last_name='One',
+        )
+        self.p2_user = CustomUser.objects.create_user(
+            username='patient_auto_cycle_2',
+            email='patient.auto.cycle.2@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Auto',
+            last_name='Two',
+        )
+        self.p3_user = CustomUser.objects.create_user(
+            username='patient_auto_cycle_3',
+            email='patient.auto.cycle.3@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Auto',
+            last_name='Three',
+        )
+        self.p1 = Patient.objects.create(user=self.p1_user)
+        self.p2 = Patient.objects.create(user=self.p2_user)
+        self.p3 = Patient.objects.create(user=self.p3_user)
+
+        now = self.fixed_now
+        self.appt1 = Appointment.objects.create(
+            patient=self.p1,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.IN_PROGRESS,
+            queue_position=1,
+            scheduled_date=now,
+            duration_minutes=40,
+            telegram_user_id=920001,
+            telegram_chat_id=920001,
+            auto_turn_started_at=now - timedelta(minutes=45),
+            auto_turn_prompt_sent_at=now - timedelta(minutes=35),
+        )
+        self.appt2 = Appointment.objects.create(
+            patient=self.p2,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=now + timedelta(minutes=40),
+            duration_minutes=40,
+            telegram_user_id=920002,
+            telegram_chat_id=920002,
+        )
+        self.appt3 = Appointment.objects.create(
+            patient=self.p3,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=3,
+            scheduled_date=now + timedelta(minutes=80),
+            duration_minutes=40,
+            telegram_user_id=920003,
+            telegram_chat_id=920003,
+        )
+
+        original_localtime = timezone.localtime
+
+        def fixed_localtime(*args, **kwargs):
+            if not args and 'value' not in kwargs:
+                return self.fixed_now
+            value = args[0] if args else kwargs.get('value')
+            if value is None:
+                return self.fixed_now
+            return original_localtime(*args, **kwargs)
+
+        fixed_now = self.fixed_now
+        self._queue_time_patches = [
+            patch('django.utils.timezone.localtime', side_effect=fixed_localtime),
+            patch('django.utils.timezone.now', side_effect=lambda: fixed_now),
+        ]
+        for patcher in self._queue_time_patches:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_auto_queue_cycle_cancels_and_shifts_when_no_response_for_30_minutes(self):
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            result = run_auto_queue_cycle()
+
+        self.appt1.refresh_from_db()
+        self.appt2.refresh_from_db()
+        self.appt3.refresh_from_db()
+
+        self.assertEqual(self.appt1.status, Appointment.Status.CANCELLED)
+        self.assertEqual(self.appt2.queue_position, 1)
+        self.assertEqual(self.appt3.queue_position, 2)
+        self.assertEqual(self.appt2.status, Appointment.Status.IN_PROGRESS)
+        self.assertIsNotNone(self.appt2.auto_turn_started_at)
+        self.assertGreaterEqual(result.get('queues_shifted', 0), 1)
+        self.assertTrue(any(msg['chat_id'] == 920001 and '30 daqiqa ichida javob kelmadi' in msg['text'] for msg in sent_messages))
+        self.assertTrue(any(msg['chat_id'] == 920002 and 'Endi sizning navbatingiz' in msg['text'] for msg in sent_messages))
+        self.assertTrue(any(msg['chat_id'] == 920003 and 'Yangi tartibda sizning taxminiy vaqtingiz' in msg['text'] for msg in sent_messages))
+
+    def test_auto_queue_sends_prompt_immediately_when_turn_starts(self):
+        Appointment.objects.filter(id=self.appt1.id).update(
+            status=Appointment.Status.SCHEDULED,
+            auto_turn_started_at=None,
+            auto_turn_prompt_sent_at=None,
+            auto_turn_last_reminder_at=None,
+            auto_turn_response=None,
+            auto_turn_responded_at=None,
+            scheduled_date=self.fixed_now,
+        )
+
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            run_auto_queue_cycle()
+
+        self.appt1.refresh_from_db()
+
+        self.assertIsNotNone(self.appt1.auto_turn_started_at)
+        self.assertIsNotNone(self.appt1.auto_turn_prompt_sent_at)
+        self.assertTrue(any(msg['chat_id'] == 920001 and 'Sizning navbat vaqtingiz keldi' in msg['text'] for msg in sent_messages))
+        self.assertTrue(any(msg['chat_id'] == 920001 and 'Doktor qabuliga kirdingizmi' in msg['text'] for msg in sent_messages))
+
+    def test_auto_queue_does_not_notify_next_as_entered_before_kirdim(self):
+        now = timezone.localtime().replace(second=0, microsecond=0)
+        Appointment.objects.filter(id=self.appt1.id).update(
+            status=Appointment.Status.WAITING,
+            auto_turn_started_at=None,
+            auto_turn_prompt_sent_at=None,
+            auto_turn_last_reminder_at=None,
+            auto_turn_response=None,
+            auto_turn_responded_at=None,
+            scheduled_date=now - timedelta(minutes=10),
+        )
+        Appointment.objects.filter(id=self.appt2.id).update(
+            status=Appointment.Status.SCHEDULED,
+            scheduled_date=now + timedelta(minutes=30),
+        )
+
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            run_auto_queue_cycle()
+
+        self.assertFalse(any(
+            msg['chat_id'] == 920002 and 'Oldingizdagi bemor qabulga kirdi' in msg['text']
+            for msg in sent_messages
+        ))
+
+    def test_auto_queue_callback_yes_saves_response(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.tasks.run_auto_queue_cycle.delay') as mocked_auto_cycle:
+            service._handle_callback_query({
+                'id': 'cb-autoq-yes',
+                'data': f'autoq:yes:{self.appt1.id}',
+                'from': {'id': 920001},
+                'message': {'chat': {'id': 920001}},
+            })
+            mocked_auto_cycle.assert_called_once()
+
+        self.appt1.refresh_from_db()
+        self.assertEqual(self.appt1.auto_turn_response, 'yes')
+        self.assertIsNotNone(self.appt1.auto_turn_responded_at)
+        self.assertIsNotNone(self.appt1.patient_arrival_confirmed_at)
+        self.assertTrue(any("Ma'lumotingiz qabul qilindi" in msg['text'] for msg in sent_messages))
+        self.assertTrue(any(msg.get('reply_markup') and 'rate:' in str(msg.get('reply_markup')) for msg in sent_messages))
+
+    def test_auto_queue_callback_cancel_saves_response(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service._handle_callback_query({
+            'id': 'cb-autoq-cancel',
+            'data': f'autoq:cancel:{self.appt1.id}',
+            'from': {'id': 920001},
+            'message': {'chat': {'id': 920001}},
+        })
+
+        self.appt1.refresh_from_db()
+        self.assertEqual(self.appt1.auto_turn_response, 'cancel')
+        self.assertIsNotNone(self.appt1.auto_turn_responded_at)
+        self.assertTrue(any('Navbat bekor qilinadi' in msg['text'] for msg in sent_messages))
+
+    def test_auto_queue_wait_keeps_position_and_sends_15min_followup_with_cancel(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service._handle_callback_query({
+            'id': 'cb-autoq-wait',
+            'data': f'autoq:wait:{self.appt1.id}',
+            'from': {'id': 920001},
+            'message': {'chat': {'id': 920001}},
+        })
+
+        appt1_before = self.appt1.scheduled_date
+        appt2_before = self.appt2.scheduled_date
+        appt3_before = self.appt3.scheduled_date
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=cast(Any, service).client):
+            run_auto_queue_cycle()
+
+        self.appt1.refresh_from_db()
+        self.appt2.refresh_from_db()
+        self.appt3.refresh_from_db()
+
+        self.assertEqual(self.appt1.queue_position, 1)
+        self.assertEqual(self.appt2.queue_position, 2)
+        self.assertEqual(self.appt3.queue_position, 3)
+        self.assertEqual(self.appt1.status, Appointment.Status.WAITING)
+        self.assertEqual(
+            int((self.appt1.scheduled_date - appt1_before).total_seconds() // 60),
+            15,
+        )
+        self.assertEqual(
+            int((self.appt2.scheduled_date - appt2_before).total_seconds() // 60),
+            15,
+        )
+        self.assertEqual(
+            int((self.appt3.scheduled_date - appt3_before).total_seconds() // 60),
+            15,
+        )
+        self.assertEqual(
+            int((self.appt3.scheduled_date - self.appt2.scheduled_date).total_seconds() // 60),
+            40,
+        )
+        self.assertTrue(any(
+            msg['chat_id'] == 920001 and "Yangi taxminiy vaqtingiz" in msg['text']
+            for msg in sent_messages
+        ))
+        self.assertTrue(any(
+            msg['chat_id'] == 920002 and "Yangi taxminiy vaqtingiz" in msg['text']
+            for msg in sent_messages
+        ))
+        self.assertTrue(any(
+            msg['chat_id'] == 920003 and "Yangi taxminiy vaqtingiz" in msg['text']
+            for msg in sent_messages
+        ))
+        self.assertTrue(any(
+            msg['chat_id'] == 920002 and "15 daqiqaga kechiktirildi" in msg['text']
+            for msg in sent_messages
+        ))
+        self.assertFalse(any(
+            msg['chat_id'] == 920001 and "Navbat qayta hisoblanmoqda" in msg['text']
+            for msg in sent_messages
+        ))
+
+        processed_wait_messages = [
+            msg for msg in sent_messages
+            if msg['chat_id'] == 920001 and "Yangi taxminiy vaqtingiz" in msg['text']
+        ]
+        self.assertEqual(len(processed_wait_messages), 1)
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=cast(Any, service).client):
+            run_auto_queue_cycle()
+
+        processed_wait_messages_after_second_tick = [
+            msg for msg in sent_messages
+            if msg['chat_id'] == 920001 and "Yangi taxminiy vaqtingiz" in msg['text']
+        ]
+        self.assertEqual(len(processed_wait_messages_after_second_tick), 1)
+
+        Appointment.objects.filter(id=self.appt1.id).update(
+            auto_turn_responded_at=timezone.now() - timedelta(minutes=16),
+            auto_turn_last_reminder_at=timezone.now() - timedelta(minutes=17),
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=cast(Any, service).client):
+            run_auto_queue_cycle()
+
+        self.assertTrue(any(
+            msg['chat_id'] == 920001 and msg.get('reply_markup') and 'autoq:cancel' in str(msg['reply_markup'])
+            for msg in sent_messages
+        ))
+
+    def test_auto_queue_wait_recalculates_eta_from_now_for_overdue_turn(self):
+        now = timezone.localtime().replace(second=0, microsecond=0)
+        Appointment.objects.filter(id=self.appt1.id).update(
+            status=Appointment.Status.WAITING,
+            scheduled_date=now - timedelta(hours=1),
+            auto_turn_started_at=now - timedelta(hours=1),
+            auto_turn_prompt_sent_at=now - timedelta(minutes=20),
+            auto_turn_response='wait',
+            auto_turn_responded_at=now,
+            auto_turn_last_reminder_at=now - timedelta(minutes=1),
+        )
+
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            run_auto_queue_cycle()
+
+        self.appt1.refresh_from_db()
+        self.appt2.refresh_from_db()
+
+        self.assertGreaterEqual(
+            int((self.appt1.scheduled_date - now).total_seconds() // 60),
+            14,
+        )
+        self.assertEqual(
+            int((self.appt2.scheduled_date - self.appt1.scheduled_date).total_seconds() // 60),
+            40,
+        )
+
+    def test_auto_queue_duplicate_wait_tap_for_same_prompt_does_not_shift_twice(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.tasks.run_auto_queue_cycle.delay'):
+            service._handle_callback_query({
+                'id': 'cb-autoq-wait-dup-1',
+                'data': f'autoq:wait:{self.appt1.id}',
+                'from': {'id': 920001},
+                'message': {'chat': {'id': 920001}},
+            })
+            service._handle_callback_query({
+                'id': 'cb-autoq-wait-dup-2',
+                'data': f'autoq:wait:{self.appt1.id}',
+                'from': {'id': 920001},
+                'message': {'chat': {'id': 920001}},
+            })
+
+        appt1_before = self.appt1.scheduled_date
+        appt2_before = self.appt2.scheduled_date
+        appt3_before = self.appt3.scheduled_date
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=cast(Any, service).client):
+            run_auto_queue_cycle()
+
+        self.appt1.refresh_from_db()
+        self.appt2.refresh_from_db()
+        self.appt3.refresh_from_db()
+
+        self.assertEqual(int((self.appt1.scheduled_date - appt1_before).total_seconds() // 60), 15)
+        self.assertEqual(int((self.appt2.scheduled_date - appt2_before).total_seconds() // 60), 15)
+        self.assertEqual(int((self.appt3.scheduled_date - appt3_before).total_seconds() // 60), 15)
+        self.assertTrue(any("allaqachon qabul qilingan" in m['text'] for m in sent_messages))
+
+    def test_auto_queue_response_ignored_for_non_leader(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        Appointment.objects.filter(id=self.appt1.id).update(
+            status=Appointment.Status.WAITING,
+        )
+
+        with patch('apps.medical.tasks.run_auto_queue_cycle.delay'):
+            service._handle_callback_query({
+                'id': 'cb-autoq-non-leader',
+                'data': f'autoq:wait:{self.appt2.id}',
+                'from': {'id': 920002},
+                'message': {'chat': {'id': 920002}},
+            })
+
+        self.appt2.refresh_from_db()
+        self.assertIsNone(self.appt2.auto_turn_response)
+        self.assertTrue(any("tugma hozir faol emas" in m['text'] for m in sent_messages))
+
+    def test_auto_queue_leader_uses_scheduled_time_not_stale_queue_position(self):
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        # Intentionally make queue_position inconsistent with actual scheduled order.
+        Appointment.objects.filter(id=self.appt1.id).update(
+            queue_position=9,
+            scheduled_date=timezone.now() + timedelta(minutes=30),
+            status=Appointment.Status.WAITING,
+        )
+        Appointment.objects.filter(id=self.appt2.id).update(
+            queue_position=2,
+            scheduled_date=timezone.now() + timedelta(minutes=5),
+            status=Appointment.Status.WAITING,
+        )
+
+        with patch('apps.medical.tasks.run_auto_queue_cycle.delay'):
+            service._handle_callback_query({
+                'id': 'cb-autoq-stale-queue-pos',
+                'data': f'autoq:wait:{self.appt1.id}',
+                'from': {'id': 920001},
+                'message': {'chat': {'id': 920001}},
+            })
+
+        self.appt1.refresh_from_db()
+        self.assertIsNone(self.appt1.auto_turn_response)
+        self.assertTrue(any("tugma hozir faol emas" in m['text'] for m in sent_messages))
+
+    def test_auto_queue_supports_legacy_large_interval_values(self):
+        self.doctor.slot_minutes = 90
+        self.doctor.save(update_fields=['slot_minutes', 'updated_at'])
+        Appointment.objects.filter(id=self.appt1.id).update(
+            auto_turn_started_at=timezone.now() - timedelta(minutes=95),
+            auto_turn_prompt_sent_at=timezone.now() - timedelta(minutes=35),
+        )
+
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            run_auto_queue_cycle()
+
+        self.appt2.refresh_from_db()
+        self.appt3.refresh_from_db()
+        self.assertEqual(
+            int((self.appt3.scheduled_date - self.appt2.scheduled_date).total_seconds() // 60),
+            90,
+        )
+
+    def test_auto_queue_does_not_modify_tomorrow_appointments(self):
+        tomorrow = timezone.localtime(self.appt1.scheduled_date) + timedelta(days=1)
+        tomorrow_appt = Appointment.objects.create(
+            patient=self.p1,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=7,
+            scheduled_date=tomorrow,
+            duration_minutes=40,
+            telegram_user_id=930001,
+            telegram_chat_id=930001,
+        )
+        expected_scheduled = tomorrow_appt.scheduled_date
+
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: None,
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            run_auto_queue_cycle()
+
+        tomorrow_appt.refresh_from_db()
+        self.assertEqual(tomorrow_appt.status, Appointment.Status.SCHEDULED)
+        self.assertEqual(tomorrow_appt.queue_position, 7)
+        self.assertEqual(tomorrow_appt.scheduled_date, expected_scheduled)
+
+    def test_auto_queue_starts_for_not_checked_in_doctor_when_first_time_arrives(self):
+        self.doctor.is_checked_in = False
+        self.doctor.save(update_fields=['is_checked_in', 'updated_at'])
+
+        Appointment.objects.filter(id=self.appt1.id).update(
+            status=Appointment.Status.SCHEDULED,
+            scheduled_date=timezone.now() - timedelta(minutes=5),
+            auto_turn_started_at=None,
+            auto_turn_prompt_sent_at=None,
+            auto_turn_last_reminder_at=None,
+            auto_turn_response=None,
+            auto_turn_responded_at=None,
+        )
+
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: None,
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            run_auto_queue_cycle()
+
+        self.appt1.refresh_from_db()
+        self.assertEqual(self.appt1.status, Appointment.Status.IN_PROGRESS)
+        self.assertIsNotNone(self.appt1.auto_turn_started_at)
+
+    def test_auto_queue_waits_for_scheduled_time_if_doctor_not_checked_in(self):
+        self.doctor.is_checked_in = False
+        self.doctor.save(update_fields=['is_checked_in', 'updated_at'])
+
+        Appointment.objects.filter(id=self.appt1.id).update(
+            status=Appointment.Status.SCHEDULED,
+            scheduled_date=timezone.now() + timedelta(minutes=30),
+            auto_turn_started_at=None,
+            auto_turn_prompt_sent_at=None,
+            auto_turn_last_reminder_at=None,
+            auto_turn_response=None,
+            auto_turn_responded_at=None,
+        )
+
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: None,
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+            run_auto_queue_cycle()
+
+        self.appt1.refresh_from_db()
+        self.assertEqual(self.appt1.status, Appointment.Status.SCHEDULED)
+        self.assertIsNone(self.appt1.auto_turn_started_at)
+
+
+class MorningFirstQueueReminderTests(MedicalApiTestCase):
+    def setUp(self):
+        cache.clear()
+        owner_user = CustomUser.objects.create_user(
+            username='clinic_owner_morning_queue',
+            email='clinic.morning.queue@example.com',
+            password='Pass12345!',
+            role='clinic',
+            first_name='Clinic',
+            last_name='Owner',
+        )
+        self.clinic = Clinic.objects.create(
+            owner=owner_user,
+            name='Morning Queue Clinic',
+            slug='morning-queue-clinic',
+            address='Test address',
+            phone_number='+998901239902',
+            email='clinic.morning.queue@test.uz',
+            registration_number='REG-MORNING-QUEUE-001',
+            status='active',
+        )
+
+        doctor_user = CustomUser.objects.create_user(
+            username='doctor_morning_queue_user',
+            email='doctor.morning.queue@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Morning',
+            last_name='Doctor',
+        )
+        self.doctor = Doctor.objects.create(
+            user=doctor_user,
+            clinic=self.clinic,
+            license_number='LIC-MORNING-QUEUE-001',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+            available_from='08:00',
+            available_until='20:00',
+            slot_minutes=80,
+            is_checked_in=False,
+        )
+
+        p1_user = CustomUser.objects.create_user(
+            username='patient_morning_queue_1',
+            email='patient.morning.queue.1@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Morning',
+            last_name='One',
+        )
+        p2_user = CustomUser.objects.create_user(
+            username='patient_morning_queue_2',
+            email='patient.morning.queue.2@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Morning',
+            last_name='Two',
+        )
+        self.p1 = Patient.objects.create(user=p1_user)
+        self.p2 = Patient.objects.create(user=p2_user)
+
+        now = timezone.localtime().replace(second=0, microsecond=0)
+        doctor_start = now + timedelta(minutes=30)
+        self.doctor.available_from = doctor_start.time()
+        self.doctor.save(update_fields=['available_from', 'updated_at'])
+
+        self.today_first = Appointment.objects.create(
+            patient=self.p1,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=1,
+            scheduled_date=now + timedelta(hours=2),
+            duration_minutes=80,
+            telegram_user_id=940001,
+            telegram_chat_id=940001,
+        )
+        self.today_second = Appointment.objects.create(
+            patient=self.p2,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=now + timedelta(hours=3, minutes=20),
+            duration_minutes=80,
+            telegram_user_id=940002,
+            telegram_chat_id=940002,
+        )
+        self.tomorrow_appt = Appointment.objects.create(
+            patient=self.p2,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=1,
+            scheduled_date=now + timedelta(days=1, hours=1),
+            duration_minutes=80,
+            telegram_user_id=940003,
+            telegram_chat_id=940003,
+        )
+
+    def test_morning_first_queue_reminder_sends_only_to_today_first_patient(self):
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with override_settings(AUTO_QUEUE_START_REMINDER_WINDOW_MINUTES=180):
+            with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+                result = send_today_first_queue_reminders()
+
+        self.assertEqual(result.get('sent'), 1)
+        self.assertTrue(any(m['chat_id'] == 940001 for m in sent_messages))
+        self.assertFalse(any(m['chat_id'] == 940002 for m in sent_messages))
+        self.assertFalse(any(m['chat_id'] == 940003 for m in sent_messages))
+        self.assertTrue(any('1-navbatdasiz' in m['text'] for m in sent_messages))
+        self.assertTrue(any('80 daqiqa' in m['text'] for m in sent_messages))
+
+    def test_morning_first_queue_reminder_is_idempotent_same_day(self):
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        with override_settings(AUTO_QUEUE_START_REMINDER_WINDOW_MINUTES=180):
+            with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+                first_result = send_today_first_queue_reminders()
+                second_result = send_today_first_queue_reminders()
+
+        self.assertEqual(first_result.get('sent'), 1)
+        self.assertEqual(second_result.get('sent'), 0)
+        self.assertGreaterEqual(second_result.get('skipped_already_sent', 0), 1)
+        self.assertEqual(len(sent_messages), 1)
+
+    def test_morning_first_queue_reminder_skips_outside_start_minus_30_window(self):
+        sent_messages = []
+        fake_client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        self.doctor.available_from = (timezone.localtime() + timedelta(hours=4)).time()
+        self.doctor.save(update_fields=['available_from', 'updated_at'])
+
+        with override_settings(AUTO_QUEUE_START_REMINDER_WINDOW_MINUTES=1):
+            with patch('apps.medical.telegram_bot_service.TelegramBotService._require_client', return_value=fake_client):
+                result = send_today_first_queue_reminders()
+
+        self.assertEqual(result.get('sent'), 0)
+        self.assertGreaterEqual(result.get('skipped_not_in_window', 0), 1)
+        self.assertEqual(len(sent_messages), 0)
+
+    def test_legacy_15min_prompt_is_skipped_for_today_auto_queue_appointments(self):
+        result = send_telegram_appointment_15min_prompt(str(self.today_first.id))
+        self.assertEqual(result.get('status'), 'skipped')
+        self.assertEqual(result.get('reason'), 'managed_by_auto_queue')
 
 
 class TelegramDoctorPatientsListTests(MedicalApiTestCase):
@@ -2414,7 +3244,7 @@ class TelegramMyAppointmentsQueueOrderTests(MedicalApiTestCase):
         )
         patient_after = Patient.objects.create(user=patient_user_after, phone_number='+998911234567')
 
-        now = timezone.localtime().replace(second=0, microsecond=0)
+        now = timezone.localtime().replace(second=0, microsecond=0) + timedelta(hours=1)
         Appointment.objects.create(
             patient=patient_before_1,
             doctor=self.doctor,
@@ -2439,7 +3269,7 @@ class TelegramMyAppointmentsQueueOrderTests(MedicalApiTestCase):
             clinic=clinic,
             status=Appointment.Status.SCHEDULED,
             queue_position=2,
-            scheduled_date=now + timedelta(minutes=25),
+            scheduled_date=now + timedelta(minutes=30),
             duration_minutes=30,
         )
         self.target_appointment = Appointment.objects.create(
@@ -2448,7 +3278,7 @@ class TelegramMyAppointmentsQueueOrderTests(MedicalApiTestCase):
             clinic=clinic,
             status=Appointment.Status.SCHEDULED,
             queue_position=9,
-            scheduled_date=now + timedelta(minutes=30),
+            scheduled_date=now + timedelta(minutes=45),
             duration_minutes=30,
             telegram_user_id=991234,
             telegram_chat_id=991234,
@@ -2459,7 +3289,7 @@ class TelegramMyAppointmentsQueueOrderTests(MedicalApiTestCase):
             clinic=clinic,
             status=Appointment.Status.SCHEDULED,
             queue_position=2,
-            scheduled_date=now + timedelta(minutes=60),
+            scheduled_date=now + timedelta(minutes=70),
             duration_minutes=30,
         )
 

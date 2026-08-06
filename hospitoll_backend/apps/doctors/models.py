@@ -225,16 +225,21 @@ class Doctor(models.Model):
         help_text=_('Abet (tanaffus) tugash vaqti')
     )
     SLOT_MINUTES_CHOICES = (
-        (15, '15'),
+        (10, '10'),
         (20, '20'),
         (30, '30'),
+        (40, '40'),
+        (50, '50'),
+        (60, '60'),
+        (80, '80'),
+        (120, '120'),
     )
     slot_minutes = models.PositiveSmallIntegerField(
         _('slot minutes'),
         choices=SLOT_MINUTES_CHOICES,
         default=30,
-        validators=[MinValueValidator(15), MaxValueValidator(30)],
-        help_text=_('Appointment slot duration in minutes (15/20/30)')
+        validators=[MinValueValidator(10), MaxValueValidator(120)],
+        help_text=_('Appointment slot duration in minutes (10/20/30/40/50/60/80/120)')
     )
     working_days = models.CharField(
         _('working days'),

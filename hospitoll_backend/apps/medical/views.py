@@ -37,6 +37,10 @@ from .serializers import (
 from .schedule_utils import validate_doctor_booking_window
 
 
+def _allowed_slot_minutes() -> set[int]:
+    return {int(value) for value, _ in Doctor.SLOT_MINUTES_CHOICES}
+
+
 def _resolve_default_consultation_fee_for_doctor(doctor: Doctor | None) -> Decimal:
     if not doctor:
         return Decimal('0')
@@ -271,7 +275,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         now_local = timezone.localtime().replace(second=0, microsecond=0)
         appointment_date = timezone.localtime(appointment.scheduled_date).date()
         queue_step_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
-        if queue_step_minutes not in (15, 20, 30):
+        if queue_step_minutes not in _allowed_slot_minutes():
             queue_step_minutes = 30
 
         if decision == 'cancel':
@@ -372,24 +376,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 if decision == 'enter':
                     ordered_items = [target_item, *remaining_items]
                 else:
-                    # wait: move selected patient one step back, then recalculate ETA.
-                    old_index = next((idx for idx, item in enumerate(queue_items) if item.id == target_item.id), 0)
-                    new_index = min(old_index + 1, len(remaining_items))
-                    ordered_items = [
-                        *remaining_items[:new_index],
-                        target_item,
-                        *remaining_items[new_index:],
-                    ]
+                    # wait: keep current order and shift the whole queue by +15 minutes.
+                    ordered_items = queue_items
 
-                min_wait_local = now_local + timedelta(minutes=15)
                 for next_pos, item in enumerate(ordered_items, start=1):
                     current_local = timezone.localtime(item.scheduled_date).replace(second=0, microsecond=0)
                     base_local = current_local if current_local > queue_cursor else queue_cursor
 
                     if decision == 'enter' and item.id == appointment.id:
                         new_local = queue_cursor
-                    elif decision == 'wait' and item.id == appointment.id:
-                        new_local = base_local if base_local > min_wait_local else min_wait_local
+                    elif decision == 'wait':
+                        new_local = current_local + timedelta(minutes=15)
                     else:
                         new_local = base_local
 
@@ -955,7 +952,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Onlayn navbatni faqat bugun va ertaga olish mumkin.'}, status=status.HTTP_400_BAD_REQUEST)
 
         duration_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
-        if duration_minutes not in (15, 20, 30):
+        if duration_minutes not in _allowed_slot_minutes():
             duration_minutes = 30
 
         booking_window_error = self._validate_doctor_booking_window(
@@ -1194,6 +1191,20 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 today_standalone_records_count = visits_qs.filter(
                     created_at__gte=effective_session_start,
                     created_at__lte=session_end,
+                    appointment__isnull=True,
+                ).count()
+                today_24h_patients = today_appointments_count + today_standalone_records_count
+        else:
+            day_start = timezone.make_aware(datetime.combine(today_local, datetime.min.time()), tz)
+            effective_day_start = day_start if stats_window_start <= day_start else stats_window_start
+            if now > effective_day_start:
+                today_appointments_count = accepted_appointments_qs.filter(
+                    scheduled_date__gte=effective_day_start,
+                    scheduled_date__lte=now,
+                ).count()
+                today_standalone_records_count = visits_qs.filter(
+                    created_at__gte=effective_day_start,
+                    created_at__lte=now,
                     appointment__isnull=True,
                 ).count()
                 today_24h_patients = today_appointments_count + today_standalone_records_count

@@ -333,6 +333,14 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'core.tasks.send_upcoming_appointment_reminders',
         'schedule': crontab(hour=8, minute=0),  # Every day at 8 AM
     },
+    'run-auto-queue-cycle': {
+        'task': 'apps.medical.tasks.run_auto_queue_cycle',
+        'schedule': crontab(minute='*'),  # Every minute
+    },
+    'send-today-first-queue-reminders': {
+        'task': 'apps.medical.tasks.send_today_first_queue_reminders',
+        'schedule': crontab(minute='*'),  # Every minute, task itself checks start-30m window
+    },
     # Invoice management
     'send-overdue-invoice-reminders': {
         'task': 'core.tasks.send_overdue_invoice_reminders',

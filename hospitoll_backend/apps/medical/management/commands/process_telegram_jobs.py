@@ -121,15 +121,28 @@ class Command(BaseCommand):
         for appt in qs:
             if not appt.telegram_chat_id:
                 continue
+
+            claimed_at = timezone.now()
+            claimed = Appointment.objects.filter(
+                id=appt.id,
+                telegram_reminder_sent_at__isnull=True,
+            ).update(telegram_reminder_sent_at=claimed_at)
+            if not claimed:
+                continue
+
             when = timezone.localtime(appt.scheduled_date).strftime("%d.%m.%Y %H:%M")
             doctor_name = appt.doctor_name or (appt.doctor.user.get_full_name() if appt.doctor else "Doktor")
             clinic_name = appt.clinic_name or (appt.clinic.name if appt.clinic else "Klinika")
 
-            client.send_message(
-                appt.telegram_chat_id,
-                f"⏰ Eslatma: 1 soatdan keyin randevu bor!\n\n📍 {clinic_name}\n👨‍⚕️ {doctor_name}\n🕒 {when}",
-            )
-            Appointment.objects.filter(id=appt.id).update(telegram_reminder_sent_at=timezone.now())
+            try:
+                client.send_message(
+                    appt.telegram_chat_id,
+                    f"⏰ Eslatma: 1 soatdan keyin randevu bor!\n\n📍 {clinic_name}\n👨‍⚕️ {doctor_name}\n🕒 {when}",
+                )
+            except Exception:
+                Appointment.objects.filter(id=appt.id, telegram_reminder_sent_at=claimed_at).update(telegram_reminder_sent_at=None)
+                continue
+
             count += 1
 
         return count
@@ -168,21 +181,47 @@ class Command(BaseCommand):
         for appt in qs:
             if not appt.telegram_chat_id:
                 continue
+
+            claimed_at = timezone.now()
+            claimed = Appointment.objects.filter(
+                id=appt.id,
+                telegram_15min_prompt_sent_at__isnull=True,
+            ).update(telegram_15min_prompt_sent_at=claimed_at)
+            if not claimed:
+                continue
+
+            if (
+                appt.doctor_id
+                and timezone.localtime(appt.scheduled_date).date() == timezone.localtime().date()
+                and appt.status in (
+                    Appointment.Status.SCHEDULED,
+                    Appointment.Status.CONFIRMED,
+                    Appointment.Status.WAITING,
+                    Appointment.Status.IN_PROGRESS,
+                )
+            ):
+                Appointment.objects.filter(id=appt.id, telegram_15min_prompt_sent_at=claimed_at).update(telegram_15min_prompt_sent_at=None)
+                continue
+
             when = timezone.localtime(appt.scheduled_date).strftime('%d.%m.%Y %H:%M')
             doctor_name = appt.doctor_name or (appt.doctor.user.get_full_name() if appt.doctor else 'Doktor')
             clinic_name = appt.clinic_name or (appt.clinic.name if appt.clinic else 'Klinika')
             reply_markup = {
                 'inline_keyboard': [[
-                    {'text': '✅ Qabulga boraman', 'callback_data': f'arrive:{appt.id}'},
+                    {'text': '✅ Qabulga kiraman', 'callback_data': f'arrive:{appt.id}'},
                     {'text': '❌ Bekor qilinsin', 'callback_data': f'cancel15:{appt.id}'},
                 ]]
             }
-            client.send_message(
-                appt.telegram_chat_id,
-                f"⏳ 15 minutdan keyin navbatingiz keladi.\n\n📍 {clinic_name}\n👨‍⚕️ {doctor_name}\n🕒 {when}\n\nQabulga borasizmi?",
-                reply_markup=reply_markup,
-            )
-            Appointment.objects.filter(id=appt.id).update(telegram_15min_prompt_sent_at=timezone.now())
+            try:
+                client.send_message(
+                    appt.telegram_chat_id,
+                    f"⏳ 15 daqiqadan keyin navbatingiz keladi.\n\n📍 {clinic_name}\n👨‍⚕️ {doctor_name}\n🕒 {when}\n\nQabulga kira olasizmi?",
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                Appointment.objects.filter(id=appt.id, telegram_15min_prompt_sent_at=claimed_at).update(telegram_15min_prompt_sent_at=None)
+                continue
+
             count += 1
 
         return count
