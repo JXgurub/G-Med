@@ -187,6 +187,33 @@ def _run_auto_queue_tick_once() -> dict:
             if not queue_items:
                 continue
 
+            # Self-heal stale queue states: keep canonical ordering/positions and
+            # allow only the leader to stay IN_PROGRESS.
+            for idx, item in enumerate(queue_items, start=1):
+                update_fields = ['updated_at']
+                changed = False
+
+                if item.queue_position != idx:
+                    item.queue_position = idx
+                    update_fields.append('queue_position')
+                    changed = True
+
+                if idx > 1 and item.status == Appointment.Status.IN_PROGRESS:
+                    item.status = Appointment.Status.SCHEDULED
+                    _reset_auto_turn_fields(item)
+                    update_fields.extend([
+                        'status',
+                        'auto_turn_started_at',
+                        'auto_turn_prompt_sent_at',
+                        'auto_turn_last_reminder_at',
+                        'auto_turn_response',
+                        'auto_turn_responded_at',
+                    ])
+                    changed = True
+
+                if changed:
+                    item.save(update_fields=update_fields)
+
             step_minutes = _resolve_queue_step_minutes(doctor, queue_items)
             slot_delta = timedelta(minutes=step_minutes)
 
@@ -212,24 +239,6 @@ def _run_auto_queue_tick_once() -> dict:
                         ),
                     )
                     reminders_sent += 1
-
-                if not first.auto_turn_prompt_sent_at and first.telegram_chat_id:
-                    patient_name = _format_patient_name(first)
-                    client.send_message(
-                        int(first.telegram_chat_id),
-                        (
-                            "⏱ Sizning navbat vaqtingiz keldi.\n\n"
-                            f"👤 Bemor: {patient_name}\n"
-                            f"📍 Klinika: {first.clinic_name or (first.clinic.name if first.clinic else 'Klinika')}\n"
-                            f"👨‍⚕️ Doktor: {first.doctor_name or (doctor.user.get_full_name() if doctor.user_id else 'Doktor')}\n\n"
-                            "Doktor qabuliga kirdingizmi, iltimos tasdiqlang."
-                        ),
-                        reply_markup=_autoq_reply_markup(first.id),
-                    )
-                    first.auto_turn_prompt_sent_at = now
-                    first.auto_turn_last_reminder_at = now
-                    first.save(update_fields=['auto_turn_prompt_sent_at', 'auto_turn_last_reminder_at', 'updated_at'])
-                    prompts_sent += 1
 
             wait_followup_qs = list(
                 Appointment.objects.select_for_update().filter(
@@ -276,6 +285,29 @@ def _run_auto_queue_tick_once() -> dict:
                 wait_appt.auto_turn_last_reminder_at = now
                 wait_appt.save(update_fields=['auto_turn_last_reminder_at', 'updated_at'])
                 reminders_sent += 1
+
+            # Compatibility: if turn is already active but legacy data missed prompt timestamp,
+            # send the questionnaire now so queue can continue instead of getting stuck.
+            if first.auto_turn_prompt_sent_at is None and first.telegram_chat_id:
+                clinic_name = first.clinic_name or (first.clinic.name if first.clinic else 'Klinika')
+                doctor_name = first.doctor_name or (doctor.user.get_full_name() if doctor.user_id else 'Doktor')
+                patient_name = _format_patient_name(first)
+                client.send_message(
+                    int(first.telegram_chat_id),
+                    (
+                        "⏱ Sizning navbat vaqtingiz keldi.\n\n"
+                        f"👤 Bemor: {patient_name}\n"
+                        f"📍 Klinika: {clinic_name}\n"
+                        f"👨‍⚕️ Doktor: {doctor_name}\n\n"
+                        "Doktor qabuliga kirdingizmi, iltimos tasdiqlang."
+                    ),
+                    reply_markup=_autoq_reply_markup(first.id),
+                )
+                first.auto_turn_prompt_sent_at = now
+                first.auto_turn_last_reminder_at = now
+                first.save(update_fields=['auto_turn_prompt_sent_at', 'auto_turn_last_reminder_at', 'updated_at'])
+                prompts_sent += 1
+                continue
 
             if first.auto_turn_prompt_sent_at and not first.auto_turn_response:
                 timeout_auto_cancel = False
@@ -395,17 +427,20 @@ def _run_auto_queue_tick_once() -> dict:
 
                 if should_process_wait:
                     wait_delay = timedelta(minutes=15)
-                    # Recalculate from current time so ETA is always real-time (never stale past time).
+                    # Recalculate from current time so ETA is always real-time and collision-free.
                     new_cursor = now + wait_delay
                     for idx, item in enumerate(queue_items, start=1):
-                        item.scheduled_date = _make_aware_at_local_time(new_cursor.date(), new_cursor.time())
+                        current_local = timezone.localtime(item.scheduled_date).replace(second=0, microsecond=0)
+                        target_local = current_local + wait_delay
+                        final_local = target_local if target_local > new_cursor else new_cursor
+                        item.scheduled_date = _make_aware_at_local_time(final_local.date(), final_local.time())
                         update_fields = ['scheduled_date', 'updated_at']
                         if idx == 1:
                             item.status = Appointment.Status.WAITING
                             item.auto_turn_last_reminder_at = responded_at
                             update_fields.extend(['status', 'auto_turn_last_reminder_at'])
                         item.save(update_fields=update_fields)
-                        new_cursor = new_cursor + slot_delta
+                        new_cursor = final_local + slot_delta
 
                     first = queue_items[0]
                     when = timezone.localtime(first.scheduled_date).strftime('%H:%M')
@@ -434,6 +469,28 @@ def _run_auto_queue_tick_once() -> dict:
                         )
                         reminders_sent += 1
                     queues_shifted += 1
+
+                else:
+                    # If a previous WAIT decision has already been consumed, but the turn is
+                    # due again, reset response fields so we can re-prompt instead of stalling.
+                    stale_wait_due_again = bool(
+                        first.scheduled_date <= now and (
+                            responded_at is None or
+                            timezone.localtime(responded_at) <= now
+                        )
+                    )
+                    if stale_wait_due_again:
+                        first.auto_turn_response = None
+                        first.auto_turn_responded_at = None
+                        first.auto_turn_prompt_sent_at = None
+                        first.auto_turn_last_reminder_at = None
+                        first.save(update_fields=[
+                            'auto_turn_response',
+                            'auto_turn_responded_at',
+                            'auto_turn_prompt_sent_at',
+                            'auto_turn_last_reminder_at',
+                            'updated_at',
+                        ])
 
                 continue
 

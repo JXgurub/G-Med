@@ -583,7 +583,6 @@ const DoctorDashboard = () => {
         notify_current: false,
         notify_all_shifted: true,
       })
-      await acceptOnlineAppointment(appointment.id)
       await notifyOnlineAppointmentReady(appointment.id)
       await loadOnlineAppointments(doctor.id)
     } catch (error) {
@@ -1184,7 +1183,8 @@ const DoctorDashboard = () => {
                       const timeLabel = scheduled.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })
                       const dateLabel = scheduled.toLocaleDateString('uz-UZ')
                       const isQueueLeader = index === 0
-                      const queueLabel = index + 1
+                      const queuePosition = Number(appointment?.queue_position)
+                      const queueLabel = Number.isFinite(queuePosition) && queuePosition > 0 ? queuePosition : index + 1
                       const queueLocked = !isQueueLeader
                       return (
                         <div key={appointment.id} className="appointment-card">

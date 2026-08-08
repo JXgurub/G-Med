@@ -192,6 +192,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             Appointment.Status.SCHEDULED,
             Appointment.Status.CONFIRMED,
             Appointment.Status.WAITING,
+            Appointment.Status.IN_PROGRESS,
         )
 
     def _format_local_dt(self, dt) -> str:
@@ -374,19 +375,39 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 remaining_items = [item for item in queue_items if item.id != appointment.id]
 
                 if decision == 'enter':
-                    ordered_items = [target_item, *remaining_items]
+                    self._free_slot_if_possible(target_item)
+                    target_item.scheduled_date = now_local
+                    target_item.status = Appointment.Status.COMPLETED
+                    target_item.auto_turn_started_at = None
+                    target_item.auto_turn_prompt_sent_at = None
+                    target_item.auto_turn_last_reminder_at = None
+                    target_item.auto_turn_response = None
+                    target_item.auto_turn_responded_at = None
+                    target_item.save(update_fields=[
+                        'scheduled_date',
+                        'status',
+                        'auto_turn_started_at',
+                        'auto_turn_prompt_sent_at',
+                        'auto_turn_last_reminder_at',
+                        'auto_turn_response',
+                        'auto_turn_responded_at',
+                        'updated_at',
+                    ])
+                    ordered_items = remaining_items
                 else:
                     # wait: keep current order and shift the whole queue by +15 minutes.
                     ordered_items = queue_items
 
+                first_enter_shifted_id: str | None = None
                 for next_pos, item in enumerate(ordered_items, start=1):
                     current_local = timezone.localtime(item.scheduled_date).replace(second=0, microsecond=0)
                     base_local = current_local if current_local > queue_cursor else queue_cursor
 
-                    if decision == 'enter' and item.id == appointment.id:
+                    if decision == 'wait':
+                        target_local = current_local + timedelta(minutes=15)
+                        new_local = target_local if target_local > queue_cursor else queue_cursor
+                    elif decision == 'enter':
                         new_local = queue_cursor
-                    elif decision == 'wait':
-                        new_local = current_local + timedelta(minutes=15)
                     else:
                         new_local = base_local
 
@@ -400,6 +421,19 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
                     if item.id == appointment.id:
                         selected_new_local = new_local
+
+                    if decision == 'enter' and next_pos == 1:
+                        item.status = Appointment.Status.IN_PROGRESS
+                        item.auto_turn_started_at = now_local
+                        item.auto_turn_prompt_sent_at = now_local
+                        item.auto_turn_last_reminder_at = now_local
+                        first_enter_shifted_id = str(item.id)
+                        update_fields.extend([
+                            'status',
+                            'auto_turn_started_at',
+                            'auto_turn_prompt_sent_at',
+                            'auto_turn_last_reminder_at',
+                        ])
 
                     if new_local != current_local:
                         delta_minutes = int((new_local - current_local).total_seconds() // 60)
@@ -466,6 +500,32 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     }
 
             selected_appointment_id = str(appointment.id)
+            if decision == 'enter' and first_enter_shifted_id:
+                first_enter_shifted = next(
+                    (rec for rec in shifted_records if rec.get('id') == first_enter_shifted_id),
+                    None,
+                )
+                if first_enter_shifted and first_enter_shifted.get('chat_id'):
+                    client.send_message(
+                        int(first_enter_shifted['chat_id']),
+                        (
+                            "⏱ Sizning navbat vaqtingiz keldi.\n\n"
+                            f"🕒 Taxminiy vaqt: {first_enter_shifted['new_dt'].strftime('%d.%m.%Y %H:%M')}\n\n"
+                            "Doktor qabuliga kirdingizmi, iltimos tasdiqlang."
+                        ),
+                        reply_markup={
+                            'inline_keyboard': [
+                                [
+                                    {'text': '✅ Kirdim', 'callback_data': f"autoq:yes:{first_enter_shifted_id}"},
+                                    {'text': '🕒 Kutyapman', 'callback_data': f"autoq:wait:{first_enter_shifted_id}"},
+                                ],
+                                [
+                                    {'text': '❌ Navbatni bekor qilish', 'callback_data': f"autoq:cancel:{first_enter_shifted_id}"},
+                                ],
+                            ]
+                        },
+                    )
+
             two_left_target_ids = [
                 rec['id']
                 for rec in shifted_records

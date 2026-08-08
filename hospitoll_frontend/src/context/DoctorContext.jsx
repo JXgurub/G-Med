@@ -258,8 +258,8 @@ export const DoctorProvider = ({ children }) => {
     try {
       // Backend provides a dedicated endpoint for today's queue
       const items = await medicalApi.getTodaysAppointments()
-      const excludedStatuses = new Set(['pending_telegram_confirmation', 'cancelled', 'completed', 'no_show', 'in_progress'])
-      const todays = (items || []).filter((item) => !excludedStatuses.has(item.status))
+      const activeQueueStatuses = new Set(['scheduled', 'confirmed', 'waiting', 'in_progress'])
+      const todays = (items || []).filter((item) => activeQueueStatuses.has(item.status))
       const patientIds = [...new Set(todays.map((item) => item.patient))]
       const patientMap = {}
       await Promise.all(patientIds.map(async (id) => {
