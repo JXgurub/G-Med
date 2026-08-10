@@ -1147,10 +1147,15 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
 
         today = timezone.localdate()
+        queue_statuses = (
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+            Appointment.Status.WAITING,
+        )
         qs = Appointment.objects.filter(
             doctor=doctor,
             scheduled_date__date=today,
-            status__in=self._queue_active_statuses(),
+            status__in=queue_statuses,
         ).select_related('patient', 'clinic', 'slot').order_by('scheduled_date', 'created_at', 'queue_position')
         return Response(AppointmentSerializer(qs, many=True).data)
 
@@ -1498,7 +1503,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             .order_by('created_at')
         )
 
-        monthly_arrived_patients = monthly_appointments.count() + monthly_standalone_records.count()
+        monthly_arrived_patients = monthly_appointments.count()
 
         monthly_work_records = DoctorWorkRecord.objects.filter(
             doctor__clinic=clinic,
@@ -1532,16 +1537,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             doctor_id = ensure_doctor_bucket(doctor)
             appointment_fee = Decimal(appointment.consultation_fee or 0)
             effective_fee = appointment_fee if appointment_fee > 0 else _resolve_default_consultation_fee_for_doctor(doctor)
-            per_doctor_totals[doctor_id]['seen_patients'] += 1
-            per_doctor_totals[doctor_id]['estimated_revenue'] += effective_fee
-
-        for record in monthly_standalone_records:
-            doctor = record.doctor
-            if not doctor:
-                continue
-
-            doctor_id = ensure_doctor_bucket(doctor)
-            effective_fee = _resolve_default_consultation_fee_for_doctor(doctor)
             per_doctor_totals[doctor_id]['seen_patients'] += 1
             per_doctor_totals[doctor_id]['estimated_revenue'] += effective_fee
 

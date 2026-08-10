@@ -864,7 +864,15 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.doctor.save(update_fields=['is_checked_in', 'checked_in_at', 'available_from', 'available_until', 'working_days', 'updated_at'])
 
         url = reverse('doctor-availability-available')
-        response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': today.isoformat()})
+        # Patch localtime in views so the "close time" check uses a fixed daytime value
+        from django.utils.timezone import localtime as real_localtime
+        _fixed_now = timezone.localtime().replace(hour=10, minute=0, second=0, microsecond=0)
+
+        def _mock_localtime(dt=None):
+            return _fixed_now if dt is None else real_localtime(dt)
+
+        with patch('apps.doctors.views.localtime', side_effect=_mock_localtime):
+            response = self.client.get(url, {'doctor': str(self.doctor.id), 'date': today.isoformat()})
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(len(response.json()) > 0)

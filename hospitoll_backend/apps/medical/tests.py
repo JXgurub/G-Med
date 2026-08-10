@@ -220,7 +220,7 @@ class NotifyReadyDoctorRatingTests(MedicalApiTestCase):
             clinic=self.clinic,
             status=Appointment.Status.SCHEDULED,
             queue_position=2,
-            scheduled_date=timezone.now() + timedelta(minutes=45),
+            scheduled_date=safe_queue_base_now() + timedelta(minutes=45),
             duration_minutes=30,
         )
 
@@ -346,8 +346,14 @@ class DoctorDashboardStatsTests(MedicalApiTestCase):
         self.assertIn('no-store', response.headers.get('Cache-Control', ''))
 
     def test_today_24h_counts_without_checkin_record_using_day_window(self):
-        now = timezone.localtime()
-        self._create_record(created_at=now - timedelta(hours=2))
+        from datetime import datetime as _dt
+        today_date = timezone.localdate()
+        # Use 00:05 AM today so the record is always within today's day window
+        safe_time = timezone.make_aware(
+            _dt.combine(today_date, _dt.strptime('00:05', '%H:%M').time()),
+            timezone.get_current_timezone(),
+        )
+        self._create_record(created_at=safe_time)
 
         response = self.client.get(self.url)
         response_json = self.body(response)
@@ -881,7 +887,7 @@ class ClinicDashboardStatsTests(MedicalApiTestCase):
             clinic=self.clinic,
             status=Appointment.Status.COMPLETED,
             scheduled_date=now - timedelta(minutes=30),
-            consultation_fee=120000,
+            consultation_fee=150000,
         )
 
         MedicalRecord.objects.create(
@@ -1452,7 +1458,7 @@ class QueueDecisionTests(MedicalApiTestCase):
         self.auth_as(self.doctor_user)
 
     def test_wait_decision_recalculates_queue_and_notifies_when_shift_over_15_minutes(self):
-        now_local = queue_reference_now()
+        now_local = timezone.localtime().replace(second=0, microsecond=0)
         self.appt1.scheduled_date = now_local + timedelta(minutes=1)
         self.appt1.save(update_fields=['scheduled_date', 'updated_at'])
         self.appt2.scheduled_date = now_local + timedelta(minutes=10)
@@ -3035,9 +3041,21 @@ class MorningFirstQueueReminderTests(MedicalApiTestCase):
         self.p2 = Patient.objects.create(user=p2_user)
 
         now = timezone.localtime().replace(second=0, microsecond=0)
-        doctor_start = now + timedelta(minutes=30)
-        self.doctor.available_from = doctor_start.time()
+        # Set available_from to 60 min before actual now so the window check always passes.
+        # Handle the rare case where going back 60 min crosses to yesterday.
+        doctor_start_dt = now - timedelta(hours=1)
+        if doctor_start_dt.date() != now.date():
+            doctor_start_dt = now.replace(hour=0, minute=1, second=0, microsecond=0)
+        self.doctor.available_from = doctor_start_dt.time()
         self.doctor.save(update_fields=['available_from', 'updated_at'])
+
+        # Use today's date with fixed safe hours so appointments are always on today.
+        from datetime import datetime as _dt
+        today_date = now.date()
+        appt_base = timezone.make_aware(
+            _dt.combine(today_date, _dt.strptime('09:00', '%H:%M').time()),
+            timezone.get_current_timezone(),
+        )
 
         self.today_first = Appointment.objects.create(
             patient=self.p1,
@@ -3045,7 +3063,7 @@ class MorningFirstQueueReminderTests(MedicalApiTestCase):
             clinic=self.clinic,
             status=Appointment.Status.SCHEDULED,
             queue_position=1,
-            scheduled_date=now + timedelta(hours=2),
+            scheduled_date=appt_base,
             duration_minutes=80,
             telegram_user_id=940001,
             telegram_chat_id=940001,
@@ -3056,7 +3074,7 @@ class MorningFirstQueueReminderTests(MedicalApiTestCase):
             clinic=self.clinic,
             status=Appointment.Status.SCHEDULED,
             queue_position=2,
-            scheduled_date=now + timedelta(hours=3, minutes=20),
+            scheduled_date=appt_base + timedelta(hours=1, minutes=20),
             duration_minutes=80,
             telegram_user_id=940002,
             telegram_chat_id=940002,
@@ -3067,7 +3085,7 @@ class MorningFirstQueueReminderTests(MedicalApiTestCase):
             clinic=self.clinic,
             status=Appointment.Status.SCHEDULED,
             queue_position=1,
-            scheduled_date=now + timedelta(days=1, hours=1),
+            scheduled_date=appt_base + timedelta(days=1, hours=1),
             duration_minutes=80,
             telegram_user_id=940003,
             telegram_chat_id=940003,
