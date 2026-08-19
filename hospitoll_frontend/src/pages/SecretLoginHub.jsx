@@ -28,6 +28,9 @@ const SecretLoginHub = () => {
           <Link to="/pharmacy-owner-login" className={`secret-btn pharmacy ${selectedPortal === 'pharmacy' ? 'active' : ''}`} onClick={onSelect('pharmacy')}>
             Dorixona egasi kirish
           </Link>
+          <Link to="/reception-login" className={`secret-btn reception ${selectedPortal === 'reception' ? 'active' : ''}`} onClick={onSelect('reception')}>
+            Qabulxona kirish
+          </Link>
         </div>
 
         <p className="secret-note">Tanlangan portal keyingi kirishlarda avtomatik ochiladi.</p>

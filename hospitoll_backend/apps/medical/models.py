@@ -70,6 +70,13 @@ class Appointment(models.Model):
         blank=True,
         related_name='appointments'
     )
+    reception_staff = models.ForeignKey(
+        'clinics.ReceptionStaff',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='appointments'
+    )
     clinic_name = models.CharField(
         _('clinic name'),
         max_length=255,
@@ -98,6 +105,12 @@ class Appointment(models.Model):
     reason = models.TextField(
         _('reason for visit'),
         blank=True
+    )
+    selected_specialties = models.JSONField(
+        _('selected treatment directions'),
+        default=list,
+        blank=True,
+        help_text=_("Reception tanlagan yo'nalishlar va narxlar")
     )
     notes = models.TextField(
         _('notes'),
@@ -336,6 +349,13 @@ class MedicalRecord(models.Model):
         _('plan'),
         blank=True,
         help_text=_("Davolash rejasi va tavsiyalar")
+    )
+    attachment = models.FileField(
+        _('attachment'),
+        upload_to='medical_records/%Y/%m/%d/',
+        blank=True,
+        null=True,
+        help_text=_("Tashxisga biriktirilgan fayl")
     )
     is_locked = models.BooleanField(
         _('locked'),

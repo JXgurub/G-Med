@@ -2,6 +2,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 from django_filters.rest_framework import DjangoFilterBackend
 from django.utils import timezone
 from django.utils.timezone import localdate, localtime
@@ -68,6 +69,7 @@ def _allowed_slot_minutes() -> set[int]:
 class DoctorViewSet(viewsets.ModelViewSet):
     queryset = Doctor.objects.select_related('user', 'clinic').prefetch_related('specializations')
     filterset_fields = ['clinic', 'is_active']
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     @staticmethod
     def _is_truthy_query_param(value):
@@ -212,6 +214,19 @@ class DoctorViewSet(viewsets.ModelViewSet):
                 return False
 
         return True
+
+    @staticmethod
+    def _can_check_in_on_working_day(doctor, now_local):
+        day_key = now_local.strftime('%a')
+        working_days = [d.strip() for d in (doctor.working_days or '').split(',') if d.strip()]
+        if working_days and day_key not in working_days:
+            return False
+
+        end_time = doctor.available_until
+        if not end_time:
+            return False
+
+        return now_local.time() < end_time
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
@@ -598,7 +613,13 @@ class DoctorViewSet(viewsets.ModelViewSet):
         serializer = DoctorSerializer(doctor)
         return Response(serializer.data)
 
-    @action(detail=False, methods=['patch'], url_path='my/update', url_name='my-update')
+    @action(
+        detail=False,
+        methods=['patch'],
+        url_path='my/update',
+        url_name='my-update',
+        parser_classes=[JSONParser, MultiPartParser, FormParser],
+    )
     def my_update(self, request):
         if not request.user.is_authenticated or not request.user.is_doctor:
             return Response({'detail': 'Doktor topilmadi.'}, status=404)
@@ -671,9 +692,9 @@ class DoctorViewSet(viewsets.ModelViewSet):
 
         now = timezone.now()
         now_local = localtime(now)
-        if not self._is_within_working_window(doctor, now_local):
+        if not self._can_check_in_on_working_day(doctor, now_local):
             return Response({
-                'detail': 'Doktor faqat o\'z ish kuni va ish vaqtida "Ishga keldim" tugmasini bosishi mumkin.'
+                'detail': 'Doktor faqat o\'z ish kunida va ish tugashidan oldin "Ishga keldim" tugmasini bosishi mumkin.'
             }, status=status.HTTP_400_BAD_REQUEST)
         
         doctor.is_checked_in = True
@@ -1021,6 +1042,11 @@ class SpecializationViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Faqat klinika yoki admin ixtisoslik qo\'sha oladi.'}, status=status.HTTP_403_FORBIDDEN)
         return super().create(request, *args, **kwargs)
 
+    def update(self, request, *args, **kwargs):
+        if not (request.user.is_clinic or request.user.is_superuser or request.user.is_staff):
+            return Response({'detail': 'Faqat klinika yoki admin ixtisoslik nomini o\'zgartira oladi.'}, status=status.HTTP_403_FORBIDDEN)
+        return super().update(request, *args, **kwargs)
+
 
 class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
     queryset = DoctorAvailability.objects.select_related('doctor').all()
@@ -1185,6 +1211,18 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
                 return Response([], status=status.HTTP_200_OK)
             min_time = open_time if now.time() < open_time else now.time()
             slots = slots.filter(start_time__gte=min_time, start_time__lte=close_time)
+
+            # Compare complete local datetimes as a final guard against stale slots.
+            current_time = timezone.now()
+            valid_slot_ids = [
+                slot.id
+                for slot in slots
+                if timezone.make_aware(
+                    datetime.combine(target_date, slot.start_time),
+                    timezone.get_current_timezone(),
+                ) > current_time
+            ]
+            slots = slots.filter(id__in=valid_slot_ids)
 
         serializer = DoctorAvailabilitySerializer(slots, many=True)
         if include_meta:

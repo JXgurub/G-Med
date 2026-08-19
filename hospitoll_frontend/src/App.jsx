@@ -25,6 +25,8 @@ const PatientForgotPassword = lazy(() => import('./pages/PatientForgotPassword')
 const PharmacyOwnerLogin = lazy(() => import('./pages/PharmacyOwnerLogin'))
 const PharmacyOwnerForgotPassword = lazy(() => import('./pages/PharmacyOwnerForgotPassword'))
 const PharmacyOwnerDashboard = lazy(() => import('./pages/PharmacyOwnerDashboard'))
+const ReceptionLogin = lazy(() => import('./pages/ReceptionLogin'))
+const ReceptionDashboard = lazy(() => import('./pages/ReceptionDashboard'))
 const SecretLoginHub = lazy(() => import('./pages/SecretLoginHub'))
 const PaymentPage = lazy(() => import('./pages/PaymentPage'))
 const SubscriptionPaymentPage = lazy(() => import('./pages/SubscriptionPaymentPage'))
@@ -73,6 +75,8 @@ function App() {
                     <Route path="/pharmacy-owner-login" element={<PharmacyOwnerLogin />} />
                     <Route path="/pharmacy-owner-forgot-password" element={<PharmacyOwnerForgotPassword />} />
                     <Route path="/pharmacy-owner-dashboard" element={<PharmacyOwnerDashboard />} />
+                    <Route path="/reception-login" element={<ReceptionLogin />} />
+                    <Route path="/reception-dashboard" element={<ReceptionDashboard />} />
                     <Route path="/payment" element={<PaymentPage />} />
                     <Route path="/subscription-payment" element={<SubscriptionPaymentPage />} />
                     <Route path="/subscription-blocked" element={<SubscriptionBlockedPage />} />

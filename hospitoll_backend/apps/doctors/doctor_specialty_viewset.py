@@ -7,7 +7,7 @@ from rest_framework.decorators import action
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db.models import QuerySet
 
-from .models import DoctorSpecialization, Doctor
+from .models import DoctorSpecialization, Doctor, Specialization
 from .serializers import DoctorSpecializationSerializer
 
 
@@ -65,6 +65,39 @@ class DoctorSpecializationViewSet(viewsets.ModelViewSet):
         self.perform_update(serializer)
         return Response(serializer.data)
 
+    @action(detail=False, methods=['post'], url_path='create-custom')
+    def create_custom(self, request):
+        doctor = getattr(request.user, 'doctor', None)
+        if not doctor:
+            return Response({'detail': 'Faqat doktor o\'z yo\'nalishini qo\'sha oladi.'}, status=status.HTTP_403_FORBIDDEN)
+
+        name = str(request.data.get('name') or '').strip()
+        if not name:
+            return Response({'detail': 'Yo\'nalish nomi majburiy.'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            price = float(request.data.get('consultation_fee'))
+        except (TypeError, ValueError):
+            return Response({'detail': 'Narx noto\'g\'ri.'}, status=status.HTTP_400_BAD_REQUEST)
+        if price < 0:
+            return Response({'detail': 'Narx manfiy bo\'lishi mumkin emas.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        specialization = Specialization.objects.filter(name__iexact=name).first()
+        if not specialization:
+            base_code = ''.join(ch for ch in name.upper() if ch.isalnum())[:12] or 'SPEC'
+            code = base_code
+            suffix = 1
+            while Specialization.objects.filter(code=code).exists():
+                suffix += 1
+                code = f'{base_code[:8]}{suffix}'
+            specialization = Specialization.objects.create(name=name, code=code, is_active=True)
+
+        item, _ = DoctorSpecialization.objects.update_or_create(
+            doctor=doctor,
+            specialization=specialization,
+            defaults={'consultation_fee': price, 'doctor_custom': True, 'is_active': True},
+        )
+        return Response(self.get_serializer(item).data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=['get'])
     def my_specializations(self, request):
         """Get current doctor's specializations with prices"""
@@ -74,6 +107,7 @@ class DoctorSpecializationViewSet(viewsets.ModelViewSet):
         doctor = request.user.doctor
         specializations = DoctorSpecialization.objects.filter(
             doctor=doctor,
+            doctor_custom=True,
             is_active=True
         ).select_related('specialization')
         

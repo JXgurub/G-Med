@@ -2,6 +2,11 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from uuid import uuid4
+import secrets
+
+
+def generate_patient_number():
+    return f'GM{secrets.randbelow(90000000) + 10000000}'
 
 
 class Patient(models.Model):
@@ -32,6 +37,7 @@ class Patient(models.Model):
         default=uuid4,
         editable=False
     )
+    patient_number = models.CharField(max_length=20, unique=True, default=generate_patient_number, db_index=True)
     user = models.OneToOneField(
         'users.CustomUser',
         on_delete=models.CASCADE,

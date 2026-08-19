@@ -212,7 +212,8 @@ class NotifyReadyDoctorRatingTests(MedicalApiTestCase):
 
     def test_today_endpoint_excludes_in_progress_appointments(self):
         self.appointment.status = Appointment.Status.IN_PROGRESS
-        self.appointment.save(update_fields=['status', 'updated_at'])
+        self.appointment.scheduled_date = timezone.now()
+        self.appointment.save(update_fields=['status', 'scheduled_date', 'updated_at'])
 
         waiting_appointment = Appointment.objects.create(
             patient=self.patient,
@@ -231,6 +232,26 @@ class NotifyReadyDoctorRatingTests(MedicalApiTestCase):
         returned_ids = [item['id'] for item in self.body(response)]
         self.assertNotIn(str(self.appointment.id), returned_ids)
         self.assertIn(str(waiting_appointment.id), returned_ids)
+
+    def test_today_endpoint_keeps_in_progress_appointments_in_managed_queue(self):
+        self.clinic.attendance_enabled = True
+        self.clinic.diagnosis_entry_enabled = True
+        self.clinic.reception_room_enabled = True
+        self.clinic.save(update_fields=[
+            'attendance_enabled',
+            'diagnosis_entry_enabled',
+            'reception_room_enabled',
+            'updated_at',
+        ])
+        self.appointment.status = Appointment.Status.IN_PROGRESS
+        self.appointment.save(update_fields=['status', 'updated_at'])
+
+        self.auth_as(self.doctor_user)
+        response = self.client.get(reverse('appointment-today'))
+
+        self.assertEqual(response.status_code, 200)
+        returned_ids = [item['id'] for item in self.body(response)]
+        self.assertIn(str(self.appointment.id), returned_ids)
 
 
 class DoctorDashboardStatsTests(MedicalApiTestCase):
@@ -1035,6 +1056,69 @@ class MedicalRecordAutoAppointmentTests(MedicalApiTestCase):
         self.assertIsNotNone(appointment)
         self.assertEqual(appointment.status, Appointment.Status.COMPLETED)
         self.assertEqual(float(appointment.consultation_fee), 25000.0)
+
+    def test_managed_queue_advances_to_next_patient_only_once(self):
+        self.clinic.attendance_enabled = True
+        self.clinic.diagnosis_entry_enabled = True
+        self.clinic.reception_room_enabled = True
+        self.clinic.save(update_fields=['attendance_enabled', 'diagnosis_entry_enabled', 'reception_room_enabled', 'updated_at'])
+
+        first_patient = self.patient
+        second_user = CustomUser.objects.create_user(
+            username='patient_record_auto_second',
+            email='patient.record.auto.second@example.com',
+            password='Pass12345!',
+            role='patient',
+            first_name='Patient',
+            last_name='Second',
+        )
+        second_patient = Patient.objects.create(user=second_user)
+        now = timezone.now()
+        first = Appointment.objects.create(
+            patient=first_patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.IN_PROGRESS,
+            queue_position=1,
+            scheduled_date=now,
+            telegram_chat_id=991101,
+        )
+        second = Appointment.objects.create(
+            patient=second_patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            scheduled_date=now + timedelta(minutes=30),
+            telegram_chat_id=991102,
+        )
+        sent_messages = []
+
+        class _Client:
+            def send_message(self, chat_id, text, reply_markup=None):
+                sent_messages.append((chat_id, text))
+
+        service = SimpleNamespace(
+            send_medical_record_to_patient=lambda record: False,
+            send_doctor_rating_prompt=lambda appointment: None,
+            _require_client=lambda: _Client(),
+        )
+        with patch('apps.medical.telegram_bot_service.TelegramBotService', return_value=service):
+            response = self.client.post(self.url, {
+                'patient': str(first_patient.id),
+                'doctor': str(self.doctor.id),
+                'clinic': str(self.clinic.id),
+                'appointment': str(first.id),
+                'assessment': 'Tashxis',
+            }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(first.status, Appointment.Status.COMPLETED)
+        self.assertEqual(second.status, Appointment.Status.IN_PROGRESS)
+        next_messages = [text for chat_id, text in sent_messages if chat_id == 991102]
+        self.assertEqual(next_messages, ['📢 Keyingi navbat sizniki. Bemor chiqishi bilan kirishingiz mumkin.'])
 
 class BookingWindowLunchTests(MedicalApiTestCase):
     def setUp(self):

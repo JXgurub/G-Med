@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useClinic } from '../context/ClinicContext'
-import { clinicsApi, doctorsApi, medicalApi } from '../services/api'
+import { clinicsApi, doctorsApi, medicalApi, receptionStaffApi } from '../services/api'
 import useSmartAutoRefresh from '../hooks/useSmartAutoRefresh'
 import DashboardSidebar from '../components/DashboardSidebar'
 import PasswordInput from '../components/PasswordInput'
@@ -213,6 +213,9 @@ const ClinicOwnerDashboard = () => {
     email: '',
     website: '',
     working_hours: '09:00 - 18:00',
+    attendance_enabled: false,
+    diagnosis_entry_enabled: false,
+    reception_room_enabled: false,
     owner_password: ''
   })
 
@@ -223,6 +226,25 @@ const ClinicOwnerDashboard = () => {
   const [specializationCreateLoading, setSpecializationCreateLoading] = useState(false)
   const [specializationCreateMessage, setSpecializationCreateMessage] = useState('')
   const [showSpecializationSuggestions, setShowSpecializationSuggestions] = useState(false)
+  const [receptionStaff, setReceptionStaff] = useState([])
+  const [showReceptionStaffForm, setShowReceptionStaffForm] = useState(false)
+  const [receptionStaffSaving, setReceptionStaffSaving] = useState(false)
+  const [receptionStaffRefreshing, setReceptionStaffRefreshing] = useState(false)
+  const [receptionStaffMessage, setReceptionStaffMessage] = useState('')
+  const [receptionStatsDate, setReceptionStatsDate] = useState(new Date().toISOString().slice(0, 10))
+  const [editingReceptionStaffId, setEditingReceptionStaffId] = useState(null)
+  const [receptionStaffForm, setReceptionStaffForm] = useState({
+    pinfl: '', passport_id: '', date_of_birth: '', first_name: '', last_name: '',
+    phone_number: DEFAULT_PHONE_PREFIX, email: '', password: '',
+    compensation_type: 'salary', compensation_value: '',
+    available_from: '09:00', available_until: '18:00',
+    lunch_break_start: '13:00', lunch_break_end: '14:00',
+    working_days: 'Mon,Tue,Wed,Thu,Fri'
+  })
+  const receptionDayOptions = [
+    ['Mon', 'Du'], ['Tue', 'Se'], ['Wed', 'Ch'], ['Thu', 'Pa'],
+    ['Fri', 'Ju'], ['Sat', 'Sh'], ['Sun', 'Ya']
+  ]
 
   const dayOptions = [
     { key: 'Mon', label: 'Du' },
@@ -387,6 +409,9 @@ const ClinicOwnerDashboard = () => {
     if (path.includes('/clinic-dashboard/appointments')) {
       setActiveView('appointments')
     }
+    if (path.includes('/clinic-dashboard/reception')) {
+      setActiveView('reception')
+    }
     if (path.includes('/clinic-dashboard/services') || path.includes('/clinic-dashboard/directions')) {
       setActiveView('services')
     }
@@ -409,11 +434,109 @@ const ClinicOwnerDashboard = () => {
       email: clinicOwner.email || '',
       website: clinicOwner.website || '',
       working_hours: clinicOwner.working_hours || '09:00 - 18:00',
+      attendance_enabled: Boolean(clinicOwner.attendance_enabled),
+      diagnosis_entry_enabled: Boolean(clinicOwner.diagnosis_entry_enabled),
+      reception_room_enabled: Boolean(clinicOwner.reception_room_enabled),
       owner_password: ''
     }))
     setSettingsWorkingHoursRange(parseWorkingHoursRange(clinicOwner.working_hours || '09:00 - 18:00'))
     setSettingsWorkingHoursError('')
   }, [clinicOwner])
+
+  const refreshReceptionStaff = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setReceptionStaffRefreshing(true)
+    receptionStaffApi.getAll({ date: receptionStatsDate })
+      .then((items) => {
+        const staffItems = Array.isArray(items) ? items : (items?.results || [])
+        setReceptionStaff(Array.isArray(staffItems) ? staffItems : [])
+        setReceptionStaffMessage('')
+      })
+      .catch((error) => {
+        const message = error?.response?.status === 401
+          ? 'Klinika egasi sessiyasi tugagan. Qayta tizimga kiring.'
+          : (error?.message || 'Xodimlar ro\'yxatini yangilab bo\'lmadi')
+        setReceptionStaffMessage(message)
+      })
+      .finally(() => {
+        if (!silent) setReceptionStaffRefreshing(false)
+      })
+  }, [receptionStatsDate])
+
+  useEffect(() => {
+    if (activeView !== 'reception' || !clinicOwner?.reception_room_enabled) return
+    refreshReceptionStaff({ silent: true })
+  }, [activeView, clinicOwner?.reception_room_enabled, receptionStatsDate, refreshReceptionStaff])
+
+  const handleToggleReceptionStaff = async (staff) => {
+    try {
+      const updated = await receptionStaffApi.update(staff.id, { is_active: !staff.is_active })
+      setReceptionStaff((prev) => prev.map((item) => item.id === staff.id ? updated : item))
+    } catch (error) {
+      setReceptionStaffMessage(error?.message || 'Xodim statusini o\'zgartirib bo\'lmadi')
+    }
+  }
+
+  const handleDeleteReceptionStaff = async (staff) => {
+    if (!window.confirm(`${staff.first_name} ${staff.last_name}ni ishdan bo\'shatish kerakmi?`)) return
+    try {
+      await receptionStaffApi.delete(staff.id)
+      setReceptionStaff((prev) => prev.filter((item) => item.id !== staff.id))
+    } catch (error) {
+      setReceptionStaffMessage(error?.message || 'Xodimni bo\'shatib bo\'lmadi')
+    }
+  }
+
+  const handleAddReceptionStaff = async (event) => {
+    event.preventDefault()
+    setReceptionStaffSaving(true)
+    setReceptionStaffMessage('')
+    try {
+      const created = await receptionStaffApi.create(receptionStaffForm)
+      setReceptionStaff((prev) => [...prev, created])
+      setShowReceptionStaffForm(false)
+      setReceptionStaffForm((prev) => ({ ...prev, pinfl: '', passport_id: '', date_of_birth: '', first_name: '', last_name: '', email: '', password: '' }))
+      setReceptionStaffMessage('Xodim muvaffaqiyatli qo\'shildi ✅')
+    } catch (error) {
+      setReceptionStaffMessage(error?.message || 'Xodim qo\'shishda xatolik')
+    } finally {
+      setReceptionStaffSaving(false)
+    }
+  }
+
+  const handleEditReceptionSchedule = (staff) => {
+    setEditingReceptionStaffId(staff.id)
+    setReceptionStaffForm((prev) => ({
+      ...prev,
+      available_from: staff.available_from?.slice(0, 5) || '09:00',
+      available_until: staff.available_until?.slice(0, 5) || '18:00',
+      lunch_break_start: staff.lunch_break_start?.slice(0, 5) || '13:00',
+      lunch_break_end: staff.lunch_break_end?.slice(0, 5) || '14:00',
+      working_days: staff.working_days || 'Mon,Tue,Wed,Thu,Fri'
+    }))
+  }
+
+  const handleSaveReceptionSchedule = async (event) => {
+    event.preventDefault()
+    const staff = receptionStaff.find((item) => item.id === editingReceptionStaffId)
+    if (!staff) return
+    setReceptionStaffSaving(true)
+    try {
+      const updated = await receptionStaffApi.update(staff.id, {
+        available_from: receptionStaffForm.available_from,
+        available_until: receptionStaffForm.available_until,
+        lunch_break_start: receptionStaffForm.lunch_break_start || null,
+        lunch_break_end: receptionStaffForm.lunch_break_end || null,
+        working_days: receptionStaffForm.working_days
+      })
+      setReceptionStaff((prev) => prev.map((item) => item.id === staff.id ? updated : item))
+      setEditingReceptionStaffId(null)
+      setReceptionStaffMessage('Ish vaqti saqlandi ✅')
+    } catch (error) {
+      setReceptionStaffMessage(error?.message || 'Ish vaqtini saqlab bo\'lmadi')
+    } finally {
+      setReceptionStaffSaving(false)
+    }
+  }
 
   const handleSaveSettings = async (e) => {
     e.preventDefault()
@@ -436,6 +559,9 @@ const ClinicOwnerDashboard = () => {
         email: normalizeEmailWithDefaultDomain(settingsForm.email),
         website: settingsForm.website,
         working_hours: workingHoursValue,
+        attendance_enabled: settingsForm.attendance_enabled,
+        diagnosis_entry_enabled: settingsForm.diagnosis_entry_enabled,
+        reception_room_enabled: settingsForm.reception_room_enabled,
         ...(settingsForm.owner_password ? { owner_password: settingsForm.owner_password } : {})
       }
       const updatedClinic = await updateClinicProfile(payload)
@@ -1375,6 +1501,10 @@ const ClinicOwnerDashboard = () => {
                   ✕
                 </button>
               </div>
+              <div className="reception-stats-date-bar">
+                <label htmlFor="reception-stats-date">Hisobot kuni</label>
+                <input id="reception-stats-date" type="date" value={receptionStatsDate} onChange={(e) => setReceptionStatsDate(e.target.value)} />
+              </div>
 
               <form className="staff-message-form" onSubmit={handleSendStaffMessage}>
                 <textarea
@@ -1609,6 +1739,97 @@ const ClinicOwnerDashboard = () => {
             </>
           )}
 
+          {activeView === 'reception' && (
+            <section className="dashboard-section reception-room-section">
+              <div className="section-header-with-action">
+                <div>
+                  <h2>Qabul xonasi</h2>
+                  <p className="report-updated-at">Qabul xonasi xodimlari va ish vaqti</p>
+                </div>
+                <div className="reception-header-buttons">
+                  <button
+                    type="button"
+                    className="btn-refresh-reception"
+                    onClick={() => refreshReceptionStaff()}
+                    disabled={receptionStaffRefreshing}
+                  >
+                    {receptionStaffRefreshing ? 'Yangilanmoqda...' : 'Yangilash'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-add-doctor"
+                    onClick={() => setShowReceptionStaffForm((prev) => !prev)}
+                  >
+                    {showReceptionStaffForm ? '✕ Bekor' : '+ Xodim qo\'shish'}
+                  </button>
+                </div>
+              </div>
+
+              {showReceptionStaffForm && (
+                <form className="add-doctor-form reception-staff-form" onSubmit={handleAddReceptionStaff}>
+                  <div className="form-grid">
+                    <div className="form-group"><label>JSHSHIR</label><input required maxLength={14} value={receptionStaffForm.pinfl} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, pinfl: e.target.value.replace(/\D/g, '') }))} placeholder="12345678901234" /></div>
+                    <div className="form-group"><label>Pasport/ID</label><input required value={receptionStaffForm.passport_id} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, passport_id: e.target.value.toUpperCase() }))} placeholder="AA1234567" /></div>
+                    <div className="form-group"><label>Tug\'ilgan sana</label><input required type="date" value={receptionStaffForm.date_of_birth} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, date_of_birth: e.target.value }))} /></div>
+                    <div className="form-group"><label>Ism</label><input required value={receptionStaffForm.first_name} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, first_name: e.target.value }))} placeholder="Ali" /></div>
+                    <div className="form-group"><label>Familiya</label><input required value={receptionStaffForm.last_name} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, last_name: e.target.value }))} placeholder="Karimov" /></div>
+                    <div className="form-group"><label>Telefon</label><input value={receptionStaffForm.phone_number} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, phone_number: e.target.value }))} /></div>
+                    <div className="form-group"><label>Email *</label><input type="email" required value={receptionStaffForm.email} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, email: e.target.value }))} /></div>
+                    <div className="form-group"><label>Parol *</label><input type="password" required minLength={6} value={receptionStaffForm.password} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, password: e.target.value }))} /></div>
+                    <div className="form-group"><label>Ish haqi turi</label><select value={receptionStaffForm.compensation_type} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, compensation_type: e.target.value }))}><option value="salary">Ish haqi</option><option value="percent">Foiz</option></select></div>
+                    <div className="form-group"><label>{receptionStaffForm.compensation_type === 'percent' ? 'Foiz (%)' : 'Oylik ish haqi'}</label><input type="number" min="0" max={receptionStaffForm.compensation_type === 'percent' ? '100' : undefined} value={receptionStaffForm.compensation_value} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, compensation_value: e.target.value }))} placeholder={receptionStaffForm.compensation_type === 'percent' ? '20' : '5000000'} /></div>
+                    <div className="form-group full-width reception-schedule-panel">
+                      <h3>Ish vaqti va abet</h3>
+                      <div className="reception-schedule-fields">
+                        {[
+                          ['available_from', 'Ish boshlanishi'], ['available_until', 'Ish tugashi'],
+                          ['lunch_break_start', 'Abet boshlanishi'], ['lunch_break_end', 'Abet tugashi']
+                        ].map(([field, label]) => (
+                          <div className="form-group" key={field}>
+                            <label>{label}</label>
+                            <input type="time" value={receptionStaffForm[field]} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, [field]: e.target.value }))} required={field.startsWith('available')} />
+                          </div>
+                        ))}
+                      </div>
+                      <label>Ish kunlari</label>
+                      <div className="reception-days-grid">
+                        {receptionDayOptions.map(([key, label]) => {
+                          const checked = receptionStaffForm.working_days.split(',').includes(key)
+                          return <label className={`reception-day-pill ${checked ? 'selected' : ''}`} key={key}><input type="checkbox" checked={checked} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, working_days: e.target.checked ? [...p.working_days.split(',').filter(Boolean), key].join(',') : p.working_days.split(',').filter((day) => day !== key).join(',') }))} /><span>{label}</span></label>
+                        })}
+                      </div>
+                      <button type="button" className="btn-save-reception-schedule" onClick={() => setReceptionStaffMessage('Ish vaqti xodimni saqlash bilan birga saqlanadi.')} disabled={receptionStaffSaving}>Ish vaqtini saqlash</button>
+                    </div>
+                  </div>
+                  <button type="submit" className="btn-submit-doctor" disabled={receptionStaffSaving}>{receptionStaffSaving ? 'Saqlanmoqda...' : 'Xodimni saqlash'}</button>
+                </form>
+              )}
+
+              {receptionStaffMessage && <div className="settings-message">{receptionStaffMessage}</div>}
+              <div className="reception-staff-list">
+                {receptionStaff.length === 0 ? <div className="no-doctors"><p>Hozircha qabul xonasi xodimlari qo\'shilmagan</p></div> : receptionStaff.map((staff) => (
+                  <div className="doctor-work-card doctor-active-card reception-staff-card" key={staff.id}>
+                    <div className="doctor-active-header"><div className="doctor-left"><div className="doctor-avatar-placeholder">{staff.first_name?.charAt(0) || 'X'}</div><div className="doctor-info"><div className="doctor-name-status"><h3>{staff.first_name} {staff.last_name}</h3><span className={`status-badge ${staff.is_active ? 'active' : 'suspended'}`}>{staff.is_active ? '✓ Faol' : '⏸ To\'xtatilgan'}</span></div><p className="doctor-active-subtitle">{staff.passport_id} • {staff.phone_number || 'Telefon kiritilmagan'}</p></div></div><div className="doctor-actions doctor-active-actions"><button type="button" className={`btn-toggle-status ${staff.is_active ? 'active' : 'suspended'}`} onClick={() => handleToggleReceptionStaff(staff)} title={staff.is_active ? 'Vaqtincha to\'xtatish' : 'Faollashtirish'} aria-label={staff.is_active ? 'Vaqtincha to\'xtatish' : 'Faollashtirish'}>{staff.is_active ? <span aria-hidden="true">Ⅱ</span> : <span aria-hidden="true">▶</span>}</button><button type="button" className="btn-icon btn-delete" onClick={() => handleDeleteReceptionStaff(staff)} title="Ishdan bo\'shatish" aria-label="Ishdan bo\'shatish"><span aria-hidden="true">🗑</span></button></div></div>
+                    <div className="doctor-active-metrics-grid"><div className="doctor-active-metric"><span className="doctor-active-metric-label">Bugun ishga kelgan</span><span className="doctor-active-metric-value">{staff.today_checked_in_at || '—'}</span></div><div className="doctor-active-metric"><span className="doctor-active-metric-label">Bugun ishdan ketgan</span><span className="doctor-active-metric-value">{staff.today_checked_out_at || '—'}</span></div><div className="doctor-active-metric"><span className="doctor-active-metric-label">Bugungi bemorlar</span><span className="doctor-active-metric-value">{staff.today_patients_count || 0} ta</span></div><div className="doctor-active-metric"><span className="doctor-active-metric-label">Bugungi daromad</span><span className="doctor-active-metric-value">{Number(staff.today_revenue || 0).toLocaleString()} so‘m</span></div></div>
+                    <div className="reception-staff-card-footer"><button type="button" className="reception-schedule-edit-button" onClick={() => handleEditReceptionSchedule(staff)}>Ish vaqtini sozlash</button></div>
+                    {editingReceptionStaffId === staff.id && (
+                      <form className="reception-inline-schedule" onSubmit={handleSaveReceptionSchedule}>
+                        <div className="reception-schedule-fields">
+                          {[
+                            ['available_from', 'Ish boshlanishi'], ['available_until', 'Ish tugashi'],
+                            ['lunch_break_start', 'Abet boshlanishi'], ['lunch_break_end', 'Abet tugashi']
+                          ].map(([field, label]) => <div className="form-group" key={field}><label>{label}</label><input type="time" value={receptionStaffForm[field]} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, [field]: e.target.value }))} /></div>)}
+                        </div>
+                        <div className="reception-days-grid">{receptionDayOptions.map(([key, label]) => { const checked = receptionStaffForm.working_days.split(',').includes(key); return <label className={`reception-day-pill ${checked ? 'selected' : ''}`} key={key}><input type="checkbox" checked={checked} onChange={(e) => setReceptionStaffForm((p) => ({ ...p, working_days: e.target.checked ? [...p.working_days.split(',').filter(Boolean), key].join(',') : p.working_days.split(',').filter((day) => day !== key).join(',') }))} /><span>{label}</span></label> })}</div>
+                        <div className="reception-inline-actions"><button type="submit" className="btn-save-reception-schedule" disabled={receptionStaffSaving}>Saqlash</button><button type="button" className="btn-cancel" onClick={() => setEditingReceptionStaffId(null)}>Bekor</button></div>
+                      </form>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {activeView === 'settings' && (
             <>
               <section className="dashboard-section">
@@ -1721,6 +1942,37 @@ const ClinicOwnerDashboard = () => {
                         onChange={(e) => setSettingsForm({ ...settingsForm, description: e.target.value })}
                         disabled={settingsSaving}
                       />
+                    </div>
+
+                    <div className="settings-feature-toggles form-group full-width">
+                      <label>Doktorlar uchun funksiyalar</label>
+                      <label className="settings-toggle-row">
+                        <span>Doktor ishga kelgan/ketganini belgilashi</span>
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.attendance_enabled}
+                          onChange={(e) => setSettingsForm((prev) => ({ ...prev, attendance_enabled: e.target.checked }))}
+                          disabled={settingsSaving}
+                        />
+                      </label>
+                      <label className="settings-toggle-row">
+                        <span>Tashxis kiritish formasini avtomatik ochish</span>
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.diagnosis_entry_enabled}
+                          onChange={(e) => setSettingsForm((prev) => ({ ...prev, diagnosis_entry_enabled: e.target.checked }))}
+                          disabled={settingsSaving}
+                        />
+                      </label>
+                      <label className="settings-toggle-row">
+                        <span>Qabul xonasi navbat logikasi</span>
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.reception_room_enabled}
+                          onChange={(e) => setSettingsForm((prev) => ({ ...prev, reception_room_enabled: e.target.checked }))}
+                          disabled={settingsSaving}
+                        />
+                      </label>
                     </div>
 
                     <div className="form-group full-width">

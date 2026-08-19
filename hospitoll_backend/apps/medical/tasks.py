@@ -135,7 +135,7 @@ def _run_auto_queue_tick_once() -> dict:
             appointments__scheduled_date__date=today,
             appointments__status__in=_queue_active_statuses(),
         )
-        .select_related('user')
+        .select_related('user', 'clinic')
         .order_by('created_at')
         .distinct()
     )
@@ -153,6 +153,12 @@ def _run_auto_queue_tick_once() -> dict:
     reminders_sent = 0
 
     for doctor in doctors:
+        managed_queue = bool(
+            getattr(doctor, 'clinic', None)
+            and doctor.clinic.attendance_enabled
+            and doctor.clinic.diagnosis_entry_enabled
+            and doctor.clinic.reception_room_enabled
+        )
         if not doctor.available_from or not doctor.available_until:
             continue
 
@@ -289,6 +295,8 @@ def _run_auto_queue_tick_once() -> dict:
             # Compatibility: if turn is already active but legacy data missed prompt timestamp,
             # send the questionnaire now so queue can continue instead of getting stuck.
             if first.auto_turn_prompt_sent_at is None and first.telegram_chat_id:
+                if managed_queue and now - timezone.localtime(first.auto_turn_started_at) < timedelta(minutes=30):
+                    continue
                 clinic_name = first.clinic_name or (first.clinic.name if first.clinic else 'Klinika')
                 doctor_name = first.doctor_name or (doctor.user.get_full_name() if doctor.user_id else 'Doktor')
                 patient_name = _format_patient_name(first)

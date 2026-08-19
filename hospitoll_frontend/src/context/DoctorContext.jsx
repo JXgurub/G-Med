@@ -48,9 +48,15 @@ const mapDoctorProfile = async (doctorData) => {
     ? `${doctorData.user.first_name || ''} ${doctorData.user.last_name || ''}`.trim()
     : 'Doktor'
   let clinicName = ''
+  let clinicAttendanceEnabled = false
+  let clinicDiagnosisEntryEnabled = false
+  let clinicReceptionRoomEnabled = false
   try {
     const clinic = await clinicsApi.getById(doctorData.clinic)
     clinicName = clinic.name || ''
+    clinicAttendanceEnabled = Boolean(clinic.attendance_enabled)
+    clinicDiagnosisEntryEnabled = Boolean(clinic.diagnosis_entry_enabled)
+    clinicReceptionRoomEnabled = Boolean(clinic.reception_room_enabled)
   } catch (error) {
     clinicName = ''
   }
@@ -90,6 +96,9 @@ const mapDoctorProfile = async (doctorData) => {
     availableSlots: `${doctorData.available_from || '09:00'} - ${doctorData.available_until || '17:00'}`,
     phone: doctorData.user?.phone_number || '',
     clinicName,
+    clinicAttendanceEnabled,
+    clinicDiagnosisEntryEnabled,
+    clinicReceptionRoomEnabled,
     avatarUrl: resolveMediaUrl(doctorData.profile_image),
     image: fullName ? fullName.charAt(0) : 'D'
   }
@@ -460,7 +469,7 @@ export const DoctorProvider = ({ children }) => {
   }
 
   const checkInDoctor = async () => {
-    if (!doctor) return null
+    if (!doctor) throw new Error('Doktor profili topilmadi.')
     try {
       const response = await doctorsApi.checkIn()
       const now = new Date()
@@ -475,20 +484,21 @@ export const DoctorProvider = ({ children }) => {
       setDoctorStatus(status)
       // Reload doctor data to reflect the check-in status
       await loadDoctorData()
-      return status
+      return response?.doctor || status
     } catch (error) {
       console.error('Check-in error:', error)
-      return null
+      throw error
     }
   }
 
   const checkOutDoctor = async () => {
-    if (!doctor) return null
+    if (!doctor) throw new Error('Doktor profili topilmadi.')
     try {
       const response = await doctorsApi.checkOut()
       const now = new Date()
+      let updatedStatus = null
       if (doctorStatus) {
-        const updatedStatus = {
+        updatedStatus = {
           ...doctorStatus,
           isCheckedIn: false,
           checkedOutTime: now.toLocaleTimeString('uz-UZ')
@@ -497,10 +507,10 @@ export const DoctorProvider = ({ children }) => {
       }
       // Reload doctor data to reflect the check-out status
       await loadDoctorData()
-      return doctorStatus
+      return response?.doctor || updatedStatus
     } catch (error) {
       console.error('Check-out error:', error)
-      return null
+      throw error
     }
   }
 
@@ -666,19 +676,17 @@ export const DoctorProvider = ({ children }) => {
     }
 
     // Create a medical record linking the patient to this doctor
-    const record = await medicalRecordsApi.create({
-      patient: existingPatient.id,
-      doctor: doctor.id,
-      clinic: doctor.clinicId,
-      appointment: existingPatient.appointmentId || null,
-      chief_complaint: visitData.complaint,
-      assessment: visitData.diagnosis || '',
-      plan: visitData.medicines || ''
-    })
+    const formData = new FormData()
+    formData.append('patient', existingPatient.id)
+    formData.append('doctor', doctor.id)
+    formData.append('clinic', doctor.clinicId)
+    if (existingPatient.appointmentId) formData.append('appointment', existingPatient.appointmentId)
+    formData.append('chief_complaint', visitData.complaint || '')
+    formData.append('assessment', visitData.diagnosis || '')
+    formData.append('plan', visitData.medicines || '')
+    if (visitData.attachment) formData.append('attachment', visitData.attachment)
 
-    if (existingPatient.appointmentId) {
-      await medicalApi.updateAppointment(existingPatient.appointmentId, { status: 'completed' })
-    }
+    const record = await medicalRecordsApi.createForm(formData)
 
     const updatedRecords = [record, ...records]
     setRecords(updatedRecords)

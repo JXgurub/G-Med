@@ -4,6 +4,7 @@ from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 
 from apps.site_settings.models import SystemAlert
 from core.websocket_service import WebSocketService
@@ -24,6 +25,7 @@ MEDICINE_NAME_ALERT_MESSAGE = "Bu dori O'zbekiston ichida bormi yoki nomi to'g'r
 class PharmacyViewSet(viewsets.ModelViewSet):
     queryset = Pharmacy.objects.select_related('owner').all()
     serializer_class = PharmacySerializer
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:

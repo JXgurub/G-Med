@@ -33,7 +33,7 @@ class DoctorSpecializationSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = DoctorSpecialization
-        fields = ['id', 'specialization', 'specialization_id', 'consultation_fee', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'specialization', 'specialization_id', 'consultation_fee', 'doctor_custom', 'is_active', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 

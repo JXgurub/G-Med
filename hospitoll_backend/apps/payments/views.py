@@ -159,6 +159,8 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 payments = Payment.objects.filter(patient=request.user.patient)
             elif hasattr(request.user, 'clinic'):
                 payments = Payment.objects.filter(clinic=request.user.clinic)
+            elif hasattr(request.user, 'pharmacy'):
+                payments = Payment.objects.filter(pharmacy=request.user.pharmacy)
             else:
                 payments = Payment.objects.none()
             

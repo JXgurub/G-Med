@@ -14,6 +14,7 @@ class PatientSerializer(serializers.ModelSerializer):
         model = Patient
         fields = [
             'id',
+            'patient_number',
             'user',
             'clinics',
             'gender',

@@ -36,7 +36,7 @@ const ClinicDetailPage = () => {
   const [activeSpecialty, setActiveSpecialty] = useState(null)
   const [bookingOpen, setBookingOpen] = useState(false)
   const [selectedDoctor, setSelectedDoctor] = useState(null)
-  const [selectedSpecialtyPriceId, setSelectedSpecialtyPriceId] = useState(null)
+  const [selectedSpecialtyPriceIds, setSelectedSpecialtyPriceIds] = useState([])
   const [selectedDate, setSelectedDate] = useState(() => getDateWindow().today)
   const [availableSlots, setAvailableSlots] = useState([])
   const [availabilityNotice, setAvailabilityNotice] = useState('')
@@ -69,7 +69,7 @@ const ClinicDetailPage = () => {
       const groups = {}
       doctorsList.forEach(doctor => {
         if (doctor.specialty_prices && doctor.specialty_prices.length > 0) {
-          doctor.specialty_prices.forEach(sp => {
+          doctor.specialty_prices.filter((sp) => !sp.doctor_custom).forEach(sp => {
             const specName = sp.specialization.name
             if (!groups[specName]) {
               groups[specName] = {
@@ -160,9 +160,9 @@ const ClinicDetailPage = () => {
     }
   }
 
-  const openBooking = async (doctorData, specialtyPriceId = null) => {
+  const openBooking = async (doctorData) => {
     setSelectedDoctor(doctorData)
-    setSelectedSpecialtyPriceId(specialtyPriceId)
+    setSelectedSpecialtyPriceIds([])
     setSelectedSlot(null)
     setBookingMessage(null)
     setAvailabilityNotice('')
@@ -205,10 +205,14 @@ const ClinicDetailPage = () => {
     setBookingLoading(true)
     setBookingMessage(null)
     try {
+      if (selectedSpecialtyPriceIds.length === 0) {
+        setBookingMessage("Kamida bitta yo'nalishni tanlang")
+        return
+      }
       const result = await medicalApi.bookOnline({
         clinic: clinicId,
         doctor: selectedDoctor.id,
-        specialty_price_id: selectedSpecialtyPriceId,
+        specialty_price_ids: selectedSpecialtyPriceIds,
         slot_id: selectedSlot.id,
         first_name: firstName,
         last_name: lastName,
@@ -360,6 +364,32 @@ const ClinicDetailPage = () => {
             </div>
 
             <div className="booking-modal-body">
+              <div className="booking-section">
+                <label>Doktor yo'nalishlari</label>
+                <div className="booking-specialty-options">
+                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).map((item) => {
+                    const itemId = String(item.id)
+                    const checked = selectedSpecialtyPriceIds.includes(itemId)
+                    return (
+                      <label className={`booking-specialty-option ${checked ? 'active' : ''}`} key={item.id}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setSelectedSpecialtyPriceIds((current) => (
+                            checked ? current.filter((id) => id !== itemId) : [...current, itemId]
+                          ))}
+                        />
+                        <span>{item.specialization?.name}</span>
+                        <strong>{Number(item.consultation_fee || 0).toLocaleString()} so'm</strong>
+                      </label>
+                    )
+                  })}
+                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).length === 0 && (
+                    <div className="booking-empty">Doktor hozircha o'z yo'nalishlarini qo'shmagan</div>
+                  )}
+                </div>
+              </div>
+
               <div className="booking-section">
                 <label>Sana</label>
                 <input
@@ -531,7 +561,7 @@ const ClinicDetailPage = () => {
 
                               <button
                                 className="btn-appointment"
-                                onClick={() => openBooking(doctor, docData.specialtyPriceId)}
+                                onClick={() => openBooking(doctor)}
                               >
                                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="2">
                                   <rect x="3" y="4" width="12" height="12" rx="2" ry="2"/>

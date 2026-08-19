@@ -4,7 +4,7 @@ from django.db import transaction
 from uuid import uuid4
 
 from apps.users.models import CustomUser
-from .models import Clinic, ClinicDepartment, ClinicService
+from .models import Clinic, ReceptionStaff, ReceptionStaffWorkRecord, ClinicDepartment, ClinicService
 from .models import ClinicStaffMessage, ClinicStaffMessageRecipient
 
 
@@ -42,6 +42,9 @@ class ClinicSerializer(serializers.ModelSerializer):
             'rating',
             'total_ratings',
             'working_hours',
+            'attendance_enabled',
+            'diagnosis_entry_enabled',
+            'reception_room_enabled',
             'amount',
             'payment_date',
             'created_at',
@@ -274,6 +277,92 @@ class ClinicBannerUpdateSerializer(serializers.ModelSerializer):
         fields = ['banner_image']
 
 
+class ReceptionStaffSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    today_checked_in_at = serializers.SerializerMethodField()
+    today_checked_out_at = serializers.SerializerMethodField()
+    today_patients_count = serializers.SerializerMethodField()
+    today_revenue = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReceptionStaff
+        fields = [
+            'id', 'clinic', 'pinfl', 'passport_id', 'date_of_birth',
+            'first_name', 'last_name', 'phone_number', 'email', 'password',
+            'compensation_type', 'compensation_value',
+            'available_from', 'available_until', 'lunch_break_start', 'lunch_break_end',
+            'working_days', 'is_active', 'today_checked_in_at', 'today_checked_out_at',
+            'today_patients_count', 'today_revenue',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['clinic', 'created_at', 'updated_at']
+
+    def validate_email(self, value):
+        email = str(value or '').strip().lower()
+        if not email:
+            raise serializers.ValidationError('Email majburiy.')
+        queryset = ReceptionStaff.objects.filter(email__iexact=email)
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError('Bu email allaqachon ishlatilgan.')
+        return email
+
+    def validate_password(self, value):
+        if value and len(value) < 6:
+            raise serializers.ValidationError('Parol kamida 6 ta belgidan iborat bo\'lishi kerak.')
+        return value
+
+    def create(self, validated_data):
+        password = validated_data.pop('password', '')
+        if not password:
+            raise serializers.ValidationError({'password': 'Parol majburiy.'})
+        instance = ReceptionStaff(**validated_data)
+        if password:
+            from django.contrib.auth.hashers import make_password
+            instance.password_hash = make_password(password)
+        instance.save()
+        return instance
+
+    def update(self, instance, validated_data):
+        password = validated_data.pop('password', '')
+        instance = super().update(instance, validated_data)
+        if password:
+            from django.contrib.auth.hashers import make_password
+            instance.password_hash = make_password(password)
+            instance.save(update_fields=['password_hash', 'updated_at'])
+        return instance
+
+    def _today_record(self, obj):
+        from django.utils import timezone
+        from datetime import date
+        selected_date = self.context.get('reception_stats_date')
+        if selected_date:
+            try:
+                selected_date = date.fromisoformat(str(selected_date))
+            except ValueError:
+                selected_date = timezone.localdate()
+        else:
+            selected_date = timezone.localdate()
+        return obj.work_records.filter(date=selected_date).first()
+
+    def get_today_checked_in_at(self, obj):
+        record = self._today_record(obj)
+        return record.checked_in_at.strftime('%H:%M') if record and record.checked_in_at else None
+
+    def get_today_checked_out_at(self, obj):
+        record = self._today_record(obj)
+        return record.checked_out_at.strftime('%H:%M') if record and record.checked_out_at else None
+
+    def get_today_patients_count(self, obj):
+        record = self._today_record(obj)
+        return record.patients_count if record else 0
+
+    def get_today_revenue(self, obj):
+        record = self._today_record(obj)
+        return str(record.revenue) if record else '0.00'
+
+
 class ClinicOwnerUpdateSerializer(serializers.ModelSerializer):
     owner_password = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
@@ -287,6 +376,9 @@ class ClinicOwnerUpdateSerializer(serializers.ModelSerializer):
             'email',
             'website',
             'working_hours',
+            'attendance_enabled',
+            'diagnosis_entry_enabled',
+            'reception_room_enabled',
             'owner_password',
         ]
 

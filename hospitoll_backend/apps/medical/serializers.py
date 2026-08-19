@@ -7,7 +7,7 @@ from .models import Appointment, MedicalRecord, Diagnosis, Prescription, LabTest
 
 class DoctorDetailsSerializer(serializers.Serializer):
     """Nested doctor details"""
-    id = serializers.IntegerField()
+    id = serializers.UUIDField()
     full_name = serializers.SerializerMethodField()
     specialization = serializers.SerializerMethodField()
     
@@ -26,6 +26,9 @@ class DoctorDetailsSerializer(serializers.Serializer):
 
 
 class AppointmentSerializer(serializers.ModelSerializer):
+    patient_name = serializers.SerializerMethodField()
+    selected_specialties_total = serializers.SerializerMethodField()
+
     class Meta:
         model = Appointment
         fields = [
@@ -44,11 +47,20 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'telegram_reminder_sent_at',
             'reason',
             'notes',
+            'patient_name',
+            'selected_specialties',
+            'selected_specialties_total',
             'consultation_fee',
             'is_paid',
             'created_at',
             'updated_at',
         ]
+
+    def get_patient_name(self, obj):
+        return obj.patient.user.get_full_name() if obj.patient and obj.patient.user else 'Bemor'
+
+    def get_selected_specialties_total(self, obj):
+        return sum(float(item.get('price', 0) or 0) for item in (obj.selected_specialties or []))
 
 
 class OnlineAppointmentSerializer(serializers.Serializer):
@@ -56,10 +68,15 @@ class OnlineAppointmentSerializer(serializers.Serializer):
     doctor = serializers.PrimaryKeyRelatedField(queryset=Doctor.objects.all())
     slot_id = serializers.PrimaryKeyRelatedField(queryset=DoctorAvailability.objects.all())
     specialty_price_id = serializers.UUIDField(required=False, allow_null=True)
+    specialty_price_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=False)
     first_name = serializers.CharField(max_length=150)
     last_name = serializers.CharField(max_length=150)
     phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    patient_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
     reason = serializers.CharField(required=False, allow_blank=True)
+    source = serializers.ChoiceField(choices=['online', 'reception'], default='online', required=False)
+    reception_staff_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class PublicTelegramBookingSerializer(serializers.Serializer):
@@ -100,6 +117,7 @@ class MedicalRecordSerializer(serializers.ModelSerializer):
             'examination_findings',
             'assessment',
             'plan',
+            'attachment',
             'is_locked',
             'created_at',
             'updated_at',
@@ -146,7 +164,7 @@ class MedicalRecordSerializer(serializers.ModelSerializer):
                 'id': clinic.id,
                 'name': clinic.name if hasattr(clinic, 'name') else str(clinic),
                 'address': clinic.address if hasattr(clinic, 'address') else '',
-                'phone': clinic.phone if hasattr(clinic, 'phone') else ''
+                'phone': clinic.phone_number if hasattr(clinic, 'phone_number') else ''
             }
         return None
 
@@ -257,7 +275,7 @@ class PrescriptionSerializer(serializers.ModelSerializer):
                 'id': clinic.id,
                 'name': clinic.name if hasattr(clinic, 'name') else str(clinic),
                 'address': clinic.address if hasattr(clinic, 'address') else '',
-                'phone': clinic.phone if hasattr(clinic, 'phone') else ''
+                'phone': clinic.phone_number if hasattr(clinic, 'phone_number') else ''
             }
         return None
 

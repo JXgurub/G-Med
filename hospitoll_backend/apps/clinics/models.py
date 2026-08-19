@@ -136,6 +136,21 @@ class Clinic(models.Model):
         default='09:00 - 18:00',
         help_text=_("Masalan: 09:00 - 18:00")
     )
+    attendance_enabled = models.BooleanField(
+        _('doctor attendance enabled'),
+        default=False,
+        help_text=_("Doktor ishga kelish va ketishini belgilashi mumkin")
+    )
+    diagnosis_entry_enabled = models.BooleanField(
+        _('diagnosis entry enabled'),
+        default=False,
+        help_text=_("Bemor qabul qilinganda tashxis formasini avtomatik ochish")
+    )
+    reception_room_enabled = models.BooleanField(
+        _('reception room enabled'),
+        default=False,
+        help_text=_("Qabul xonasi navbat logikasini yoqish")
+    )
     amount = models.DecimalField(
         _('payment amount'),
         max_digits=12,
@@ -188,6 +203,54 @@ class Clinic(models.Model):
     @property
     def patients_count(self):
         return self.patients.filter(is_active=True).count()
+
+
+class ReceptionStaff(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    clinic = models.ForeignKey(Clinic, on_delete=models.CASCADE, related_name='reception_staff')
+    pinfl = models.CharField(max_length=14)
+    passport_id = models.CharField(max_length=50)
+    date_of_birth = models.DateField()
+    first_name = models.CharField(max_length=150)
+    last_name = models.CharField(max_length=150)
+    phone_number = models.CharField(max_length=30, blank=True)
+    email = models.EmailField(blank=True)
+    password_hash = models.CharField(max_length=128, blank=True)
+    compensation_type = models.CharField(max_length=20, default='salary', choices=(('salary', 'Ish haqi'), ('percent', 'Foiz')))
+    compensation_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    available_from = models.TimeField(default='09:00')
+    available_until = models.TimeField(default='18:00')
+    lunch_break_start = models.TimeField(null=True, blank=True)
+    lunch_break_end = models.TimeField(null=True, blank=True)
+    working_days = models.CharField(max_length=100, default='Mon,Tue,Wed,Thu,Fri')
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['first_name', 'last_name']
+        indexes = [models.Index(fields=['clinic', 'is_active'])]
+
+    def __str__(self):
+        return f'{self.first_name} {self.last_name}'
+
+
+class ReceptionStaffWorkRecord(models.Model):
+    staff = models.ForeignKey(ReceptionStaff, on_delete=models.CASCADE, related_name='work_records')
+    date = models.DateField()
+    checked_in_at = models.TimeField(null=True, blank=True)
+    checked_out_at = models.TimeField(null=True, blank=True)
+    patients_count = models.PositiveIntegerField(default=0)
+    revenue = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['staff', 'date'], name='unique_reception_staff_work_day')]
+        ordering = ['-date']
+
+    def __str__(self):
+        return f'{self.staff} - {self.date}'
 
 
 class ClinicDepartment(models.Model):

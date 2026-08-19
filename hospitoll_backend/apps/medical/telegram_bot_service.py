@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import requests
+from html import escape
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
 from django.core.exceptions import ValidationError
@@ -59,6 +60,40 @@ class TelegramBotClient:
         except Exception as e:
             logger.exception("Telegram sendMessage exception: %s", e)
 
+    def send_document(self, chat_id: int, document_url: str, caption: str = '') -> bool:
+        payload = {
+            'chat_id': chat_id,
+            'document': document_url,
+            'caption': caption[:1024],
+            'parse_mode': 'HTML',
+        }
+        try:
+            resp = requests.post(f"{self.base_url}/sendDocument", json=payload, timeout=20)
+            data = resp.json() if resp.content else {}
+            if not data.get('ok', False):
+                logger.warning("Telegram sendDocument failed: %s", data)
+            return bool(data.get('ok', False))
+        except Exception:
+            logger.exception("Telegram sendDocument exception")
+            return False
+
+    def send_document_file(self, chat_id: int, file_obj, filename: str, caption: str = '') -> bool:
+        try:
+            file_obj.seek(0)
+            response = requests.post(
+                f"{self.base_url}/sendDocument",
+                data={'chat_id': str(chat_id), 'caption': caption[:1024], 'parse_mode': 'HTML'},
+                files={'document': (filename, file_obj)},
+                timeout=30,
+            )
+            data = response.json() if response.content else {}
+            if not data.get('ok', False):
+                logger.warning("Telegram sendDocument file failed: %s", data)
+            return bool(data.get('ok', False))
+        except Exception:
+            logger.exception("Telegram sendDocument file exception")
+            return False
+
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         payload: dict[str, Any] = {"callback_query_id": callback_query_id}
         if text:
@@ -89,6 +124,38 @@ class TelegramBotService:
         if not self.client:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not configured")
         return self.client
+
+    def send_medical_record_to_patient(self, record) -> bool:
+        appointment = getattr(record, 'appointment', None)
+        chat_id = int(getattr(appointment, 'telegram_chat_id', 0) or 0)
+        if not chat_id:
+            from .models import Appointment
+            linked_appointment = (
+                Appointment.objects
+                .filter(patient_id=record.patient_id, telegram_chat_id__isnull=False)
+                .exclude(telegram_chat_id=0)
+                .order_by('-scheduled_date')
+                .first()
+            )
+            chat_id = int(getattr(linked_appointment, 'telegram_chat_id', 0) or 0)
+
+        attachment = getattr(record, 'attachment', None)
+        if not chat_id:
+            return False
+
+        diagnosis = escape(str(getattr(record, 'assessment', '') or 'Kiritilmagan'))
+        caption = f"🩺 <b>Tashxis:</b> {diagnosis}"
+        if attachment:
+            with attachment.open('rb') as file_obj:
+                return self._require_client().send_document_file(
+                    chat_id,
+                    file_obj,
+                    attachment.name.rsplit('/', 1)[-1] or 'medical-file',
+                    caption,
+                )
+
+        self._require_client().send_message(chat_id, caption)
+        return True
 
     def handle_update(self, update: dict[str, Any]) -> None:
         if not update:

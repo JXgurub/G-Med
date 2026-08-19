@@ -1,7 +1,7 @@
 // API service utilities
 // This will contain functions to interact with the backend API
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
 const CLIENT_ALERT_ENDPOINT = '/site-settings/system-alerts/client/'
 const ACCESS_TOKEN_KEY = 'access_token'
 const REFRESH_TOKEN_KEY = 'refresh_token'
@@ -276,6 +276,13 @@ export const api = {
     return api.request(endpoint)
   },
 
+  getWithHeaders: (endpoint, headers = {}, params) => {
+    const queryEndpoint = params && Object.keys(params).length > 0
+      ? `${endpoint}?${new URLSearchParams(params).toString()}`
+      : endpoint
+    return api.request(queryEndpoint, { headers })
+  },
+
   // POST request
   post: (endpoint, data) => 
     api.request(endpoint, {
@@ -301,6 +308,12 @@ export const api = {
   patchForm: (endpoint, formData) =>
     api.request(endpoint, {
       method: 'PATCH',
+      body: formData,
+    }),
+
+  postForm: (endpoint, formData) =>
+    api.request(endpoint, {
+      method: 'POST',
       body: formData,
     }),
 
@@ -347,6 +360,25 @@ export const clinicsApi = {
   delete: (id) => api.delete(`/clinics/${id}/`),
 }
 
+export const receptionStaffApi = {
+  getAll: (params) => api.get('/clinics/reception-staff/', params),
+  create: (data) => api.post('/clinics/reception-staff/', data),
+  login: (data) => api.post('/clinics/reception-staff/login/', data),
+  update: (id, data) => api.patch(`/clinics/reception-staff/${id}/`, data),
+  delete: (id) => api.delete(`/clinics/reception-staff/${id}/`),
+  getDoctors: () => api.getWithHeaders('/clinics/reception-staff/doctors/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
+  getStats: (params) => api.getWithHeaders('/clinics/reception-staff/stats/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }, params),
+  getMe: () => api.getWithHeaders('/clinics/reception-staff/me/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
+  checkIn: () => api.request('/clinics/reception-staff/check-in/', { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
+  checkOut: () => api.request('/clinics/reception-staff/check-out/', { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
+}
+
+export const normalizeUzPhoneWithPrefix = (raw) => {
+  const digits = String(raw || '').replace(/\D/g, '')
+  const withoutCountry = digits.startsWith('998') ? digits.slice(3) : digits
+  return withoutCountry.slice(0, 9)
+}
+
 // Clinic Services API endpoints
 export const clinicServicesApi = {
   getAll: (params) => api.get('/clinics/services/', params),
@@ -388,8 +420,11 @@ export const doctorsApi = {
   reorderDisplay: (data) => api.post('/doctors/reorder-display/', data),
   getSpecializations: (params) => api.get('/doctors/specializations/', params),
   createSpecialization: (data) => api.post('/doctors/specializations/', data),
+  updateSpecialization: (id, data) => api.patch(`/doctors/specializations/${id}/`, data),
   getMySpecializations: () => api.get('/doctors/specialty-prices/my_specializations/'),
   updateSpecialtyPrice: (specialtyPriceId, data) => api.patch(`/doctors/specialty-prices/${specialtyPriceId}/`, data),
+  createSpecialtyPrice: (data) => api.post('/doctors/specialty-prices/', data),
+  createCustomSpecialtyPrice: (data) => api.post('/doctors/specialty-prices/create-custom/', data),
   getAvailability: (params) => api.get('/doctors/availability/available/', params),
 }
 
@@ -448,6 +483,7 @@ export const medicalApi = {
   updateAppointment: (id, data) => api.patch(`/medical/appointments/${id}/`, data),
   notifyAppointmentReady: (id, data = {}) => api.post(`/medical/appointments/${id}/notify_ready/`, data),
   queueDecision: (id, data = {}) => api.post(`/medical/appointments/${id}/queue_decision/`, data),
+  receptionCancelAppointment: (id) => api.request(`/medical/appointments/${id}/reception_cancel/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
   bookOnline: (data) => api.post('/medical/appointments/online_booking/', data),
 }
 
@@ -455,6 +491,7 @@ export const medicalRecordsApi = {
   getAll: (params) => api.get('/medical/records/', params),
   getById: (id) => api.get(`/medical/records/${id}/`),
   create: (data) => api.post('/medical/records/', data),
+  createForm: (formData) => api.postForm('/medical/records/', formData),
   update: (id, data) => api.patch(`/medical/records/${id}/`, data),
   delete: (id) => api.delete(`/medical/records/${id}/`),
 }

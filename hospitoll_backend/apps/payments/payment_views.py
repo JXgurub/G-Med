@@ -53,10 +53,12 @@ class InvoicePaymentViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     
     def get_queryset(self):  # type: ignore[override]
-        """Filter invoices by user's clinic"""
+        """Filter invoices by user's clinic or pharmacy"""
         user = self.request.user
         if hasattr(user, 'clinic'):
             return Invoice.objects.filter(clinic=user.clinic)  # type: ignore[attr-defined]
+        if hasattr(user, 'pharmacy'):
+            return Invoice.objects.filter(pharmacy=user.pharmacy)  # type: ignore[attr-defined]
         return Invoice.objects.none()
     
     @action(detail=True, methods=['post'], permission_classes=[IsAuthenticated])
@@ -337,7 +339,8 @@ def renew_subscription(request):
         
         # Verify user owns subscription
         clinic = getattr(request.user, 'clinic', None)
-        if subscription.clinic != clinic:
+        pharmacy = getattr(request.user, 'pharmacy', None)
+        if subscription.clinic != clinic and subscription.pharmacy != pharmacy:
             return Response(
                 {'error': 'Unauthorized'},
                 status=status.HTTP_403_FORBIDDEN

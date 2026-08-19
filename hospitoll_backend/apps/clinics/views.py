@@ -2,14 +2,16 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from django.utils import timezone
+from django.core import signing
 
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 
 from core.permissions.custom_permissions import IsAdministrator, IsClinicOwner
-from .models import Clinic, ClinicDepartment, ClinicService, ClinicStaffMessage, ClinicStaffMessageRecipient
+from .models import ReceptionStaff, ReceptionStaffWorkRecord, Clinic, ClinicDepartment, ClinicService, ClinicStaffMessage, ClinicStaffMessageRecipient
 from .serializers import (
     ClinicSerializer,
     ClinicCreateSerializer,
@@ -20,6 +22,7 @@ from .serializers import (
     ClinicStaffMessageInboxItemSerializer,
     ClinicDepartmentSerializer,
     ClinicServiceSerializer,
+    ReceptionStaffSerializer,
 )
 
 
@@ -202,6 +205,169 @@ class ClinicDepartmentViewSet(viewsets.ModelViewSet):
             return [permissions.AllowAny()]
         # Require authentication for create, update, delete
         return [permissions.IsAuthenticated()]
+
+
+class ReceptionStaffViewSet(viewsets.ModelViewSet):
+    serializer_class = ReceptionStaffSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return ReceptionStaff.objects.filter(clinic__owner=self.request.user).order_by('first_name', 'last_name')
+
+    def check_object_permissions(self, request, obj):
+        if not request.user.is_authenticated or obj.clinic.owner_id != request.user.id:
+            self.permission_denied(request, message='Siz faqat o\'z klinikangiz xodimini boshqara olasiz.')
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context['reception_stats_date'] = self.request.query_params.get('date')
+        return context
+
+    def perform_create(self, serializer):
+        clinic = Clinic.objects.filter(owner=self.request.user).first()
+        if not clinic or not clinic.reception_room_enabled:
+            raise PermissionDenied('Qabul xonasi funksiyasi yoqilmagan.')
+        serializer.save(clinic=clinic)
+
+    def _resolve_staff_from_session(self, request):
+        raw_token = str(request.headers.get('X-Reception-Session') or '').strip()
+        try:
+            payload = signing.loads(raw_token, salt='reception-staff-session', max_age=60 * 60 * 12)
+            return ReceptionStaff.objects.get(id=payload['staff_id'], clinic_id=payload['clinic_id'], is_active=True)
+        except Exception:
+            return None
+
+    @action(detail=False, methods=['post'], url_path='login', permission_classes=[permissions.AllowAny])
+    def login(self, request):
+        email = str(request.data.get('email') or '').strip().lower()
+        password = str(request.data.get('password') or '')
+        staff = ReceptionStaff.objects.select_related('clinic').filter(email__iexact=email, is_active=True).first()
+        if not staff or not staff.password_hash:
+            return Response({'detail': 'Email yoki parol noto\'g\'ri.'}, status=status.HTTP_401_UNAUTHORIZED)
+        from django.contrib.auth.hashers import check_password
+        if not check_password(password, staff.password_hash):
+            return Response({'detail': 'Email yoki parol noto\'g\'ri.'}, status=status.HTTP_401_UNAUTHORIZED)
+        token = signing.dumps({'staff_id': str(staff.id), 'clinic_id': str(staff.clinic_id)}, salt='reception-staff-session')
+        return Response({'token': token, 'staff': ReceptionStaffSerializer(staff).data})
+
+    @action(detail=False, methods=['get'], url_path='me', permission_classes=[permissions.AllowAny])
+    def me(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+        serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(timezone.localdate())})
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['post'], url_path='check-in', permission_classes=[permissions.AllowAny])
+    def check_in(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        now_local = timezone.localtime()
+        today = timezone.localdate()
+        record, _ = ReceptionStaffWorkRecord.objects.get_or_create(staff=staff, date=today)
+
+        if record.checked_in_at and not record.checked_out_at:
+            return Response({'detail': 'Siz bugun allaqachon ishga kelgansiz.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        record.checked_in_at = now_local.time().replace(second=0, microsecond=0)
+        record.checked_out_at = None
+        record.save(update_fields=['checked_in_at', 'checked_out_at', 'updated_at'])
+
+        serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(today)})
+        return Response({'detail': 'Ishga kelish vaqti saqlandi.', 'staff': serializer.data})
+
+    @action(detail=False, methods=['post'], url_path='check-out', permission_classes=[permissions.AllowAny])
+    def check_out(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        now_local = timezone.localtime()
+        today = timezone.localdate()
+        record = ReceptionStaffWorkRecord.objects.filter(staff=staff, date=today).first()
+        if not record or not record.checked_in_at:
+            return Response({'detail': 'Avval Ishga keldim tugmasini bosing.'}, status=status.HTTP_400_BAD_REQUEST)
+        if record.checked_out_at:
+            return Response({'detail': 'Siz bugun allaqachon ishdan ketgansiz.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        record.checked_out_at = now_local.time().replace(second=0, microsecond=0)
+        record.save(update_fields=['checked_out_at', 'updated_at'])
+
+        serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(today)})
+        return Response({'detail': 'Ishdan ketish vaqti saqlandi.', 'staff': serializer.data})
+
+    @action(detail=False, methods=['get'], url_path='doctors', permission_classes=[permissions.AllowAny])
+    def doctors(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        from apps.doctors.models import Doctor
+        from apps.doctors.serializers import DoctorSerializer
+        doctors = Doctor.objects.filter(clinic_id=staff.clinic_id, is_active=True).select_related('user', 'clinic').prefetch_related('specialty_prices__specialization')
+        serialized_doctors = DoctorSerializer(doctors, many=True).data
+        for doctor_data in serialized_doctors:
+            doctor_data['specialty_prices'] = [
+                item for item in doctor_data.get('specialty_prices', [])
+                if item.get('doctor_custom') is True
+            ]
+        return Response(serialized_doctors)
+
+    @action(detail=False, methods=['get'], url_path='stats', permission_classes=[permissions.AllowAny])
+    def stats(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+        from apps.medical.models import Appointment
+        from django.utils import timezone
+        from django.db.models import Sum
+        selected_date = request.query_params.get('date') or str(timezone.localdate())
+        try:
+            from datetime import date
+            report_date = date.fromisoformat(selected_date)
+        except ValueError:
+            report_date = timezone.localdate()
+        appointments = Appointment.objects.filter(clinic_id=staff.clinic_id, scheduled_date__date=report_date).select_related('patient__user', 'doctor__user').order_by('scheduled_date')
+        queue_statuses = [
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+            Appointment.Status.WAITING,
+        ]
+        doctor_accepted_statuses = [
+            Appointment.Status.IN_PROGRESS,
+            Appointment.Status.COMPLETED,
+        ]
+        accepted_statuses = [
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+            Appointment.Status.WAITING,
+            Appointment.Status.IN_PROGRESS,
+            Appointment.Status.COMPLETED,
+        ]
+        accepted = appointments.filter(status__in=accepted_statuses)
+        queue_patients = appointments.filter(status__in=queue_statuses)
+        doctor_accepted_patients = appointments.filter(status__in=doctor_accepted_statuses)
+        cancelled = appointments.filter(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
+        month_start = report_date.replace(day=1)
+        monthly = Appointment.objects.filter(clinic_id=staff.clinic_id, scheduled_date__date__gte=month_start).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
+        map_item = lambda item: {
+            'id': str(item.id),
+            'queue_position': int(item.queue_position or 0),
+            'patient_name': item.patient.user.get_full_name() if item.patient and item.patient.user else 'Bemor',
+            'phone': item.patient.phone_number if item.patient else '',
+            'birth_year': (
+                item.patient.birth_year
+                if item.patient and item.patient.birth_year
+                else (item.patient.date_of_birth.year if item.patient and item.patient.date_of_birth else None)
+            ),
+            'doctor_name': item.doctor.user.get_full_name() if item.doctor and item.doctor.user else 'Doktor',
+            'selected_specialties': item.selected_specialties or [],
+            'amount': float(item.consultation_fee or 0),
+            'time': timezone.localtime(item.scheduled_date).strftime('%H:%M')
+        }
+        return Response({'date': str(report_date), 'accepted_count': accepted.count(), 'cancelled_count': cancelled.count(), 'daily_revenue': float(accepted.aggregate(total=Sum('consultation_fee'))['total'] or 0), 'monthly_revenue': float(monthly.aggregate(total=Sum('consultation_fee'))['total'] or 0), 'salary_type': staff.compensation_type, 'salary_value': float(staff.compensation_value or 0), 'accepted_patients': [map_item(item) for item in accepted], 'queue_patients': [map_item(item) for item in queue_patients], 'doctor_accepted_patients': [map_item(item) for item in doctor_accepted_patients], 'cancelled_patients': [map_item(item) for item in cancelled]})
 
 
 class ClinicServiceViewSet(viewsets.ModelViewSet):

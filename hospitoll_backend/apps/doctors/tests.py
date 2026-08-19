@@ -829,7 +829,7 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.assertTrue(len(data) > 0)
         self.assertEqual(data[0]['start_time'][:5], '09:00')
 
-    def test_check_in_is_blocked_outside_doctor_working_hours(self):
+    def test_check_in_is_allowed_before_start_on_working_day(self):
         now_local = timezone.localtime()
         start_candidate = (now_local + timedelta(hours=2)).replace(second=0, microsecond=0)
         end_candidate = (now_local + timedelta(hours=3)).replace(second=0, microsecond=0)
@@ -849,8 +849,23 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         self.auth_as(self.doctor_user)
         response = self.client.post(reverse('doctor-check-in'), {}, format='json')
 
+        self.assertEqual(response.status_code, 200)
+        self.doctor.refresh_from_db()
+        self.assertTrue(self.doctor.is_checked_in)
+
+    def test_check_in_is_blocked_on_non_working_day(self):
+        now_local = timezone.localtime()
+        self.doctor.is_checked_in = False
+        self.doctor.available_from = datetime.strptime('09:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('23:59', '%H:%M').time()
+        self.doctor.working_days = 'Never'
+        self.doctor.save(update_fields=['is_checked_in', 'available_from', 'available_until', 'working_days', 'updated_at'])
+
+        self.auth_as(self.doctor_user)
+        response = self.client.post(reverse('doctor-check-in'), {}, format='json')
+
         self.assertEqual(response.status_code, 400)
-        self.assertIn('ish kuni va ish vaqtida', str(response.json().get('detail', '')).lower())
+        self.assertIn('ish kuni', str(response.json().get('detail', '')).lower())
         self.doctor.refresh_from_db()
         self.assertFalse(self.doctor.is_checked_in)
 

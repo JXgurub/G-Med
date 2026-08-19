@@ -478,6 +478,10 @@ class DoctorSpecialization(models.Model):
         validators=[MinValueValidator(0)],
         help_text=_("Ushbu ixtisoslik uchun konsultatsiya narxi (So'm)")
     )
+    doctor_custom = models.BooleanField(
+        default=False,
+        help_text=_("Doktorning o'zi qo'shgan yo'nalish")
+    )
     is_active = models.BooleanField(
         _('active'),
         default=True,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useDoctor } from '../context/DoctorContext'
-import { clinicsApi, patientsApi } from '../services/api'
+import { clinicsApi, doctorsApi, patientsApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
 import MedicineAutocomplete from '../components/MedicineAutocomplete'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
@@ -96,6 +96,13 @@ const createInitialQueueCancelConfirm = () => ({
 
 const DEFAULT_PHONE_PREFIX = '+998'
 
+const formatFileSize = (bytes) => {
+  const size = Number(bytes || 0)
+  if (!size) return 'Hajmi noma’lum'
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`
+}
+
 const createInitialPatientForm = () => ({
   fullName: '',
   phone: DEFAULT_PHONE_PREFIX,
@@ -119,6 +126,8 @@ const DoctorDashboard = () => {
     appointmentsLoading,
     loading,
     cancelTodaysAppointments,
+    checkInDoctor,
+    checkOutDoctor,
     addPatient,
     loadOnlineAppointments,
     acceptOnlineAppointment,
@@ -147,8 +156,13 @@ const DoctorDashboard = () => {
   const [showSearchResults, setShowSearchResults] = useState(false)
   const searchRequestSeqRef = useRef(0)
   const [existingPatientSelected, setExistingPatientSelected] = useState(null)
+  const [existingPatientAttachment, setExistingPatientAttachment] = useState(null)
   const [showSpecialtyPrices, setShowSpecialtyPrices] = useState(false)
   const [editingPriceId, setEditingPriceId] = useState(null)
+  const [editingSpecializationId, setEditingSpecializationId] = useState(null)
+  const [specializationNameInput, setSpecializationNameInput] = useState('')
+  const [showAddSpecialtyPrice, setShowAddSpecialtyPrice] = useState(false)
+  const [newSpecialtyPriceForm, setNewSpecialtyPriceForm] = useState({ name: '', price: '' })
   const [priceInputs, setPriceInputs] = useState({})
   const [priceInputClearedOnFocus, setPriceInputClearedOnFocus] = useState({})
   const [newVisitForm, setNewVisitForm] = useState(createInitialNewVisitForm)
@@ -183,6 +197,11 @@ const DoctorDashboard = () => {
   const [patientForm, setPatientForm] = useState(createInitialPatientForm)
   const [notice, setNotice] = useState({ open: false, type: 'info', text: '' })
   const currentYear = new Date().getFullYear()
+  const managedQueueEnabled = Boolean(
+    doctor?.clinicAttendanceEnabled &&
+    doctor?.clinicDiagnosisEntryEnabled &&
+    doctor?.clinicReceptionRoomEnabled
+  )
 
   const showNotice = (text, type = 'info') => {
     if (noticeTimerRef.current) {
@@ -192,6 +211,24 @@ const DoctorDashboard = () => {
     noticeTimerRef.current = window.setTimeout(() => {
       setNotice((prev) => ({ ...prev, open: false }))
     }, 2800)
+  }
+
+  const handleDoctorCheckIn = async () => {
+    try {
+      await checkInDoctor()
+      showNotice('Ishga kelgan vaqt saqlandi ✅', 'success')
+    } catch (error) {
+      showNotice(getApiErrorMessage(error, 'Ishga kelgan vaqtni saqlab bo\'lmadi'), 'error')
+    }
+  }
+
+  const handleDoctorCheckOut = async () => {
+    try {
+      await checkOutDoctor()
+      showNotice('Ishdan ketgan vaqt saqlandi ✅', 'success')
+    } catch (error) {
+      showNotice(getApiErrorMessage(error, 'Ishdan ketgan vaqtni saqlab bo\'lmadi'), 'error')
+    }
   }
 
   const [staffInbox, setStaffInbox] = useState([])
@@ -385,6 +422,35 @@ const DoctorDashboard = () => {
     }
   }
 
+  const handleUpdateSpecializationName = async (specialization) => {
+    const name = specializationNameInput.trim()
+    if (!name) return showNotice('Yo\'nalish nomini kiriting', 'warning')
+    try {
+      await doctorsApi.updateSpecialization(specialization.specialization.id, { name })
+      await loadSpecialtyPrices()
+      setEditingSpecializationId(null)
+      showNotice('Yo\'nalish nomi yangilandi ✅', 'success')
+    } catch (error) {
+      showNotice(error?.message || 'Yo\'nalish nomini yangilab bo\'lmadi', 'error')
+    }
+  }
+
+  const handleAddSpecialtyPrice = async (event) => {
+    event.preventDefault()
+    const name = newSpecialtyPriceForm.name.trim()
+    const price = parseCurrencyInput(newSpecialtyPriceForm.price)
+    if (!name || !Number.isFinite(price) || price < 0) return showNotice('Yo\'nalish nomi va to\'g\'ri narx kiriting', 'warning')
+    try {
+      await doctorsApi.createCustomSpecialtyPrice({ name, consultation_fee: price })
+      await loadSpecialtyPrices()
+      setNewSpecialtyPriceForm({ name: '', price: '' })
+      setShowAddSpecialtyPrice(false)
+      showNotice('Yo\'nalish va narx qo\'shildi ✅', 'success')
+    } catch (error) {
+      showNotice(error?.message || 'Yo\'nalish qo\'shib bo\'lmadi', 'error')
+    }
+  }
+
   const handleSaveSettings = async (e) => {
     e.preventDefault()
     setSettingsSaving(true)
@@ -437,16 +503,17 @@ const DoctorDashboard = () => {
     
     // If we're adding an existing patient
     if (existingPatientSelected) {
-      if (!existingPatientSelected.complaint) {
-        showNotice('Bemor shikoyatini kiriting', 'warning')
+      if (!existingPatientSelected.diagnosis && !existingPatientAttachment) {
+        showNotice('Tashxis yoki fayl kiriting', 'warning')
         return
       }
       
       try {
         await addExistingPatientVisit(existingPatientSelected, {
-          complaint: existingPatientSelected.complaint,
+          complaint: '',
           diagnosis: existingPatientSelected.diagnosis || '',
-          medicines: existingPatientSelected.medicines || ''
+          medicines: existingPatientSelected.medicines || '',
+          attachment: existingPatientAttachment
         })
 
         if (doctor?.id) {
@@ -454,6 +521,7 @@ const DoctorDashboard = () => {
         }
         
         setExistingPatientSelected(null)
+        setExistingPatientAttachment(null)
         setShowAddPatient(false)
         setPatientForm(createInitialPatientForm())
         showNotice("Bemor qo'shildi! ✅", 'success')
@@ -547,6 +615,8 @@ const DoctorDashboard = () => {
     if (patient.isExisting) {
       // For existing patients, show them in the form with a notice that they're already registered
       setExistingPatientSelected(patient)
+      setExistingPatientAttachment(null)
+      if (doctor?.clinicDiagnosisEntryEnabled) setShowAddPatient(true)
     } else {
       // For local patients (already added by this doctor)
       setSelectedPatient(patient)
@@ -579,12 +649,59 @@ const DoctorDashboard = () => {
 
   const handleAcceptAppointment = async (appointment) => {
     try {
+      if (managedQueueEnabled) {
+        let patient = null
+        try {
+          patient = await patientsApi.getById(appointment.patient)
+        } catch (error) {
+          patient = null
+        }
+        const patientName = patient?.user
+          ? `${patient.user.first_name || ''} ${patient.user.last_name || ''}`.trim()
+          : appointment.patient_info?.fullName || 'Bemor'
+        setExistingPatientSelected({
+          id: appointment.patient,
+          appointmentId: appointment.id,
+          fullName: patientName || 'Bemor',
+          phone: patient?.phone_number || patient?.user?.phone_number || appointment.patient_info?.phone || '',
+          age: patient?.age || '',
+          diagnosis: '',
+          medicines: ''
+        })
+        setExistingPatientAttachment(null)
+        setShowAddPatient(true)
+        return
+      }
+
       await applyQueueDecision(appointment.id, 'enter', {
         notify_current: false,
         notify_all_shifted: true,
       })
       await notifyOnlineAppointmentReady(appointment.id)
       await loadOnlineAppointments(doctor.id)
+      if (doctor.clinicDiagnosisEntryEnabled) {
+        let patient = null
+        try {
+          patient = await patientsApi.getById(appointment.patient)
+        } catch (error) {
+          patient = null
+        }
+        const patientName = patient?.user
+          ? `${patient.user.first_name || ''} ${patient.user.last_name || ''}`.trim()
+          : appointment.patient_info?.fullName || 'Bemor'
+        setExistingPatientSelected({
+          id: appointment.patient,
+          appointmentId: appointment.id,
+          fullName: patientName || 'Bemor',
+          phone: patient?.phone_number || patient?.user?.phone_number || appointment.patient_info?.phone || '',
+          age: patient?.age || '',
+          complaint: appointment.reason || '',
+          diagnosis: '',
+          medicines: ''
+        })
+        setExistingPatientAttachment(null)
+        setShowAddPatient(true)
+      }
     } catch (error) {
       showNotice(error.message || 'Qabul qilishda xatolik', 'error')
     }
@@ -901,15 +1018,30 @@ const DoctorDashboard = () => {
                   {doctorStatus.checkedInTime} • {doctorStatus.checkedInDate}
                 </p>
               )}
-              <button
-                className="btn-cancel-today"
-                onClick={handleRequestCancelTodaysAppointments}
-                disabled={!canPractice || cancelTodayLoading}
-              >
-                <span className="btn-cancel-today-title">
-                  {cancelTodayLoading ? 'Bekor qilinmoqda...' : 'Bugungi navbatni yopish'}
-                </span>
-              </button>
+              {doctor.clinicAttendanceEnabled && (
+                <div className="attendance-actions">
+                  {!doctorStatus?.isCheckedIn ? (
+                    <button type="button" className="btn-checkin" onClick={handleDoctorCheckIn} disabled={!canPractice}>
+                      Ishga keldim
+                    </button>
+                  ) : (
+                    <button type="button" className="btn-checkout" onClick={handleDoctorCheckOut} disabled={!canPractice}>
+                      Ishdan ketdim
+                    </button>
+                  )}
+                </div>
+              )}
+              {!doctor.clinicAttendanceEnabled && (
+                <button
+                  className="btn-cancel-today"
+                  onClick={handleRequestCancelTodaysAppointments}
+                  disabled={!canPractice || cancelTodayLoading}
+                >
+                  <span className="btn-cancel-today-title">
+                    {cancelTodayLoading ? 'Bekor qilinmoqda...' : 'Bugungi navbatni yopish'}
+                  </span>
+                </button>
+              )}
             </div>
 
             {showSettingsPanel && (
@@ -1036,12 +1168,26 @@ const DoctorDashboard = () => {
 
             {showSpecialtyPrices && (
               <div className="specialty-prices-list-wrap">
+                <button type="button" className="specialty-add-button" onClick={() => setShowAddSpecialtyPrice((prev) => !prev)}>
+                  {showAddSpecialtyPrice ? '✕ Bekor' : '+ Yo‘nalish qo‘shish'}
+                </button>
+                {showAddSpecialtyPrice && (
+                  <form className="specialty-add-form" onSubmit={handleAddSpecialtyPrice}>
+                    <input type="text" placeholder="Yo‘nalish nomi" value={newSpecialtyPriceForm.name} onChange={(e) => setNewSpecialtyPriceForm((prev) => ({ ...prev, name: e.target.value }))} required />
+                    <input type="text" inputMode="numeric" placeholder="Narx (so‘m)" value={newSpecialtyPriceForm.price} onChange={(e) => setNewSpecialtyPriceForm((prev) => ({ ...prev, price: formatCurrencyInput(e.target.value) }))} required />
+                    <button type="submit">Saqlash</button>
+                  </form>
+                )}
                 {specialtyPrices && specialtyPrices.length > 0 ? (
                   <div className="specialty-prices-list">
                     {specialtyPrices.map((specialty) => (
                       <div key={specialty.id} className="specialty-price-row">
                         <div className="specialty-price-main">
-                          <p className="specialty-price-name">{specialty.specialization.name}</p>
+                          {editingSpecializationId === specialty.specialization.id ? (
+                            <div className="specialty-name-edit"><input value={specializationNameInput} onChange={(e) => setSpecializationNameInput(e.target.value)} /><button type="button" onClick={() => handleUpdateSpecializationName(specialty)}>✓</button><button type="button" onClick={() => setEditingSpecializationId(null)}>×</button></div>
+                          ) : (
+                            <p className="specialty-price-name">{specialty.specialization.name}<button type="button" className="specialty-name-edit-button" title="Yo‘nalish nomini o‘zgartirish" onClick={() => { setEditingSpecializationId(specialty.specialization.id); setSpecializationNameInput(specialty.specialization.name) }}>✎</button></p>
+                          )}
                           {editingPriceId === specialty.id ? (
                             <div className="specialty-price-edit-wrap">
                               <input
@@ -1195,6 +1341,9 @@ const DoctorDashboard = () => {
                             <p>📱 {appointment.patient_info?.phone || 'Telefon yo\'q'}</p>
                             <p>🗓 {dateLabel} • ⏰ {timeLabel}</p>
                             {appointment.reason && <p>📝 {appointment.reason}</p>}
+                            {appointment.selected_specialties?.length > 0 && (
+                              <p>🩺 {appointment.selected_specialties.map((item) => item.name).join(', ')} • Jami: {Number(appointment.selected_specialties_total || appointment.consultation_fee || 0).toLocaleString()} so‘m</p>
+                            )}
                           </div>
                           <div className="appointment-actions">
                             <button
@@ -1203,23 +1352,7 @@ const DoctorDashboard = () => {
                               disabled={queueLocked}
                               title={queueLocked ? 'Faqat navbatdagi birinchi bemorni qabul qilish mumkin' : ''}
                             >
-                              Keyingi bemor
-                            </button>
-                            <button
-                              className={`btn-enter ${queueDecisionLoading[`${appointment.id}:enter`] ? 'is-loading' : ''}`}
-                              onClick={() => handleQueueDecision(appointment, 'enter')}
-                              disabled={Boolean(queueLocked || queueDecisionLoading[`${appointment.id}:enter`] || queueDecisionLoading[`${appointment.id}:wait`] || queueDecisionLoading[`${appointment.id}:cancel`])}
-                              title={queueLocked ? 'Faqat navbatdagi birinchi bemorni chaqirish mumkin' : ''}
-                            >
-                              {queueDecisionLoading[`${appointment.id}:enter`] ? 'Yuborilmoqda...' : 'Kiring'}
-                            </button>
-                            <button
-                              className={`btn-wait ${queueDecisionLoading[`${appointment.id}:wait`] ? 'is-loading' : ''}`}
-                              onClick={() => handleQueueDecision(appointment, 'wait')}
-                              disabled={Boolean(queueLocked || queueDecisionLoading[`${appointment.id}:wait`] || queueDecisionLoading[`${appointment.id}:enter`] || queueDecisionLoading[`${appointment.id}:cancel`])}
-                              title={queueLocked ? 'Faqat navbatdagi birinchi bemorga kutish beriladi' : ''}
-                            >
-                              {queueDecisionLoading[`${appointment.id}:wait`] ? 'Hisoblanmoqda...' : '15 daqiqa kuting'}
+                              {managedQueueEnabled ? 'Qabul qildim' : 'Keyingi bemor'}
                             </button>
                             {isQueueLeader ? (
                               <button
@@ -1377,23 +1510,52 @@ const DoctorDashboard = () => {
                 </div>
 
                 <div className="form-group">
-                  <label>Shikoyat</label>
-                  <input
-                    type="text"
-                    placeholder="Bemor shikoyatini kiriting"
-                    value={existingPatientSelected.complaint || ''}
-                    onChange={(e) => setExistingPatientSelected({ ...existingPatientSelected, complaint: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Tashxis (ixtiyoriy)</label>
+                  <label>Tashxis</label>
                   <input
                     type="text"
                     placeholder="Tashxis"
                     value={existingPatientSelected.diagnosis || ''}
                     onChange={(e) => setExistingPatientSelected({ ...existingPatientSelected, diagnosis: e.target.value })}
                   />
+                </div>
+                <div className="form-group existing-patient-file-field">
+                  <label>Fayl (ixtiyoriy)</label>
+                  <div className={`premium-file-upload ${existingPatientAttachment ? 'has-file' : ''}`}>
+                    <input
+                      key={existingPatientAttachment?.name || 'empty-file-input'}
+                      id="existing-patient-attachment"
+                      className="premium-file-input"
+                      type="file"
+                      accept="*/*"
+                      onChange={(e) => setExistingPatientAttachment(e.target.files?.[0] || null)}
+                    />
+                    {existingPatientAttachment ? (
+                      <div className="premium-file-selected">
+                        <div className="premium-file-icon" aria-hidden="true">✓</div>
+                        <div className="premium-file-meta">
+                          <strong>{existingPatientAttachment.name}</strong>
+                          <span>{formatFileSize(existingPatientAttachment.size)} • Yuborishga tayyor</span>
+                        </div>
+                        <button
+                          type="button"
+                          className="premium-file-remove"
+                          onClick={() => setExistingPatientAttachment(null)}
+                          aria-label="Faylni olib tashlash"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="premium-file-empty" htmlFor="existing-patient-attachment">
+                        <span className="premium-upload-mark" aria-hidden="true">↑</span>
+                        <span className="premium-file-copy">
+                          <strong>Faylni shu yerga qo‘shing</strong>
+                          <small>yoki qurilmadan tanlang • PDF, JPG, PNG, DOCX, XLSX va boshqalar</small>
+                        </span>
+                        <span className="premium-file-choose">Fayl tanlash</span>
+                      </label>
+                    )}
+                  </div>
                 </div>
                 <div className="form-group">
                   <label>Dorilar (ixtiyoriy)</label>
@@ -1404,12 +1566,13 @@ const DoctorDashboard = () => {
                   />
                 </div>
                 <div className="form-buttons">
-                  <button type="submit" className="btn-submit">Tashrif qo'shish ✅</button>
+                  <button type="submit" className="btn-submit">Yuborish ✅</button>
                   <button 
                     type="button" 
                     className="btn-cancel"
                     onClick={() => {
                       setExistingPatientSelected(null)
+                      setExistingPatientAttachment(null)
                       setShowAddPatient(false)
                     }}
                   >

@@ -51,6 +51,18 @@ const DashboardSidebar = () => {
       href: '/clinic-dashboard/appointments'
     },
     {
+      id: 'reception',
+      label: 'Qabul xonasi',
+      icon: (
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+          <rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" strokeWidth="1.5"/>
+          <path d="M6 7h8M6 10h5M6 13h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+          <circle cx="14" cy="13" r="1.5" stroke="currentColor" strokeWidth="1.5"/>
+        </svg>
+      ),
+      href: '/clinic-dashboard/reception'
+    },
+    {
       id: 'former-doctors',
       label: 'Ishdan olinganlar',
       icon: (

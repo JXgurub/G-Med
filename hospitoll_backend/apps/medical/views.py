@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import calendar
 import re
+import logging
 from uuid import uuid4
 from typing import Any, cast
 from decimal import Decimal
@@ -17,10 +18,11 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
+from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
 
 from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization, DoctorEmployment
 from apps.clinics.models import Clinic
-from apps.patients.models import Patient
+from apps.patients.models import Patient, generate_patient_number
 from apps.users.models import CustomUser
 from core.permissions.custom_permissions import IsDoctor
 from core.error_logging import ErrorLogger
@@ -34,6 +36,8 @@ from .serializers import (
     PrescriptionSerializer,
     LabTestSerializer,
 )
+
+logger = logging.getLogger(__name__)
 from .schedule_utils import validate_doctor_booking_window
 
 
@@ -207,7 +211,12 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return bool(value)
         return str(value).strip().lower() in {'1', 'true', 'yes', 'on'}
 
-    def _resolve_booking_fee(self, doctor: Doctor, specialty_price_id: str | None = None) -> tuple[Decimal | None, str | None]:
+    def _resolve_booking_fee(self, doctor: Doctor, specialty_price_id: str | None = None, specialty_price_ids=None) -> tuple[Decimal | None, str | None]:
+        if specialty_price_ids:
+            prices = DoctorSpecialization.objects.filter(id__in=specialty_price_ids, doctor=doctor, is_active=True)
+            if prices.count() != len(set(str(item) for item in specialty_price_ids)):
+                return None, 'Tanlangan yo\'nalishlardan biri topilmadi yoki faol emas.'
+            return sum((Decimal(item.consultation_fee or 0) for item in prices), Decimal('0')), None
         doctor_default_fee = _resolve_default_consultation_fee_for_doctor(doctor)
 
         if specialty_price_id:
@@ -839,10 +848,15 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         doctor = validated['doctor']
         slot = validated['slot_id']
         specialty_price_id = validated.get('specialty_price_id')
+        specialty_price_ids = validated.get('specialty_price_ids') or []
         first_name = str(validated['first_name']).strip()
         last_name = str(validated['last_name']).strip()
         phone_number = str(validated.get('phone_number', '') or '').strip()
+        patient_number = str(validated.get('patient_number', '') or '').strip()
+        date_of_birth = validated.get('date_of_birth')
         reason = str(validated.get('reason', '') or '').strip()
+        source = validated.get('source', 'online')
+        reception_staff_id = validated.get('reception_staff_id')
         phone_norm = self._normalize_phone(phone_number)
 
         if doctor.clinic_id != clinic.id:
@@ -851,6 +865,10 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
         if slot.doctor_id != doctor.id:
             return Response({'detail': 'Slot ushbu doktorga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        selected_price_ids = [str(item) for item in specialty_price_ids]
+        if specialty_price_id and str(specialty_price_id) not in selected_price_ids:
+            selected_price_ids.append(str(specialty_price_id))
 
         scheduled_dt = timezone.make_aware(datetime.combine(slot.date, slot.start_time))
         if scheduled_dt < timezone.now():
@@ -875,6 +893,16 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         )
         if booking_window_error:
             return Response({'detail': booking_window_error}, status=status.HTTP_400_BAD_REQUEST)
+
+        if specialty_price_ids:
+            valid_price_count = DoctorSpecialization.objects.filter(
+                id__in=selected_price_ids,
+                doctor=doctor,
+                is_active=True,
+                doctor_custom=True,
+            ).count()
+            if valid_price_count != len(set(selected_price_ids)):
+                return Response({'detail': "Tanlangan yo'nalish doktorga tegishli emas yoki faol emas."}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
             slot = DoctorAvailability.objects.select_for_update().get(id=slot.id)
@@ -911,10 +939,33 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 )
                 user.set_unusable_password()
                 user.save(update_fields=['password'])
-                patient = Patient.objects.create(
-                    user=user,
-                    phone_number=phone_norm
-                )
+                patient_create_kwargs = {
+                    'user': user,
+                    'phone_number': phone_norm,
+                    'date_of_birth': date_of_birth,
+                }
+                requested_patient_number = patient_number
+                if requested_patient_number:
+                    # Keep the client-visible number when possible; fallback if already used.
+                    if Patient.objects.filter(patient_number=requested_patient_number).exists():
+                        requested_patient_number = ''
+                    else:
+                        patient_create_kwargs['patient_number'] = requested_patient_number
+
+                patient = None
+                for _ in range(5):
+                    try:
+                        if requested_patient_number:
+                            patient = Patient.objects.create(**patient_create_kwargs)
+                        else:
+                            patient_create_kwargs['patient_number'] = generate_patient_number()
+                            patient = Patient.objects.create(**patient_create_kwargs)
+                        break
+                    except IntegrityError:
+                        requested_patient_number = ''
+
+                if not patient:
+                    return Response({'detail': 'Bemor raqamini yaratishda xatolik.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             else:
                 if patient.user and (patient.user.first_name != first_name or patient.user.last_name != last_name):
                     patient.user.first_name = first_name
@@ -923,29 +974,59 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 if phone_norm and patient.phone_number != phone_norm:
                     patient.phone_number = phone_norm
                     patient.save(update_fields=['phone_number'])
+                if date_of_birth and patient.date_of_birth != date_of_birth:
+                    patient.date_of_birth = date_of_birth
+                    patient.save(update_fields=['date_of_birth'])
 
             expires_at = timezone.now() + timedelta(minutes=20)
-            booking_fee, fee_error = self._resolve_booking_fee(doctor, str(specialty_price_id) if specialty_price_id else None)
+            booking_fee, fee_error = self._resolve_booking_fee(
+                doctor,
+                str(specialty_price_id) if specialty_price_id and not specialty_price_ids else None,
+                selected_price_ids if specialty_price_ids else None,
+            )
             if fee_error:
                 return Response({'detail': fee_error}, status=status.HTTP_400_BAD_REQUEST)
+            selected_specialties = list(
+                DoctorSpecialization.objects.filter(
+                    id__in=selected_price_ids,
+                    doctor=doctor,
+                    is_active=True,
+                ).select_related('specialization').values(
+                    'id', 'specialization__name', 'consultation_fee'
+                )
+            )
+
+            queue_base_qs = Appointment.objects.filter(
+                doctor=doctor,
+                scheduled_date__date=slot.date,
+            ).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
+            today_work_record = DoctorWorkRecord.objects.filter(doctor=doctor, date=slot.date).first()
+            if today_work_record and today_work_record.checked_in_at:
+                session_start = timezone.make_aware(
+                    datetime.combine(slot.date, today_work_record.checked_in_at),
+                    timezone.get_current_timezone(),
+                )
+                queue_base_qs = queue_base_qs.filter(scheduled_date__gte=session_start)
+            queue_position = queue_base_qs.count() + 1
+
             appointment = Appointment.objects.create(
                 patient=patient,
                 doctor=doctor,
                 clinic=clinic,
                 slot=slot,
-                status=Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+                status=Appointment.Status.SCHEDULED if source == 'reception' else Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
                 scheduled_date=scheduled_dt,
                 duration_minutes=slot_duration,
                 reason=reason,
                 consultation_fee=booking_fee,
-                telegram_token=uuid4(),
-                telegram_token_expires_at=expires_at,
-                queue_position=(
-                    Appointment.objects.filter(
-                        doctor=doctor,
-                        scheduled_date__date=slot.date
-                    ).exclude(status=Appointment.Status.CANCELLED).count() + 1
-                ),
+                selected_specialties=[
+                    {'id': str(item['id']), 'name': item['specialization__name'], 'price': float(item['consultation_fee'])}
+                    for item in selected_specialties
+                ],
+                reception_staff_id=reception_staff_id if source == 'reception' else None,
+                telegram_token=None if source == 'reception' else uuid4(),
+                telegram_token_expires_at=None if source == 'reception' else expires_at,
+                queue_position=queue_position,
             )
 
             patient.clinics.add(clinic)
@@ -954,7 +1035,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         queue_number = Appointment.objects.filter(
             doctor=doctor,
-            scheduled_date__date=slot.date
+            scheduled_date__date=slot.date,
+            status__in=self._queue_active_statuses(),
         ).count()
 
         # Schedule auto-cancel (best-effort)
@@ -974,9 +1056,53 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         return Response({
             'appointment': AppointmentSerializer(appointment).data,
+            'patient_number': appointment.patient.patient_number,
+            'queue_position': appointment.queue_position,
             'queue_number': queue_number,
             'telegram_bot_link': bot_link,
         }, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny], url_path='reception_cancel')
+    def reception_cancel(self, request, pk=None):
+        raw_token = str(request.headers.get('X-Reception-Session') or '').strip()
+        try:
+            from apps.clinics.models import ReceptionStaff
+            payload = signing.loads(raw_token, salt='reception-staff-session', max_age=60 * 60 * 12)
+            staff = ReceptionStaff.objects.get(id=payload['staff_id'], clinic_id=payload['clinic_id'], is_active=True)
+        except Exception:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        appointment = self.get_object()
+        if appointment.reception_staff_id != staff.id:
+            return Response({'detail': 'Bu qabulni bekor qilishga ruxsat yo\'q.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if appointment.status in [Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED]:
+            return Response({'detail': 'Bu qabulni bekor qilib bo\'lmaydi.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            appointment = Appointment.objects.select_for_update().get(id=appointment.id)
+            if appointment.status in [Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED]:
+                return Response({'detail': 'Bu qabulni bekor qilib bo\'lmaydi.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            self._free_slot_if_possible(appointment)
+            appointment.status = Appointment.Status.CANCELLED
+            appointment.save(update_fields=['status', 'updated_at'])
+
+            active_items = list(
+                Appointment.objects.select_for_update()
+                .filter(
+                    doctor_id=appointment.doctor_id,
+                    scheduled_date__date=timezone.localtime(appointment.scheduled_date).date(),
+                    status__in=self._queue_active_statuses(),
+                )
+                .order_by('scheduled_date', 'created_at', 'queue_position')
+            )
+            for idx, item in enumerate(active_items, start=1):
+                if item.queue_position != idx:
+                    item.queue_position = idx
+                    item.save(update_fields=['queue_position', 'updated_at'])
+
+        return Response({'detail': 'Qabul bekor qilindi.'}, status=status.HTTP_200_OK)
 
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
@@ -1152,6 +1278,13 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             Appointment.Status.CONFIRMED,
             Appointment.Status.WAITING,
         )
+        if (
+            doctor.clinic
+            and doctor.clinic.attendance_enabled
+            and doctor.clinic.diagnosis_entry_enabled
+            and doctor.clinic.reception_room_enabled
+        ):
+            queue_statuses = queue_statuses + (Appointment.Status.IN_PROGRESS,)
         qs = Appointment.objects.filter(
             doctor=doctor,
             scheduled_date__date=today,
@@ -1216,7 +1349,13 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 compensation_value = Decimal(active_employment.compensation_value)
 
         today_local = now.date()
-        accepted_statuses = [Appointment.Status.IN_PROGRESS, Appointment.Status.COMPLETED]
+        accepted_statuses = [
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+            Appointment.Status.WAITING,
+            Appointment.Status.IN_PROGRESS,
+            Appointment.Status.COMPLETED,
+        ]
 
         visits_qs = MedicalRecord.objects.filter(
             doctor=doctor,
@@ -1659,6 +1798,79 @@ class MedicalRecordViewSet(viewsets.ModelViewSet):
     serializer_class = MedicalRecordSerializer
     filterset_fields = ['patient', 'doctor', 'clinic', 'is_locked']
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    @staticmethod
+    def _managed_queue_enabled(appointment):
+        clinic = getattr(appointment, 'clinic', None)
+        return bool(
+            clinic
+            and clinic.attendance_enabled
+            and clinic.diagnosis_entry_enabled
+            and clinic.reception_room_enabled
+        )
+
+    def _advance_managed_queue(self, completed_appointment):
+        if not self._managed_queue_enabled(completed_appointment):
+            return None
+
+        active_statuses = (
+            Appointment.Status.SCHEDULED,
+            Appointment.Status.CONFIRMED,
+            Appointment.Status.WAITING,
+            Appointment.Status.IN_PROGRESS,
+        )
+        with transaction.atomic():
+            queue_items = list(
+                Appointment.objects.select_for_update()
+                .filter(
+                    doctor_id=completed_appointment.doctor_id,
+                    clinic_id=completed_appointment.clinic_id,
+                    scheduled_date__date=timezone.localtime().date(),
+                    status__in=active_statuses,
+                )
+                .exclude(id=completed_appointment.id)
+                .order_by('scheduled_date', 'created_at', 'queue_position')
+            )
+            if not queue_items:
+                return None
+
+            next_item = queue_items[0]
+            now = timezone.localtime().replace(second=0, microsecond=0)
+            next_item.status = Appointment.Status.IN_PROGRESS
+            next_item.auto_turn_started_at = now
+            next_item.auto_turn_prompt_sent_at = None
+            next_item.auto_turn_last_reminder_at = None
+            next_item.auto_turn_response = None
+            next_item.auto_turn_responded_at = None
+            next_item.queue_position = 1
+            next_item.save(update_fields=[
+                'status',
+                'auto_turn_started_at',
+                'auto_turn_prompt_sent_at',
+                'auto_turn_last_reminder_at',
+                'auto_turn_response',
+                'auto_turn_responded_at',
+                'queue_position',
+                'updated_at',
+            ])
+
+            for position, item in enumerate(queue_items[1:], start=2):
+                if item.queue_position != position:
+                    item.queue_position = position
+                    item.save(update_fields=['queue_position', 'updated_at'])
+
+        if next_item.telegram_chat_id:
+            try:
+                from .telegram_bot_service import TelegramBotService
+                client = TelegramBotService()._require_client()
+                client.send_message(
+                    int(next_item.telegram_chat_id),
+                    '📢 Keyingi navbat sizniki. Bemor chiqishi bilan kirishingiz mumkin.',
+                )
+            except Exception:
+                logger.exception('Managed queue next-patient notification failed')
+        return next_item
 
     def _resolve_completed_appointment_for_record(self, serializer):
         validated_data = serializer.validated_data
@@ -1703,14 +1915,39 @@ class MedicalRecordViewSet(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         self._ensure_doctor_can_practice()
-        return super().create(request, *args, **kwargs)
+        response = super().create(request, *args, **kwargs)
+        response.data['telegram_sent'] = bool(getattr(self, '_telegram_sent', False))
+        return response
 
     def perform_create(self, serializer):
         appointment = self._resolve_completed_appointment_for_record(serializer)
         if appointment:
-            serializer.save(appointment=appointment)
-            return
-        serializer.save()
+            record = serializer.save(appointment=appointment)
+        else:
+            record = serializer.save()
+
+        if record.appointment:
+            linked_appointment = (
+                Appointment.objects
+                .filter(patient_id=record.patient_id, telegram_chat_id__isnull=False)
+                .exclude(telegram_chat_id=0)
+                .order_by('-scheduled_date')
+                .first()
+            )
+            if linked_appointment and not record.appointment.telegram_chat_id:
+                record.appointment.telegram_user_id = linked_appointment.telegram_user_id
+                record.appointment.telegram_chat_id = linked_appointment.telegram_chat_id
+                record.appointment.save(update_fields=['telegram_user_id', 'telegram_chat_id', 'updated_at'])
+
+            from .telegram_bot_service import TelegramBotService
+            service = TelegramBotService()
+            self._telegram_sent = service.send_medical_record_to_patient(record)
+            try:
+                service.send_doctor_rating_prompt(record.appointment)
+            except Exception:
+                logger.exception('Medical record rating prompt failed')
+        if record.appointment:
+            self._advance_managed_queue(record.appointment)
 
     def update(self, request, *args, **kwargs):
         self._ensure_doctor_can_practice()
