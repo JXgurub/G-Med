@@ -25,6 +25,25 @@ class LoginScopedRateThrottle(ScopedRateThrottle):
         return self.cache_format % {'scope': self.scope, 'ident': composed_ident}
 
 
+class BookingScopedRateThrottle(ScopedRateThrottle):
+    """Throttle bookings by IP, phone, and endpoint instead of shared IP only."""
+
+    scope = 'booking'
+
+    def get_cache_key(self, request, view):
+        if request.method == 'OPTIONS':
+            return None
+
+        ident = self.get_ident(request)
+        try:
+            phone = str(request.data.get('phone_number') or '').strip()
+        except Exception:
+            phone = ''
+        endpoint = str(request.path or '').strip().lower()
+        composed_ident = f'{ident}:{phone}:{endpoint}' if phone else f'{ident}:{endpoint}'
+        return self.cache_format % {'scope': self.scope, 'ident': composed_ident}
+
+
 class _BasePasswordResetScopedRateThrottle(ScopedRateThrottle):
     """Throttle password reset attempts by IP+identity to reduce false positives."""
 

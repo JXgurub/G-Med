@@ -94,7 +94,7 @@ class DoctorSpecializationViewSet(viewsets.ModelViewSet):
         item, _ = DoctorSpecialization.objects.update_or_create(
             doctor=doctor,
             specialization=specialization,
-            defaults={'consultation_fee': price, 'doctor_custom': True, 'is_active': True},
+            defaults={'consultation_fee': price, 'doctor_custom': True, 'custom_name': name, 'is_active': True},
         )
         return Response(self.get_serializer(item).data, status=status.HTTP_201_CREATED)
 

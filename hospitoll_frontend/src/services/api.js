@@ -77,6 +77,16 @@ const isAuthEndpoint = (endpoint) => {
   return endpoint.startsWith('/users/token') || endpoint.startsWith('/users/patient-token')
 }
 
+const isPublicNoAuthEndpoint = (endpoint) => {
+  const normalizedEndpoint = String(endpoint || '').split('?')[0]
+  return [
+    '/medical/appointments/online_booking/',
+    '/medical/appointments/public_booking/',
+    '/doctors/availability/available/',
+    '/site-settings/system-alerts/client/',
+  ].some((prefix) => normalizedEndpoint.startsWith(prefix))
+}
+
 const shouldReportApiError = (endpoint, status) => {
   if (!endpoint || endpoint.includes(CLIENT_ALERT_ENDPOINT)) return false
 
@@ -183,16 +193,17 @@ export const api = {
     const isFormData = typeof FormData !== 'undefined' && options?.body instanceof FormData
     const providedHeaders = options.headers || {}
     const method = (options.method || 'GET').toUpperCase()
+    const shouldSkipJwtAuth = Boolean(options._skipAuth) || isPublicNoAuthEndpoint(endpoint)
     const shouldSetJsonContentType = !isFormData && !Object.prototype.hasOwnProperty.call(providedHeaders, 'Content-Type')
     const contentTypeHeader = shouldSetJsonContentType ? { 'Content-Type': 'application/json' } : {}
-    
+
     try {
       const response = await fetch(url, {
         ...options,
         cache: method === 'GET' ? 'no-store' : options.cache,
         headers: {
           ...contentTypeHeader,
-          ...(token && { 'Authorization': `Bearer ${token}` }),
+          ...(!shouldSkipJwtAuth && token && { 'Authorization': `Bearer ${token}` }),
           ...providedHeaders,
         },
         credentials: 'include',
@@ -367,6 +378,10 @@ export const receptionStaffApi = {
   update: (id, data) => api.patch(`/clinics/reception-staff/${id}/`, data),
   delete: (id) => api.delete(`/clinics/reception-staff/${id}/`),
   getDoctors: () => api.getWithHeaders('/clinics/reception-staff/doctors/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
+  searchPatients: (query = '') => api.getWithHeaders('/clinics/reception-staff/patients/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }, { q: query }),
+  getOnlineAppointments: () => api.getWithHeaders('/clinics/reception-staff/online-appointments/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
+  confirmOnlineAppointment: (id) => api.request(`/clinics/reception-staff/online-appointments/${id}/confirm/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
+  cancelOnlineAppointment: (id) => api.request(`/clinics/reception-staff/online-appointments/${id}/cancel/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
   getStats: (params) => api.getWithHeaders('/clinics/reception-staff/stats/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }, params),
   getMe: () => api.getWithHeaders('/clinics/reception-staff/me/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
   checkIn: () => api.request('/clinics/reception-staff/check-in/', { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
@@ -484,7 +499,42 @@ export const medicalApi = {
   notifyAppointmentReady: (id, data = {}) => api.post(`/medical/appointments/${id}/notify_ready/`, data),
   queueDecision: (id, data = {}) => api.post(`/medical/appointments/${id}/queue_decision/`, data),
   receptionCancelAppointment: (id) => api.request(`/medical/appointments/${id}/reception_cancel/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
-  bookOnline: (data) => api.post('/medical/appointments/online_booking/', data),
+  receptionAddServices: (id, specialty_price_ids) => api.request(`/medical/appointments/${id}/reception-add-services/`, {
+    method: 'POST',
+    headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ specialty_price_ids }),
+  }),
+  bookOnline: (data) => api.request('/medical/appointments/online_booking/', {
+    method: 'POST',
+    body: JSON.stringify(data),
+    _skipAuth: true,
+  }),
+}
+
+export const printersApi = {
+  getStatus: () => api.getWithHeaders('/printers/devices/my-status/', {
+    'X-Reception-Session': localStorage.getItem('reception_session_token') || '',
+  }),
+  register: (data) => api.request('/printers/devices/register/', {
+    method: 'POST',
+    headers: {
+      'X-Reception-Session': localStorage.getItem('reception_session_token') || '',
+    },
+    body: JSON.stringify(data),
+  }),
+  testPrint: () => api.request('/printers/jobs/test-print/', {
+    method: 'POST',
+    headers: {
+      'X-Reception-Session': localStorage.getItem('reception_session_token') || '',
+    },
+    _skipAuth: true,
+  }),
+  retryJob: (jobId) => api.request(`/printers/jobs/${jobId}/retry/`, {
+    method: 'POST',
+    headers: {
+      'X-Reception-Session': localStorage.getItem('reception_session_token') || '',
+    },
+  }),
 }
 
 export const medicalRecordsApi = {

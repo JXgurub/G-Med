@@ -30,11 +30,21 @@ class DoctorSpecializationSerializer(serializers.ModelSerializer):
         write_only=True,
         source='specialization'
     )
-    
+    display_name = serializers.SerializerMethodField()
+
     class Meta:
         model = DoctorSpecialization
-        fields = ['id', 'specialization', 'specialization_id', 'consultation_fee', 'doctor_custom', 'is_active', 'created_at', 'updated_at']
+        fields = ['id', 'specialization', 'specialization_id', 'custom_name', 'display_name', 'consultation_fee', 'doctor_custom', 'is_active', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_display_name(self, obj):
+        return obj.custom_name or (obj.specialization.name if obj.specialization else '')
+
+    def validate_custom_name(self, value):
+        # Renaming is scoped to the doctor's own row; shared taxonomy stays untouched.
+        if value and not (self.instance.doctor_custom if self.instance else self.initial_data.get('doctor_custom')):
+            raise serializers.ValidationError("Faqat o'zingiz qo'shgan yo'nalish nomini o'zgartira olasiz.")
+        return value
 
 
 class DoctorSerializer(serializers.ModelSerializer):

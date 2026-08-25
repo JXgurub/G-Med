@@ -59,6 +59,7 @@ INSTALLED_APPS = [
     'apps.search',
     'apps.analytics',
     'apps.site_settings',
+    'apps.printers',
 ]
 
 MIDDLEWARE = [
@@ -177,6 +178,7 @@ REST_FRAMEWORK = {
         'anon': '120/hour',
         'user': '6000/hour',
         'auth': '20/minute',
+        'booking': '30/minute',
         'password_reset': '5/hour',
         'password_reset_request': '5/hour',
         'password_reset_verify': '30/hour',

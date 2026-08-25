@@ -151,6 +151,39 @@ class Clinic(models.Model):
         default=False,
         help_text=_("Qabul xonasi navbat logikasini yoqish")
     )
+    queue_ticket_clinic_name = models.CharField(
+        _('queue ticket clinic name'),
+        max_length=255,
+        blank=True,
+        default='',
+        help_text=_("Navbat qog'ozida ko'rsatiladigan klinika nomi")
+    )
+    queue_ticket_clinic_address = models.CharField(
+        _('queue ticket clinic address'),
+        max_length=500,
+        blank=True,
+        default='',
+        help_text=_("Navbat qog'ozida ko'rsatiladigan klinika manzili")
+    )
+    queue_ticket_contact_url = models.CharField(
+        _('queue ticket contact url'),
+        max_length=255,
+        blank=True,
+        default='',
+        help_text=_("Navbat qog'ozida ko'rsatiladigan Telegram/Instagram/yoki URL")
+    )
+    QUEUE_TICKET_NUMBER_SIZE_CHOICES = (
+        ('small', _('Kichik')),
+        ('medium', _('O‘rta')),
+        ('large', _('Katta')),
+    )
+    queue_ticket_number_size = models.CharField(
+        _('queue ticket number size'),
+        max_length=10,
+        choices=QUEUE_TICKET_NUMBER_SIZE_CHOICES,
+        default='large',
+        help_text=_('Navbat raqamining qog‘ozdagi shrift o‘lchami')
+    )
     amount = models.DecimalField(
         _('payment amount'),
         max_digits=12,

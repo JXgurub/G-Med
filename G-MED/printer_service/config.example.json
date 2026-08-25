@@ -1,0 +1,13 @@
+{
+  "api_base_url": "https://g-med.uz",
+  "device_token": "replace_with_unique_clinic_device_token",
+  "clinic_id": "00000000-0000-0000-0000-000000000000",
+  "reception_room_id": "00000000-0000-0000-0000-000000000000",
+  "service_name": "GMedPrinterService",
+  "heartbeat_interval_seconds": 20,
+  "poll_interval_seconds": 5,
+  "printer_name_contains": ["xp-80c", "xprinter", "xp-q200", "xp-q200ii", "thermal receipt"],
+  "preferred_printer_name": "XP-80C",
+  "allow_default_printer": true,
+  "log_file": "printer_service.log"
+}

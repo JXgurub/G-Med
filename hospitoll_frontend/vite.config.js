@@ -16,7 +16,7 @@ export default defineConfig({
         theme_color: '#10b981',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: '/',
+        start_url: '/reception-login',
         scope: '/',
         icons: [
           {

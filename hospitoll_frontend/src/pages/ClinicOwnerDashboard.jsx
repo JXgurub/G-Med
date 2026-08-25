@@ -212,6 +212,10 @@ const ClinicOwnerDashboard = () => {
     phone_number: DEFAULT_PHONE_PREFIX,
     email: '',
     website: '',
+    queue_ticket_clinic_name: '',
+    queue_ticket_clinic_address: '',
+    queue_ticket_contact_url: '',
+    queue_ticket_number_size: 'large',
     working_hours: '09:00 - 18:00',
     attendance_enabled: false,
     diagnosis_entry_enabled: false,
@@ -433,6 +437,10 @@ const ClinicOwnerDashboard = () => {
       phone_number: clinicOwner.phone_number || clinicOwner.clinicPhone || DEFAULT_PHONE_PREFIX,
       email: clinicOwner.email || '',
       website: clinicOwner.website || '',
+      queue_ticket_clinic_name: clinicOwner.queue_ticket_clinic_name || clinicOwner.name || clinicOwner.clinicName || '',
+      queue_ticket_clinic_address: clinicOwner.queue_ticket_clinic_address || clinicOwner.address || clinicOwner.location || '',
+      queue_ticket_contact_url: clinicOwner.queue_ticket_contact_url || clinicOwner.website || '',
+      queue_ticket_number_size: clinicOwner.queue_ticket_number_size || 'large',
       working_hours: clinicOwner.working_hours || '09:00 - 18:00',
       attendance_enabled: Boolean(clinicOwner.attendance_enabled),
       diagnosis_entry_enabled: Boolean(clinicOwner.diagnosis_entry_enabled),
@@ -558,6 +566,10 @@ const ClinicOwnerDashboard = () => {
         phone_number: settingsForm.phone_number,
         email: normalizeEmailWithDefaultDomain(settingsForm.email),
         website: settingsForm.website,
+        queue_ticket_clinic_name: settingsForm.queue_ticket_clinic_name,
+        queue_ticket_clinic_address: settingsForm.queue_ticket_clinic_address,
+        queue_ticket_contact_url: settingsForm.queue_ticket_contact_url,
+        queue_ticket_number_size: settingsForm.queue_ticket_number_size,
         working_hours: workingHoursValue,
         attendance_enabled: settingsForm.attendance_enabled,
         diagnosis_entry_enabled: settingsForm.diagnosis_entry_enabled,
@@ -1882,6 +1894,57 @@ const ClinicOwnerDashboard = () => {
                         placeholder="https://"
                         disabled={settingsSaving}
                       />
+                    </div>
+
+                    <div className="queue-ticket-settings full-width">
+                      <h3>Navbat qog‘ozi dizayni</h3>
+                      <p className="queue-ticket-settings-help">Bu ma'lumotlar printerdan chiqadigan navbat talonida ko‘rinadi.</p>
+
+                      <div className="form-group full-width">
+                        <label>Navbat qog‘ozi: Klinika nomi</label>
+                        <input
+                          type="text"
+                          value={settingsForm.queue_ticket_clinic_name}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, queue_ticket_clinic_name: e.target.value })}
+                          placeholder="Masalan: G-MED FAMILY CLINIC"
+                          disabled={settingsSaving}
+                        />
+                      </div>
+
+                      <div className="form-group full-width">
+                        <label>Navbat qog‘ozi: Manzil</label>
+                        <input
+                          type="text"
+                          value={settingsForm.queue_ticket_clinic_address}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, queue_ticket_clinic_address: e.target.value })}
+                          placeholder="Klinika manzilini kiriting"
+                          disabled={settingsSaving}
+                        />
+                      </div>
+
+                      <div className="form-group full-width">
+                        <label>Navbat qog‘ozi: Telegram/Instagram/URL</label>
+                        <input
+                          type="text"
+                          value={settingsForm.queue_ticket_contact_url}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, queue_ticket_contact_url: e.target.value })}
+                          placeholder="@clinic_tg yoki instagram.com/clinic"
+                          disabled={settingsSaving}
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label>Navbat raqami shrift o‘lchami</label>
+                        <select
+                          value={settingsForm.queue_ticket_number_size}
+                          onChange={(e) => setSettingsForm({ ...settingsForm, queue_ticket_number_size: e.target.value })}
+                          disabled={settingsSaving}
+                        >
+                          <option value="small">Kichik</option>
+                          <option value="medium">O‘rta</option>
+                          <option value="large">Katta</option>
+                        </select>
+                      </div>
                     </div>
 
                     <div className="form-group full-width">

@@ -24,6 +24,7 @@ from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, Do
 from apps.clinics.models import Clinic
 from apps.patients.models import Patient, generate_patient_number
 from apps.users.models import CustomUser
+from apps.users.throttles import BookingScopedRateThrottle
 from core.permissions.custom_permissions import IsDoctor
 from core.error_logging import ErrorLogger
 from .models import Appointment, MedicalRecord, Diagnosis, Prescription, LabTest
@@ -89,6 +90,83 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
     filterset_class = Filter
     permission_classes = [permissions.IsAuthenticated]
+
+    def _enqueue_reception_print_job(self, appointment: Appointment, clinic: Clinic, doctor: Doctor) -> None:
+        # Printing is best-effort; booking flow should remain successful even if printer queue creation fails.
+        try:
+            from apps.printers.models import PrintJob, PrinterDevice
+
+            printer_device = PrinterDevice.objects.filter(clinic=clinic).order_by('-updated_at').first()
+            reception_room = printer_device.reception_room if printer_device else None
+
+            patient = getattr(appointment, 'patient', None)
+            patient_user = getattr(patient, 'user', None)
+            patient_name = (
+                f"{getattr(patient_user, 'first_name', '')} {getattr(patient_user, 'last_name', '')}".strip()
+                if patient_user else ''
+            ) or 'Bemor'
+            patient_number = str(getattr(patient, 'patient_number', '') or '').strip() or '-'
+
+            selected_specialties = list(getattr(appointment, 'selected_specialties', []) or [])
+            specialty_names = [
+                str(item.get('name') or '').strip()
+                for item in selected_specialties
+                if str(item.get('name') or '').strip()
+            ]
+            directions_text = ', '.join(specialty_names) if specialty_names else 'Umumiy konsultatsiya'
+
+            total_fee = Decimal(appointment.consultation_fee or 0)
+            if total_fee <= 0 and selected_specialties:
+                total_fee = sum((Decimal(str(item.get('price') or 0)) for item in selected_specialties), Decimal('0'))
+            if total_fee == total_fee.to_integral_value():
+                fee_text = f"{int(total_fee):,}".replace(',', ' ')
+            else:
+                fee_text = f"{total_fee:.2f}"
+
+            clinic_print_name = str(getattr(clinic, 'queue_ticket_clinic_name', '') or '').strip() or clinic.name
+            clinic_print_address = str(getattr(clinic, 'queue_ticket_clinic_address', '') or '').strip() or clinic.address
+            clinic_print_contact = str(getattr(clinic, 'queue_ticket_contact_url', '') or '').strip() or str(clinic.website or '').strip()
+            doctor_name = ''
+            if getattr(doctor, 'user', None):
+                doctor_name = doctor.user.get_full_name() or doctor.user.username
+            doctor_name = doctor_name or 'Doktor'
+
+            payload = {
+                'queue_number': str(appointment.queue_position or 0),
+                'queue_number_size': str(getattr(clinic, 'queue_ticket_number_size', 'large') or 'large'),
+                'lines': [
+                    '================================',
+                    f'{clinic_print_name}',
+                    '         NAVBAT TALONI',
+                    '================================',
+                    f'Bemor: {patient_name}',
+                    f'Bemor ID: {patient_number}',
+                    f"Davolash yo\'nalishlari: {directions_text}",
+                    f'Doktor: {doctor_name}',
+                    'NAVBAT RAQAMI',
+                    str(appointment.queue_position or 0),
+                    f"Jami to\'lov: {fee_text} so\'m",
+                    f'Sana: {timezone.localtime(appointment.scheduled_date).strftime("%d.%m.%Y")}',
+                    f'Vaqt: {timezone.localtime(appointment.scheduled_date).strftime("%H:%M")}',
+                    f'Manzil: {clinic_print_address}',
+                    f'Aloqa: {clinic_print_contact}' if clinic_print_contact else '',
+                    '',
+                    'Xizmatdan foydalanganingiz uchun rahmat!',
+                    '================================',
+                ]
+            }
+
+            PrintJob.objects.create(
+                clinic=clinic,
+                reception_room=reception_room,
+                printer_device=printer_device,
+                appointment=appointment,
+                created_by=None,
+                status='pending',
+                payload=payload,
+            )
+        except Exception:
+            logger.exception('Failed to enqueue reception print job for appointment %s', appointment.id)
 
     def _require_active_assigned_doctor(self, request):
         doctor = getattr(request.user, 'doctor', None)
@@ -837,7 +915,12 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             'history': history,
         })
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    @action(
+        detail=False,
+        methods=['post'],
+        permission_classes=[permissions.AllowAny],
+        throttle_classes=[BookingScopedRateThrottle],
+    )
     def online_booking(self, request):
         serializer = OnlineAppointmentSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -846,7 +929,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         clinic = validated['clinic']
         doctor = validated['doctor']
-        slot = validated['slot_id']
+        slot = validated.get('slot_id')
         specialty_price_id = validated.get('specialty_price_id')
         specialty_price_ids = validated.get('specialty_price_ids') or []
         first_name = str(validated['first_name']).strip()
@@ -863,36 +946,48 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Doktor klinikaga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
         if not doctor.is_active or not clinic.is_active_status:
             return Response({'detail': 'Doktor yoki klinika faol emas.'}, status=status.HTTP_400_BAD_REQUEST)
-        if slot.doctor_id != doctor.id:
+        is_reception_booking = source == 'reception'
+        if not is_reception_booking and not slot:
+            return Response({'detail': 'Tanlangan vaqt kerak.'}, status=status.HTTP_400_BAD_REQUEST)
+        if slot and slot.doctor_id != doctor.id:
             return Response({'detail': 'Slot ushbu doktorga tegishli emas.'}, status=status.HTTP_400_BAD_REQUEST)
 
         selected_price_ids = [str(item) for item in specialty_price_ids]
         if specialty_price_id and str(specialty_price_id) not in selected_price_ids:
             selected_price_ids.append(str(specialty_price_id))
 
-        scheduled_dt = timezone.make_aware(datetime.combine(slot.date, slot.start_time))
-        if scheduled_dt < timezone.now():
-            return Response({'detail': 'Tanlangan vaqt allaqachon o‘tib ketgan.'}, status=status.HTTP_400_BAD_REQUEST)
+        booking_now = timezone.now()
+        if is_reception_booking:
+            scheduled_dt = booking_now
+            booking_date = timezone.localtime(booking_now).date()
+            slot_duration = 0
+        else:
+            scheduled_dt = timezone.make_aware(datetime.combine(slot.date, slot.start_time))
+            if scheduled_dt < booking_now:
+                return Response({'detail': 'Tanlangan vaqt allaqachon o‘tib ketgan.'}, status=status.HTTP_400_BAD_REQUEST)
+            booking_date = slot.date
 
         # Limit booking to today and tomorrow only
         max_date = timezone.localdate() + timedelta(days=1)
-        if slot.date > max_date:
+        if booking_date > max_date:
             return Response({'detail': 'Onlayn navbatni faqat bugun va ertaga olish mumkin.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        slot_duration = int((
-            datetime.combine(slot.date, slot.end_time) - datetime.combine(slot.date, slot.start_time)
-        ).total_seconds() / 60)
-        if slot_duration <= 0:
-            return Response({'detail': 'Tanlangan slot muddati noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not is_reception_booking:
+            slot_duration = int((
+                datetime.combine(slot.date, slot.end_time) - datetime.combine(slot.date, slot.start_time)
+            ).total_seconds() / 60)
+            if slot_duration <= 0:
+                return Response({'detail': 'Tanlangan slot muddati noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        booking_window_error = self._validate_doctor_booking_window(
-            doctor=doctor,
-            target_date=slot.date,
-            target_time=slot.start_time,
-            duration_minutes=slot_duration,
-        )
-        if booking_window_error:
-            return Response({'detail': booking_window_error}, status=status.HTTP_400_BAD_REQUEST)
+        if not is_reception_booking:
+            booking_window_error = self._validate_doctor_booking_window(
+                doctor=doctor,
+                target_date=slot.date,
+                target_time=slot.start_time,
+                duration_minutes=slot_duration,
+            )
+            if booking_window_error:
+                return Response({'detail': booking_window_error}, status=status.HTTP_400_BAD_REQUEST)
 
         if specialty_price_ids:
             valid_price_count = DoctorSpecialization.objects.filter(
@@ -905,11 +1000,21 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 return Response({'detail': "Tanlangan yo'nalish doktorga tegishli emas yoki faol emas."}, status=status.HTTP_400_BAD_REQUEST)
 
         with transaction.atomic():
-            slot = DoctorAvailability.objects.select_for_update().get(id=slot.id)
-            if slot.status != 'available':
-                return Response({'detail': 'Tanlangan vaqt band qilingan.'}, status=status.HTTP_409_CONFLICT)
+            if slot:
+                slot = DoctorAvailability.objects.select_for_update().get(id=slot.id)
+                if slot.status != 'available':
+                    return Response({'detail': 'Tanlangan vaqt band qilingan.'}, status=status.HTTP_409_CONFLICT)
 
-            patient = Patient.objects.select_related('user').filter(phone_number=phone_norm).first()
+            patient = Patient.objects.select_related('user').filter(
+                clinics=clinic,
+                phone_number=phone_norm,
+            ).first() if phone_norm else None
+            if not patient and is_reception_booking and date_of_birth:
+                normalized_name = f'{first_name} {last_name}'.strip().casefold()
+                patient = next((candidate for candidate in Patient.objects.select_related('user').filter(
+                    clinics=clinic,
+                    date_of_birth=date_of_birth,
+                ) if candidate.user and candidate.user.get_full_name().strip().casefold() == normalized_name), None)
             if patient:
                 if getattr(patient, 'requires_deposit', False):
                     return Response({'detail': 'Keyingi navbat uchun depozit talab qilinadi.'}, status=status.HTTP_409_CONFLICT)
@@ -917,7 +1022,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     patient=patient,
                     doctor=doctor,
                     status='scheduled',
-                    scheduled_date__date=slot.date
+                    scheduled_date__date=booking_date
                 ).exists()
                 if exists:
                     return Response(
@@ -944,25 +1049,14 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     'phone_number': phone_norm,
                     'date_of_birth': date_of_birth,
                 }
-                requested_patient_number = patient_number
-                if requested_patient_number:
-                    # Keep the client-visible number when possible; fallback if already used.
-                    if Patient.objects.filter(patient_number=requested_patient_number).exists():
-                        requested_patient_number = ''
-                    else:
-                        patient_create_kwargs['patient_number'] = requested_patient_number
-
                 patient = None
                 for _ in range(5):
                     try:
-                        if requested_patient_number:
-                            patient = Patient.objects.create(**patient_create_kwargs)
-                        else:
-                            patient_create_kwargs['patient_number'] = generate_patient_number()
-                            patient = Patient.objects.create(**patient_create_kwargs)
+                        patient_create_kwargs['patient_number'] = generate_patient_number()
+                        patient = Patient.objects.create(**patient_create_kwargs)
                         break
                     except IntegrityError:
-                        requested_patient_number = ''
+                        continue
 
                 if not patient:
                     return Response({'detail': 'Bemor raqamini yaratishda xatolik.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -992,18 +1086,18 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     doctor=doctor,
                     is_active=True,
                 ).select_related('specialization').values(
-                    'id', 'specialization__name', 'consultation_fee'
+                    'id', 'custom_name', 'specialization__name', 'consultation_fee'
                 )
             )
 
             queue_base_qs = Appointment.objects.filter(
                 doctor=doctor,
-                scheduled_date__date=slot.date,
+                scheduled_date__date=booking_date,
             ).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
-            today_work_record = DoctorWorkRecord.objects.filter(doctor=doctor, date=slot.date).first()
+            today_work_record = DoctorWorkRecord.objects.filter(doctor=doctor, date=booking_date).first()
             if today_work_record and today_work_record.checked_in_at:
                 session_start = timezone.make_aware(
-                    datetime.combine(slot.date, today_work_record.checked_in_at),
+                    datetime.combine(booking_date, today_work_record.checked_in_at),
                     timezone.get_current_timezone(),
                 )
                 queue_base_qs = queue_base_qs.filter(scheduled_date__gte=session_start)
@@ -1013,14 +1107,14 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 patient=patient,
                 doctor=doctor,
                 clinic=clinic,
-                slot=slot,
+                slot=slot if not is_reception_booking else None,
                 status=Appointment.Status.SCHEDULED if source == 'reception' else Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
                 scheduled_date=scheduled_dt,
                 duration_minutes=slot_duration,
                 reason=reason,
                 consultation_fee=booking_fee,
                 selected_specialties=[
-                    {'id': str(item['id']), 'name': item['specialization__name'], 'price': float(item['consultation_fee'])}
+                    {'id': str(item['id']), 'name': item['custom_name'] or item['specialization__name'], 'price': float(item['consultation_fee'])}
                     for item in selected_specialties
                 ],
                 reception_staff_id=reception_staff_id if source == 'reception' else None,
@@ -1030,14 +1124,18 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
 
             patient.clinics.add(clinic)
-            slot.status = 'booked'
-            slot.save(update_fields=['status'])
+            if slot:
+                slot.status = 'booked'
+                slot.save(update_fields=['status'])
 
         queue_number = Appointment.objects.filter(
             doctor=doctor,
-            scheduled_date__date=slot.date,
+            scheduled_date__date=booking_date,
             status__in=self._queue_active_statuses(),
         ).count()
+
+        if source == 'reception':
+            self._enqueue_reception_print_job(appointment=appointment, clinic=clinic, doctor=doctor)
 
         # Schedule auto-cancel (best-effort)
         try:
@@ -1104,6 +1202,62 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         return Response({'detail': 'Qabul bekor qilindi.'}, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny], url_path='reception-add-services')
+    def reception_add_services(self, request, pk=None):
+        raw_token = str(
+            request.headers.get('X-Reception-Session')
+            or request.META.get('HTTP_X_RECEPTION_SESSION')
+            or ''
+        ).strip()
+        try:
+            from apps.clinics.models import ReceptionStaff
+            payload = signing.loads(raw_token, salt='reception-staff-session', max_age=60 * 60 * 12)
+            staff = ReceptionStaff.objects.get(id=payload['staff_id'], clinic_id=payload['clinic_id'], is_active=True)
+        except Exception:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        requested_ids = {str(value) for value in (request.data.get('specialty_price_ids') or [])}
+        if not requested_ids:
+            return Response({'detail': "Kamida bitta xizmatni tanlang."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            appointment = Appointment.objects.select_for_update().select_related('doctor', 'clinic').get(id=pk)
+            if appointment.clinic_id != staff.clinic_id or appointment.reception_staff_id != staff.id:
+                return Response({'detail': 'Bu qabulga xizmat qo‘shishga ruxsat yo‘q.'}, status=status.HTTP_403_FORBIDDEN)
+            if appointment.status in [Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED]:
+                return Response({'detail': 'Yakunlangan yoki bekor qilingan qabulga xizmat qo‘shib bo‘lmaydi.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            current_ids = {str(item.get('id')) for item in (appointment.selected_specialties or []) if item.get('id')}
+            additions = DoctorSpecialization.objects.filter(
+                id__in=requested_ids - current_ids,
+                doctor_id=appointment.doctor_id,
+                is_active=True,
+                doctor_custom=True,
+            ).select_related('specialization')
+            if additions.count() != len(requested_ids - current_ids):
+                return Response({'detail': "Tanlangan xizmat doktorga tegishli emas yoki faol emas."}, status=status.HTTP_400_BAD_REQUEST)
+
+            added_total = Decimal('0')
+            selected = list(appointment.selected_specialties or [])
+            for item in additions:
+                price = Decimal(item.consultation_fee or 0)
+                added_total += price
+                selected.append({
+                    'id': str(item.id),
+                    'name': item.custom_name or item.specialization.name,
+                    'price': float(price),
+                })
+
+            appointment.selected_specialties = selected
+            appointment.consultation_fee = Decimal(appointment.consultation_fee or 0) + added_total
+            appointment.save(update_fields=['selected_specialties', 'consultation_fee', 'updated_at'])
+
+        return Response({
+            'detail': 'Xizmatlar saqlandi.',
+            'consultation_fee': float(appointment.consultation_fee),
+            'selected_specialties': appointment.selected_specialties,
+        }, status=status.HTTP_200_OK)
+
 
     @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
     def public_booking(self, request):
@@ -1116,8 +1270,9 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         clinic = validated['clinic']
         doctor = validated['doctor']
         specialty_price_id = validated.get('specialty_price_id')
-        full_name = str(validated['full_name'])
+        full_name = str(validated.get('full_name') or f"{validated.get('first_name', '')} {validated.get('last_name', '')}").strip()
         phone_number = str(validated['phone_number'])
+        date_of_birth = validated.get('date_of_birth')
         target_date = validated['date']
         target_time = validated['time']
         reason = str(validated.get('reason') or '').strip()
@@ -1158,7 +1313,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         with transaction.atomic():
             # Find or create patient by phone
-            patient = Patient.objects.select_related('user').filter(phone_number=phone_norm).first()
+            patient = Patient.objects.select_related('user').filter(clinics=clinic, phone_number=phone_norm).first()
             if patient and getattr(patient, 'requires_deposit', False):
                 return Response({'detail': 'Keyingi navbat uchun depozit talab qilinadi.'}, status=status.HTTP_409_CONFLICT)
 
@@ -1178,6 +1333,9 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 user.set_unusable_password()
                 user.save(update_fields=['password'])
                 patient = Patient.objects.create(user=user, phone_number=phone_norm)
+                if date_of_birth:
+                    patient.date_of_birth = date_of_birth
+                    patient.save(update_fields=['date_of_birth'])
             else:
                 if patient.user and (patient.user.first_name != first_name or patient.user.last_name != last_name):
                     patient.user.first_name = first_name
@@ -1186,6 +1344,9 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 if phone_norm and patient.phone_number != phone_norm:
                     patient.phone_number = phone_norm
                     patient.save(update_fields=['phone_number'])
+                if date_of_birth and patient.date_of_birth != date_of_birth:
+                    patient.date_of_birth = date_of_birth
+                    patient.save(update_fields=['date_of_birth'])
 
             # Ensure slot exists (idempotent) then lock it
             slot_defaults = {
@@ -1261,6 +1422,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
         return Response({
             'appointment': AppointmentSerializer(appointment).data,
+            'patient_number': appointment.patient.patient_number,
+            'queue_number': appointment.queue_position,
             'telegram_bot_link': bot_link,
         }, status=status.HTTP_201_CREATED)
 

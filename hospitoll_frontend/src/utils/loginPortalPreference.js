@@ -6,6 +6,7 @@ export const LOGIN_PORTAL_PATHS = Object.freeze({
   clinic: '/clinic-owner-login',
   pharmacy: '/pharmacy-owner-login',
   admin: '/admin-login',
+  reception: '/reception-login',
 })
 
 const normalizePortal = (portalOrPath) => {

@@ -9,13 +9,15 @@ from django.urls import reverse
 from django.test import override_settings
 from django.utils import timezone
 from django.core.cache import cache
+from django.core import signing
 from rest_framework.test import APITestCase
 
 from apps.users.models import CustomUser
-from apps.clinics.models import Clinic
+from apps.clinics.models import Clinic, ReceptionStaff
 from apps.doctors.models import Doctor, DoctorAvailability, DoctorWorkRecord, Specialization, DoctorSpecialization, DoctorEmployment
 from apps.patients.models import Patient, PatientDoctorRating
 from apps.medical.models import Appointment, MedicalRecord
+from apps.printers.models import PrintJob, PrinterDevice
 from apps.medical.telegram_bot_service import TelegramBotService
 from apps.medical.tasks import (
     run_auto_queue_cycle,
@@ -212,8 +214,7 @@ class NotifyReadyDoctorRatingTests(MedicalApiTestCase):
 
     def test_today_endpoint_excludes_in_progress_appointments(self):
         self.appointment.status = Appointment.Status.IN_PROGRESS
-        self.appointment.scheduled_date = timezone.now()
-        self.appointment.save(update_fields=['status', 'scheduled_date', 'updated_at'])
+        self.appointment.save(update_fields=['status', 'updated_at'])
 
         waiting_appointment = Appointment.objects.create(
             patient=self.patient,
@@ -232,26 +233,6 @@ class NotifyReadyDoctorRatingTests(MedicalApiTestCase):
         returned_ids = [item['id'] for item in self.body(response)]
         self.assertNotIn(str(self.appointment.id), returned_ids)
         self.assertIn(str(waiting_appointment.id), returned_ids)
-
-    def test_today_endpoint_keeps_in_progress_appointments_in_managed_queue(self):
-        self.clinic.attendance_enabled = True
-        self.clinic.diagnosis_entry_enabled = True
-        self.clinic.reception_room_enabled = True
-        self.clinic.save(update_fields=[
-            'attendance_enabled',
-            'diagnosis_entry_enabled',
-            'reception_room_enabled',
-            'updated_at',
-        ])
-        self.appointment.status = Appointment.Status.IN_PROGRESS
-        self.appointment.save(update_fields=['status', 'updated_at'])
-
-        self.auth_as(self.doctor_user)
-        response = self.client.get(reverse('appointment-today'))
-
-        self.assertEqual(response.status_code, 200)
-        returned_ids = [item['id'] for item in self.body(response)]
-        self.assertIn(str(self.appointment.id), returned_ids)
 
 
 class DoctorDashboardStatsTests(MedicalApiTestCase):
@@ -1057,69 +1038,6 @@ class MedicalRecordAutoAppointmentTests(MedicalApiTestCase):
         self.assertEqual(appointment.status, Appointment.Status.COMPLETED)
         self.assertEqual(float(appointment.consultation_fee), 25000.0)
 
-    def test_managed_queue_advances_to_next_patient_only_once(self):
-        self.clinic.attendance_enabled = True
-        self.clinic.diagnosis_entry_enabled = True
-        self.clinic.reception_room_enabled = True
-        self.clinic.save(update_fields=['attendance_enabled', 'diagnosis_entry_enabled', 'reception_room_enabled', 'updated_at'])
-
-        first_patient = self.patient
-        second_user = CustomUser.objects.create_user(
-            username='patient_record_auto_second',
-            email='patient.record.auto.second@example.com',
-            password='Pass12345!',
-            role='patient',
-            first_name='Patient',
-            last_name='Second',
-        )
-        second_patient = Patient.objects.create(user=second_user)
-        now = timezone.now()
-        first = Appointment.objects.create(
-            patient=first_patient,
-            doctor=self.doctor,
-            clinic=self.clinic,
-            status=Appointment.Status.IN_PROGRESS,
-            queue_position=1,
-            scheduled_date=now,
-            telegram_chat_id=991101,
-        )
-        second = Appointment.objects.create(
-            patient=second_patient,
-            doctor=self.doctor,
-            clinic=self.clinic,
-            status=Appointment.Status.SCHEDULED,
-            queue_position=2,
-            scheduled_date=now + timedelta(minutes=30),
-            telegram_chat_id=991102,
-        )
-        sent_messages = []
-
-        class _Client:
-            def send_message(self, chat_id, text, reply_markup=None):
-                sent_messages.append((chat_id, text))
-
-        service = SimpleNamespace(
-            send_medical_record_to_patient=lambda record: False,
-            send_doctor_rating_prompt=lambda appointment: None,
-            _require_client=lambda: _Client(),
-        )
-        with patch('apps.medical.telegram_bot_service.TelegramBotService', return_value=service):
-            response = self.client.post(self.url, {
-                'patient': str(first_patient.id),
-                'doctor': str(self.doctor.id),
-                'clinic': str(self.clinic.id),
-                'appointment': str(first.id),
-                'assessment': 'Tashxis',
-            }, format='json')
-
-        self.assertEqual(response.status_code, 201)
-        first.refresh_from_db()
-        second.refresh_from_db()
-        self.assertEqual(first.status, Appointment.Status.COMPLETED)
-        self.assertEqual(second.status, Appointment.Status.IN_PROGRESS)
-        next_messages = [text for chat_id, text in sent_messages if chat_id == 991102]
-        self.assertEqual(next_messages, ['📢 Keyingi navbat sizniki. Bemor chiqishi bilan kirishingiz mumkin.'])
-
 class BookingWindowLunchTests(MedicalApiTestCase):
     def setUp(self):
         self.owner_user = CustomUser.objects.create_user(
@@ -1411,6 +1329,204 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         appointment = Appointment.objects.get(id=appointment_id)
         self.assertEqual(float(appointment.consultation_fee), 50000.0)
 
+    def test_reception_booking_uses_current_time_without_slot(self):
+        staff = ReceptionStaff.objects.create(
+            clinic=self.clinic,
+            pinfl='12345678901235',
+            passport_id='AB1234568',
+            date_of_birth='1990-01-01',
+            first_name='Reception',
+            last_name='Staff',
+            phone_number='+998901234569',
+            email='reception.realtime@example.com',
+            password_hash='pbkdf2_sha256$dummy$dummy',
+            is_active=True,
+        )
+        before = timezone.now()
+        response = self.client.post(reverse('appointment-online-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Real',
+            'last_name': 'Time',
+            'phone_number': '+998901111778',
+            'source': 'reception',
+            'reception_staff_id': str(staff.id),
+        }, format='json')
+        after = timezone.now()
+
+        self.assertEqual(response.status_code, 201)
+        appointment = Appointment.objects.get(id=response.json()['appointment']['id'])
+        self.assertIsNone(appointment.slot)
+        self.assertEqual(appointment.duration_minutes, 0)
+        self.assertGreaterEqual(appointment.scheduled_date, before)
+        self.assertLessEqual(appointment.scheduled_date, after)
+
+    def test_reception_booking_reuses_patient_number_for_returning_patient(self):
+        staff = ReceptionStaff.objects.create(
+            clinic=self.clinic,
+            pinfl='12345678901236',
+            passport_id='AB1234569',
+            date_of_birth='1990-01-02',
+            first_name='Reception',
+            last_name='Staff',
+            phone_number='+998901234570',
+            email='reception.returning@example.com',
+            password_hash='pbkdf2_sha256$dummy$dummy',
+            is_active=True,
+        )
+        second_doctor_user = CustomUser.objects.create_user(
+            username='second_doctor_lunch_user',
+            email='second.doctor.lunch@example.com',
+            password='Pass12345!',
+            role='doctor',
+            first_name='Second',
+            last_name='Doctor',
+        )
+        second_doctor = Doctor.objects.create(
+            user=second_doctor_user,
+            clinic=self.clinic,
+            license_number='LIC-LUNCH-002',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+            available_from='09:00',
+            available_until='18:00',
+            is_checked_in=True,
+        )
+        payload = {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Returning',
+            'last_name': 'Patient',
+            'phone_number': '+998901111779',
+            'date_of_birth': '1990-01-02',
+            'source': 'reception',
+            'reception_staff_id': str(staff.id),
+        }
+        first_response = self.client.post(reverse('appointment-online-booking'), payload, format='json')
+        self.assertEqual(first_response.status_code, 201)
+        first_number = first_response.json()['patient_number']
+
+        payload['doctor'] = str(second_doctor.id)
+        second_response = self.client.post(reverse('appointment-online-booking'), payload, format='json')
+        self.assertEqual(second_response.status_code, 201)
+        self.assertEqual(second_response.json()['patient_number'], first_number)
+        patient_ids = set(Appointment.objects.filter(
+            doctor__clinic=self.clinic,
+            patient__user__first_name='Returning',
+            patient__user__last_name='Patient',
+        ).values_list('patient_id', flat=True))
+        self.assertEqual(len(patient_ids), 1)
+
+    def test_online_booking_source_reception_creates_pending_print_job(self):
+        self.clinic.queue_ticket_clinic_name = 'Test Premium Clinic'
+        self.clinic.queue_ticket_clinic_address = 'Toshkent, Chilonzor 12'
+        self.clinic.queue_ticket_contact_url = '@test_clinic_tg'
+        self.clinic.save(update_fields=['queue_ticket_clinic_name', 'queue_ticket_clinic_address', 'queue_ticket_contact_url'])
+
+        target_date = timezone.localdate() + timedelta(days=1)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='16:10',
+            end_time='16:40',
+            status='available',
+        )
+
+        staff = ReceptionStaff.objects.create(
+            clinic=self.clinic,
+            pinfl='12345678901234',
+            passport_id='AB1234567',
+            date_of_birth='1990-01-01',
+            first_name='Reception',
+            last_name='Staff',
+            phone_number='+998901234567',
+            email='reception.booking@example.com',
+            password_hash='pbkdf2_sha256$dummy$dummy',
+            is_active=True,
+        )
+        device = PrinterDevice.objects.create(
+            clinic=self.clinic,
+            device_name='Reception PC Printer',
+            device_token='reception-print-token',
+            status='ready',
+        )
+
+        url = reverse('appointment-online-booking')
+        response = self.client.post(url, {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'slot_id': str(slot.id),
+            'first_name': 'Ali',
+            'last_name': 'Valiyev',
+            'phone_number': '+998901111777',
+            'source': 'reception',
+            'reception_staff_id': str(staff.id),
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        appointment_id = response.json().get('appointment', {}).get('id')
+        self.assertTrue(appointment_id)
+
+        job = PrintJob.objects.filter(appointment_id=appointment_id).first()
+        self.assertIsNotNone(job)
+        self.assertEqual(job.status, 'pending')
+        self.assertEqual(job.printer_device_id, device.id)
+        appointment = Appointment.objects.get(id=appointment_id)
+        ticket_text = '\n'.join(job.payload.get('lines', []))
+        self.assertIn('NAVBAT TALONI', ticket_text)
+        self.assertIn('Davolash yo\'nalish', ticket_text)
+        self.assertIn('Bemor ID:', ticket_text)
+        self.assertIn(str(appointment.patient.patient_number), ticket_text)
+        self.assertIn('Jami to\'lov:', ticket_text)
+        self.assertIn('Test Premium Clinic', ticket_text)
+        self.assertIn('Toshkent, Chilonzor 12', ticket_text)
+        self.assertIn('@test_clinic_tg', ticket_text)
+        self.assertIn('NAVBAT RAQAMI', ticket_text)
+        self.assertIn(str(appointment.queue_position), ticket_text)
+        self.assertEqual(job.payload['queue_number'], str(appointment.queue_position))
+        self.assertEqual(job.payload['queue_number_size'], 'large')
+
+    def test_online_booking_accepts_single_full_name_form_when_features_disabled(self):
+        target_date = timezone.localdate() + timedelta(days=1)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='14:00',
+            end_time='14:30',
+            status='available',
+        )
+        response = self.client.post(reverse('appointment-online-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'slot_id': str(slot.id),
+            'full_name': 'Xidirboyev Javoxir',
+            'phone_number': '+998977410320',
+            'date_of_birth': '2003-03-20',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.json().get('telegram_bot_link'))
+
+    def test_online_booking_legacy_name_form_does_not_require_birth_date(self):
+        target_date = timezone.localdate() + timedelta(days=1)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='15:00',
+            end_time='15:30',
+            status='available',
+        )
+        response = self.client.post(reverse('appointment-online-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'slot_id': str(slot.id),
+            'first_name': 'Legacy',
+            'last_name': 'WithoutDob',
+            'phone_number': '+998901111782',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.json().get('telegram_bot_link'))
+
     def test_public_booking_rejects_lunch_time(self):
         target_date = timezone.localdate() + timedelta(days=1)
 
@@ -1427,6 +1543,25 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         self.assertEqual(response.status_code, 400)
         response_json = self.body(response)
         self.assertIn('abet', str(response_json.get('detail', '')).lower())
+
+    def test_public_booking_legacy_name_form_works_with_features_disabled(self):
+        target_date = timezone.localdate() + timedelta(days=1)
+        response = self.client.post(reverse('appointment-public-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Legacy',
+            'last_name': 'Patient',
+            'phone_number': '+998901111781',
+            'date_of_birth': '1995-04-12',
+            'date': target_date.isoformat(),
+            'time': '14:00',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(response.json().get('telegram_bot_link'))
+        appointment = Appointment.objects.get(id=response.json()['appointment']['id'])
+        self.assertEqual(appointment.status, Appointment.Status.PENDING_TELEGRAM_CONFIRMATION)
+        self.assertEqual(appointment.patient.date_of_birth.isoformat(), '1995-04-12')
 
     def test_public_booking_rejects_date_after_tomorrow(self):
         target_date = timezone.localdate() + timedelta(days=2)

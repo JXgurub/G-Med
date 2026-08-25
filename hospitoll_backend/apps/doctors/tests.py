@@ -761,6 +761,26 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             curr_start = datetime.strptime(ordered[idx]['start_time'][:5], '%H:%M')
             self.assertGreaterEqual(curr_start, prev_end)
 
+    def test_available_endpoint_read_only_does_not_create_slots(self):
+        target_date = self._next_weekday()
+
+        self.doctor.available_from = datetime.strptime('09:00', '%H:%M').time()
+        self.doctor.available_until = datetime.strptime('11:00', '%H:%M').time()
+        self.doctor.working_days = 'Mon,Tue,Wed,Thu,Fri'
+        self.doctor.slot_minutes = 20
+        self.doctor.save(update_fields=['available_from', 'available_until', 'working_days', 'slot_minutes', 'updated_at'])
+
+        url = reverse('doctor-availability-available')
+        response = self.client.get(url, {
+            'doctor': str(self.doctor.id),
+            'date': target_date.isoformat(),
+            'read_only': '1',
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [])
+        self.assertFalse(DoctorAvailability.objects.filter(doctor=self.doctor, date=target_date).exists())
+
     def test_available_endpoint_uses_doctor_40_minute_interval(self):
         target_date = self._next_weekday()
 

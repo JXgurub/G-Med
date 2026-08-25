@@ -27,6 +27,7 @@ urlpatterns = [
     path('api/v1/payments/', include('apps.payments.urls')),
     path('api/v1/analytics/', include('apps.analytics.urls')),
     path('api/v1/site-settings/', include('apps.site_settings.urls')),
+    path('api/v1/printers/', include('apps.printers.urls')),
     path('api/v1/', include('apps.search.urls')),
 ]
 

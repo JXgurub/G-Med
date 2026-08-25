@@ -6,7 +6,8 @@ import './ClinicDetailPage.css'
 const INITIAL_BOOKING_FORM = {
   firstName: '',
   lastName: '',
-  phone: '+998'
+  phone: '+998',
+  dateOfBirth: ''
 }
 
 const formatDateInputValue = (value) => {
@@ -46,6 +47,7 @@ const ClinicDetailPage = () => {
   })
   const [bookingLoading, setBookingLoading] = useState(false)
   const [bookingMessage, setBookingMessage] = useState(null)
+  const [bookingResult, setBookingResult] = useState(null)
   const { today: minBookingDate, tomorrow: maxBookingDate } = getDateWindow()
 
   useEffect(() => {
@@ -165,6 +167,7 @@ const ClinicDetailPage = () => {
     setSelectedSpecialtyPriceIds([])
     setSelectedSlot(null)
     setBookingMessage(null)
+    setBookingResult(null)
     setAvailabilityNotice('')
     setBookingForm({ ...INITIAL_BOOKING_FORM })
     const today = getDateWindow().today
@@ -188,13 +191,17 @@ const ClinicDetailPage = () => {
     const lastName = bookingForm.lastName.trim()
     const phoneNumber = bookingForm.phone.replace(/[^\d+]/g, '')
     const phoneDigits = phoneNumber.replace(/\D/g, '')
+    const legacyFlowEnabled =
+      clinic?.attendance_enabled === false &&
+      clinic?.diagnosis_entry_enabled === false &&
+      clinic?.reception_room_enabled === false
 
     if (!selectedDoctor || !selectedSlot) {
       setBookingMessage('Iltimos, bo\'sh vaqtni tanlang')
       return
     }
     if (!firstName || !lastName || !phoneNumber || phoneNumber === '+998') {
-      setBookingMessage('Barcha maydonlarni to\'ldiring (telefon ham majburiy)')
+      setBookingMessage('Ism, familiya va telefonni to\'ldiring')
       return
     }
     if (!/^\+998\d{9}$/.test(phoneNumber) || phoneDigits.length !== 12) {
@@ -216,14 +223,18 @@ const ClinicDetailPage = () => {
         slot_id: selectedSlot.id,
         first_name: firstName,
         last_name: lastName,
-        phone_number: phoneNumber
+        phone_number: phoneNumber,
+        ...(bookingForm.dateOfBirth ? { date_of_birth: bookingForm.dateOfBirth } : {})
       })
-      if (result?.telegram_bot_link) {
-        // Redirect to Telegram for confirmation
-        window.location.href = result.telegram_bot_link
-        return
+      setBookingResult(result)
+      if (legacyFlowEnabled && result?.telegram_bot_link) {
+        setBookingMessage('Navbat olindi. Telegram botga yo\'naltirilmoqda...')
+        setTimeout(() => {
+          window.location.assign(result.telegram_bot_link)
+        }, 300)
+      } else {
+        setBookingMessage('Navbat olindi. Klinikaga borib navbatingizni Telegram botda tasdiqlang.')
       }
-      setBookingMessage(`Muvaffaqiyatli! Sizning navbat raqamingiz: ${result.queue_number}`)
       setBookingForm({ ...INITIAL_BOOKING_FORM })
       setSelectedSlot(null)
       await fetchAvailability(selectedDoctor.id, selectedDate)
@@ -379,7 +390,7 @@ const ClinicDetailPage = () => {
                             checked ? current.filter((id) => id !== itemId) : [...current, itemId]
                           ))}
                         />
-                        <span>{item.specialization?.name}</span>
+                        <span>{item.custom_name || item.specialization?.name}</span>
                         <strong>{Number(item.consultation_fee || 0).toLocaleString()} so'm</strong>
                       </label>
                     )
@@ -436,7 +447,6 @@ const ClinicDetailPage = () => {
                     required
                   />
                 </div>
-
                 <div className="booking-section">
                   <label>Familiya</label>
                   <input
@@ -458,7 +468,23 @@ const ClinicDetailPage = () => {
                     required
                   />
                 </div>
+                <div className="booking-section">
+                  <label>Tug‘ilgan sana (ixtiyoriy)</label>
+                  <input
+                    type="date"
+                    value={bookingForm.dateOfBirth}
+                    onChange={(e) => setBookingForm({ ...bookingForm, dateOfBirth: e.target.value })}
+                  />
+                </div>
               </div>
+
+              {bookingResult && (
+                <div className="booking-result-card">
+                  <strong>Bemor raqami: {bookingResult.patient_number}</strong>
+                  <span>Joriy navbat raqami: {bookingResult.queue_number}</span>
+                  <a href={bookingResult.telegram_bot_link} target="_blank" rel="noreferrer">Telegram botda tasdiqlash</a>
+                </div>
+              )}
 
               {bookingMessage && <div className="booking-message">{bookingMessage}</div>}
             </div>

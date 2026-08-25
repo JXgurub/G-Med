@@ -26,6 +26,8 @@ htmlcov/
 hospitoll_backend/.venv312/
 hospitoll_backend/.env
 hospitoll_frontend/.env
+G-MED/printer_service/config.json
+G-MED/printer_service.zip
 
 # Runtime data
 **/logs/

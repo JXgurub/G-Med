@@ -482,6 +482,12 @@ class DoctorSpecialization(models.Model):
         default=False,
         help_text=_("Doktorning o'zi qo'shgan yo'nalish")
     )
+    custom_name = models.CharField(
+        _('custom name'),
+        max_length=255,
+        blank=True,
+        help_text=_("Doktor o'zi kiritgan yo'nalish nomi (faqat doctor_custom uchun, umumiy ixtisoslik ro'yxatiga ta'sir qilmaydi)")
+    )
     is_active = models.BooleanField(
         _('active'),
         default=True,

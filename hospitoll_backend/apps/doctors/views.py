@@ -1068,6 +1068,7 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
         date_str = request.query_params.get('date')
         requested_duration = request.query_params.get('duration_minutes')
         include_meta = str(request.query_params.get('include_meta', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
+        read_only = str(request.query_params.get('read_only', '')).strip().lower() in {'1', 'true', 'yes', 'on'}
 
         if not doctor_id or not date_str:
             return Response({'detail': 'doctor va date parametrlari kerak.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1148,36 +1149,37 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
 
         desired_by_start = {start_time: end_time for start_time, end_time in desired_slots}
 
-        for slot in existing_slots:
-            if slot.status != 'available':
-                continue
+        if not read_only:
+            for slot in existing_slots:
+                if slot.status != 'available':
+                    continue
 
-            target_end = desired_by_start.get(slot.start_time)
-            if not target_end:
-                slot.delete()
-                continue
+                target_end = desired_by_start.get(slot.start_time)
+                if not target_end:
+                    slot.delete()
+                    continue
 
-            if slot.end_time != target_end:
-                slot.end_time = target_end
-                slot.save(update_fields=['end_time'])
+                if slot.end_time != target_end:
+                    slot.end_time = target_end
+                    slot.save(update_fields=['end_time'])
 
-        existing_available_starts = set(
-            DoctorAvailability.objects.filter(
-                doctor=doctor,
-                date=target_date,
-                status='available',
-            ).values_list('start_time', flat=True)
-        )
-        for start_time, end_time in desired_slots:
-            if start_time in existing_available_starts:
-                continue
-            DoctorAvailability.objects.create(
-                doctor=doctor,
-                date=target_date,
-                start_time=start_time,
-                end_time=end_time,
-                status='available',
+            existing_available_starts = set(
+                DoctorAvailability.objects.filter(
+                    doctor=doctor,
+                    date=target_date,
+                    status='available',
+                ).values_list('start_time', flat=True)
             )
+            for start_time, end_time in desired_slots:
+                if start_time in existing_available_starts:
+                    continue
+                DoctorAvailability.objects.create(
+                    doctor=doctor,
+                    date=target_date,
+                    start_time=start_time,
+                    end_time=end_time,
+                    status='available'
+                )
 
         slots = DoctorAvailability.objects.filter(
             doctor=doctor,

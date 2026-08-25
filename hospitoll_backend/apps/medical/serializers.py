@@ -66,17 +66,30 @@ class AppointmentSerializer(serializers.ModelSerializer):
 class OnlineAppointmentSerializer(serializers.Serializer):
     clinic = serializers.PrimaryKeyRelatedField(queryset=Clinic.objects.all())
     doctor = serializers.PrimaryKeyRelatedField(queryset=Doctor.objects.all())
-    slot_id = serializers.PrimaryKeyRelatedField(queryset=DoctorAvailability.objects.all())
+    slot_id = serializers.PrimaryKeyRelatedField(queryset=DoctorAvailability.objects.all(), required=False, allow_null=True)
     specialty_price_id = serializers.UUIDField(required=False, allow_null=True)
     specialty_price_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=False)
-    first_name = serializers.CharField(max_length=150)
-    last_name = serializers.CharField(max_length=150)
+    full_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     phone_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     patient_number = serializers.CharField(max_length=20, required=False, allow_blank=True)
     date_of_birth = serializers.DateField(required=False, allow_null=True)
     reason = serializers.CharField(required=False, allow_blank=True)
     source = serializers.ChoiceField(choices=['online', 'reception'], default='online', required=False)
     reception_staff_id = serializers.UUIDField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        full_name = str(attrs.get('full_name') or '').strip()
+        first_name = str(attrs.get('first_name') or '').strip()
+        last_name = str(attrs.get('last_name') or '').strip()
+        if full_name and not first_name:
+            parts = full_name.split()
+            attrs['first_name'] = parts[0]
+            attrs['last_name'] = ' '.join(parts[1:]) or '-'
+        elif not first_name:
+            raise serializers.ValidationError({'full_name': 'F.I.O yoki ism-familiya kiritilishi kerak.'})
+        return attrs
 
 
 class PublicTelegramBookingSerializer(serializers.Serializer):
@@ -85,11 +98,24 @@ class PublicTelegramBookingSerializer(serializers.Serializer):
     clinic = serializers.PrimaryKeyRelatedField(queryset=Clinic.objects.all())
     doctor = serializers.PrimaryKeyRelatedField(queryset=Doctor.objects.all())
     specialty_price_id = serializers.UUIDField(required=False, allow_null=True)
-    full_name = serializers.CharField(max_length=255)
+    full_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     phone_number = serializers.CharField(max_length=20)
+    date_of_birth = serializers.DateField(required=False, allow_null=True)
     date = serializers.DateField()
     time = serializers.TimeField()
     reason = serializers.CharField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        full_name = str(attrs.get('full_name') or '').strip()
+        first_name = str(attrs.get('first_name') or '').strip()
+        last_name = str(attrs.get('last_name') or '').strip()
+        if not full_name and not first_name:
+            raise serializers.ValidationError({'full_name': 'F.I.O yoki ism-familiya kiritilishi kerak.'})
+        if not full_name:
+            attrs['full_name'] = f'{first_name} {last_name}'.strip()
+        return attrs
 
 
 class MedicalRecordSerializer(serializers.ModelSerializer):

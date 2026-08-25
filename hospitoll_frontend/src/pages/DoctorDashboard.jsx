@@ -422,11 +422,11 @@ const DoctorDashboard = () => {
     }
   }
 
-  const handleUpdateSpecializationName = async (specialization) => {
+  const handleUpdateSpecializationName = async (specialty) => {
     const name = specializationNameInput.trim()
     if (!name) return showNotice('Yo\'nalish nomini kiriting', 'warning')
     try {
-      await doctorsApi.updateSpecialization(specialization.specialization.id, { name })
+      await doctorsApi.updateSpecialtyPrice(specialty.id, { custom_name: name })
       await loadSpecialtyPrices()
       setEditingSpecializationId(null)
       showNotice('Yo\'nalish nomi yangilandi ✅', 'success')
@@ -1183,10 +1183,10 @@ const DoctorDashboard = () => {
                     {specialtyPrices.map((specialty) => (
                       <div key={specialty.id} className="specialty-price-row">
                         <div className="specialty-price-main">
-                          {editingSpecializationId === specialty.specialization.id ? (
+                          {editingSpecializationId === specialty.id ? (
                             <div className="specialty-name-edit"><input value={specializationNameInput} onChange={(e) => setSpecializationNameInput(e.target.value)} /><button type="button" onClick={() => handleUpdateSpecializationName(specialty)}>✓</button><button type="button" onClick={() => setEditingSpecializationId(null)}>×</button></div>
                           ) : (
-                            <p className="specialty-price-name">{specialty.specialization.name}<button type="button" className="specialty-name-edit-button" title="Yo‘nalish nomini o‘zgartirish" onClick={() => { setEditingSpecializationId(specialty.specialization.id); setSpecializationNameInput(specialty.specialization.name) }}>✎</button></p>
+                            <p className="specialty-price-name">{specialty.custom_name || specialty.specialization.name}<button type="button" className="specialty-name-edit-button" title="Yo‘nalish nomini o‘zgartirish" onClick={() => { setEditingSpecializationId(specialty.id); setSpecializationNameInput(specialty.custom_name || specialty.specialization.name) }}>✎</button></p>
                           )}
                           {editingPriceId === specialty.id ? (
                             <div className="specialty-price-edit-wrap">

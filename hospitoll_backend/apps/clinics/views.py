@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
 from core.permissions.custom_permissions import IsAdministrator, IsClinicOwner
+from apps.users.throttles import LoginScopedRateThrottle
 from .models import ReceptionStaff, ReceptionStaffWorkRecord, Clinic, ClinicDepartment, ClinicService, ClinicStaffMessage, ClinicStaffMessageRecipient
 from .serializers import (
     ClinicSerializer,
@@ -237,7 +238,13 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         except Exception:
             return None
 
-    @action(detail=False, methods=['post'], url_path='login', permission_classes=[permissions.AllowAny])
+    @action(
+        detail=False,
+        methods=['post'],
+        url_path='login',
+        permission_classes=[permissions.AllowAny],
+        throttle_classes=[LoginScopedRateThrottle],
+    )
     def login(self, request):
         email = str(request.data.get('email') or '').strip().lower()
         password = str(request.data.get('password') or '')
@@ -250,7 +257,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         token = signing.dumps({'staff_id': str(staff.id), 'clinic_id': str(staff.clinic_id)}, salt='reception-staff-session')
         return Response({'token': token, 'staff': ReceptionStaffSerializer(staff).data})
 
-    @action(detail=False, methods=['get'], url_path='me', permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=['get'], url_path='me', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def me(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -258,7 +265,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(timezone.localdate())})
         return Response(serializer.data)
 
-    @action(detail=False, methods=['post'], url_path='check-in', permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=['post'], url_path='check-in', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def check_in(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -278,7 +285,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(today)})
         return Response({'detail': 'Ishga kelish vaqti saqlandi.', 'staff': serializer.data})
 
-    @action(detail=False, methods=['post'], url_path='check-out', permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=['post'], url_path='check-out', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def check_out(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -298,7 +305,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(today)})
         return Response({'detail': 'Ishdan ketish vaqti saqlandi.', 'staff': serializer.data})
 
-    @action(detail=False, methods=['get'], url_path='doctors', permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=['get'], url_path='doctors', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def doctors(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -315,7 +322,109 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             ]
         return Response(serialized_doctors)
 
-    @action(detail=False, methods=['get'], url_path='stats', permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=['get'], url_path='patients', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    def patients(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        from apps.patients.models import Patient
+        from django.db.models import Q
+
+        query = str(request.query_params.get('q') or '').strip()
+        patients = Patient.objects.filter(
+            clinics=staff.clinic,
+        ).select_related('user').order_by('user__first_name', 'user__last_name')
+        if query:
+            parts = query.split()
+            name_query = Q(user__first_name__icontains=query) | Q(user__last_name__icontains=query)
+            if len(parts) > 1:
+                name_query |= Q(
+                    user__first_name__icontains=parts[0],
+                    user__last_name__icontains=' '.join(parts[1:]),
+                )
+            patients = patients.filter(
+                Q(phone_number__icontains=query) | Q(patient_number__icontains=query) | name_query
+            )
+
+        return Response([
+            {
+                'id': str(patient.id),
+                'patient_number': patient.patient_number,
+                'full_name': patient.user.get_full_name() if patient.user else 'Bemor',
+                'phone_number': patient.phone_number or '',
+                'date_of_birth': patient.date_of_birth.isoformat() if patient.date_of_birth else None,
+            }
+            for patient in patients[:50]
+        ])
+
+    @action(detail=False, methods=['get'], url_path='online-appointments', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    def online_appointments(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+        from apps.medical.models import Appointment
+        appointments = Appointment.objects.filter(
+            clinic=staff.clinic,
+            status=Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+        ).select_related('patient__user', 'doctor__user').order_by('scheduled_date', 'created_at')
+        return Response([{
+            'id': str(item.id),
+            'patient_name': item.patient.user.get_full_name() if item.patient and item.patient.user else 'Bemor',
+            'patient_number': item.patient.patient_number if item.patient else '',
+            'phone': item.patient.phone_number if item.patient else '',
+            'date_of_birth': item.patient.date_of_birth.isoformat() if item.patient and item.patient.date_of_birth else None,
+            'doctor_id': str(item.doctor_id),
+            'doctor_name': item.doctor.user.get_full_name() if item.doctor and item.doctor.user else 'Doktor',
+            'selected_specialties': item.selected_specialties or [],
+            'amount': float(item.consultation_fee or 0),
+            'queue_position': item.queue_position,
+            'scheduled_date': item.scheduled_date.isoformat(),
+        } for item in appointments[:100]])
+
+    def _resolve_online_appointment(self, request, appointment_id):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return None, Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+        from apps.medical.models import Appointment
+        appointment = Appointment.objects.select_related('clinic', 'doctor', 'patient').filter(
+            id=appointment_id, clinic=staff.clinic, status=Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+        ).first()
+        if not appointment:
+            return None, Response({'detail': 'Onlayn navbat topilmadi yoki allaqachon ko‘rib chiqilgan.'}, status=status.HTTP_404_NOT_FOUND)
+        return (staff, appointment), None
+
+    @action(detail=True, methods=['post'], url_path='online-appointments/confirm', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    def confirm_online_appointment(self, request, pk=None):
+        resolved, error = self._resolve_online_appointment(request, pk)
+        if error:
+            return error
+        staff, appointment = resolved
+        from django.utils import timezone
+        from apps.medical.models import Appointment
+        appointment.status = Appointment.Status.SCHEDULED
+        appointment.reception_staff = staff
+        appointment.telegram_token = None
+        appointment.telegram_token_expires_at = None
+        appointment.save(update_fields=['status', 'reception_staff', 'telegram_token', 'telegram_token_expires_at', 'updated_at'])
+        from apps.medical.views import AppointmentViewSet
+        AppointmentViewSet()._enqueue_reception_print_job(appointment, appointment.clinic, appointment.doctor)
+        return Response({'detail': 'Onlayn navbat tasdiqlandi va printerga yuborildi.', 'queue_position': appointment.queue_position})
+
+    @action(detail=True, methods=['post'], url_path='online-appointments/cancel', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    def cancel_online_appointment(self, request, pk=None):
+        resolved, error = self._resolve_online_appointment(request, pk)
+        if error:
+            return error
+        _, appointment = resolved
+        appointment.status = appointment.Status.CANCELLED
+        appointment.save(update_fields=['status', 'updated_at'])
+        if appointment.slot_id:
+            appointment.slot.status = 'available'
+            appointment.slot.save(update_fields=['status'])
+        return Response({'detail': 'Onlayn navbat bekor qilindi.'})
+
+    @action(detail=False, methods=['get'], url_path='stats', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def stats(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -351,18 +460,30 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         doctor_accepted_patients = appointments.filter(status__in=doctor_accepted_statuses)
         cancelled = appointments.filter(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
         month_start = report_date.replace(day=1)
-        monthly = Appointment.objects.filter(clinic_id=staff.clinic_id, scheduled_date__date__gte=month_start).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
+        if month_start.month == 12:
+            month_end = month_start.replace(year=month_start.year + 1, month=1)
+        else:
+            month_end = month_start.replace(month=month_start.month + 1)
+
+        monthly = Appointment.objects.filter(
+            clinic_id=staff.clinic_id,
+            scheduled_date__date__gte=month_start,
+            scheduled_date__date__lt=month_end,
+        ).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])
         map_item = lambda item: {
             'id': str(item.id),
             'queue_position': int(item.queue_position or 0),
             'patient_name': item.patient.user.get_full_name() if item.patient and item.patient.user else 'Bemor',
             'phone': item.patient.phone_number if item.patient else '',
+            'patient_number': item.patient.patient_number if item.patient else '',
+            'date_of_birth': item.patient.date_of_birth.isoformat() if item.patient and item.patient.date_of_birth else None,
             'birth_year': (
                 item.patient.birth_year
                 if item.patient and item.patient.birth_year
                 else (item.patient.date_of_birth.year if item.patient and item.patient.date_of_birth else None)
             ),
             'doctor_name': item.doctor.user.get_full_name() if item.doctor and item.doctor.user else 'Doktor',
+            'doctor_id': str(item.doctor_id) if item.doctor_id else None,
             'selected_specialties': item.selected_specialties or [],
             'amount': float(item.consultation_fee or 0),
             'time': timezone.localtime(item.scheduled_date).strftime('%H:%M')

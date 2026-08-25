@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { doctorsApi, receptionStaffApi, medicalApi, normalizeUzPhoneWithPrefix } from '../services/api'
+import { doctorsApi, receptionStaffApi, medicalApi, printersApi, normalizeUzPhoneWithPrefix } from '../services/api'
 import './ReceptionDashboard.css'
 
 const buildTempPatientNumber = () => `GM${Date.now().toString().slice(-8)}`
@@ -30,7 +30,9 @@ const ReceptionDashboard = () => {
   }
 
   const [doctors, setDoctors] = useState([])
-  const [slots, setSlots] = useState([])
+  const [patientSearch, setPatientSearch] = useState('')
+  const [patientResults, setPatientResults] = useState([])
+  const [patientLookupLoading, setPatientLookupLoading] = useState(false)
   const [form, setForm] = useState({
     full_name: '',
     phone_number: '',
@@ -51,6 +53,19 @@ const ReceptionDashboard = () => {
   const [attendanceLoading, setAttendanceLoading] = useState(false)
   const [lastQueueNumber, setLastQueueNumber] = useState(null)
   const [cancelLoadingId, setCancelLoadingId] = useState('')
+  const [cancelConfirmPatient, setCancelConfirmPatient] = useState(null)
+  const [servicePatient, setServicePatient] = useState(null)
+  const [serviceSelection, setServiceSelection] = useState([])
+  const [serviceSaving, setServiceSaving] = useState(false)
+  const [onlineAppointments, setOnlineAppointments] = useState([])
+  const [onlineAppointmentId, setOnlineAppointmentId] = useState('')
+  const [showPrinterPanel, setShowPrinterPanel] = useState(false)
+  const [printerStatus, setPrinterStatus] = useState({ devices: [] })
+  const [printerLoading, setPrinterLoading] = useState(false)
+  const [printerTesting, setPrinterTesting] = useState(false)
+  const [printerRegistering, setPrinterRegistering] = useState(false)
+  const [printerToken, setPrinterToken] = useState(() => localStorage.getItem('gmed_printer_device_token') || '')
+  const [printerTokenCopied, setPrinterTokenCopied] = useState(false)
 
   const selectedDoctor = doctors.find((item) => String(item.id) === String(form.doctor))
   const specialtyPrices = selectedDoctor?.specialty_prices || []
@@ -58,8 +73,45 @@ const ReceptionDashboard = () => {
   const totalPrice = selectedPrices.reduce((sum, item) => sum + Number(item.consultation_fee || 0), 0)
   const todayIso = getLocalDateValue()
 
+  useEffect(() => {
+    const query = patientSearch.trim()
+    const timer = window.setTimeout(() => {
+      setPatientLookupLoading(true)
+      receptionStaffApi.searchPatients(query)
+        .then((data) => setPatientResults(Array.isArray(data) ? data : []))
+        .catch(() => setPatientResults([]))
+        .finally(() => setPatientLookupLoading(false))
+    }, query ? 250 : 0)
+    return () => window.clearTimeout(timer)
+  }, [patientSearch])
+
+  useEffect(() => {
+    const name = form.full_name.trim().toLowerCase()
+    const phone = form.phone_number.trim()
+    const birthDate = form.date_of_birth
+    if (!name || !phone || !birthDate) return
+
+    const timer = window.setTimeout(() => {
+      receptionStaffApi.searchPatients(phone)
+        .then((data) => {
+          const match = (Array.isArray(data) ? data : []).find((patient) => (
+            String(patient.phone_number || '').replace(/\D/g, '').endsWith(phone)
+            && String(patient.full_name || '').trim().toLowerCase() === name
+            && patient.date_of_birth === birthDate
+          ))
+          setGeneratedPatientNumber(match?.patient_number || buildTempPatientNumber())
+        })
+        .catch(() => {})
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [form.full_name, form.phone_number, form.date_of_birth])
+
   const loadTodayStats = () => {
     receptionStaffApi.getStats({ date: todayIso }).then(setStats).catch(() => setStats(null))
+  }
+
+  const loadOnlineAppointments = () => {
+    receptionStaffApi.getOnlineAppointments().then((data) => setOnlineAppointments(Array.isArray(data) ? data : [])).catch(() => setOnlineAppointments([]))
   }
 
   const loadAttendance = () => {
@@ -75,6 +127,29 @@ const ReceptionDashboard = () => {
       })
   }
 
+  const loadPrinterStatus = () => {
+    setPrinterLoading(true)
+    printersApi.getStatus()
+      .then((data) => {
+        const devices = Array.isArray(data?.devices) ? data.devices : []
+        setPrinterStatus({ devices })
+        const activeDevice = devices.find((device) => device?.device_token) || null
+        if (activeDevice?.device_token) {
+          persistPrinterToken(activeDevice.device_token)
+        }
+      })
+      .catch(() => {
+        setPrinterStatus({ devices: [] })
+      })
+      .finally(() => setPrinterLoading(false))
+  }
+
+  useEffect(() => {
+    loadPrinterStatus()
+    const printerInterval = window.setInterval(loadPrinterStatus, 30000)
+    return () => window.clearInterval(printerInterval)
+  }, [])
+
   useEffect(() => {
     if (!staff?.clinic_id && !staff?.clinic) return
     receptionStaffApi.getDoctors()
@@ -83,48 +158,15 @@ const ReceptionDashboard = () => {
   }, [staff?.clinic_id])
 
   useEffect(() => {
-    if (!form.doctor || !form.date) return
-    let cancelled = false
-    const loadAvailability = () => {
-      doctorsApi.getAvailability({ doctor: form.doctor, date: form.date })
-        .then((data) => {
-          if (cancelled) return
-          const now = new Date()
-          const availableSlots = (data?.results || data || [])
-            .filter((slot) => slot.status === 'available')
-            .filter((slot) => {
-              if (form.date !== getLocalDateValue()) return true
-              const [hours, minutes] = String(slot.start_time || '').split(':').map(Number)
-              const slotTime = new Date(now)
-              slotTime.setHours(hours, minutes, 0, 0)
-              return slotTime > now
-            })
-          setSlots(availableSlots)
-          setForm((prev) => ({
-            ...prev,
-            slot_id: availableSlots.some((slot) => String(slot.id) === String(prev.slot_id))
-              ? prev.slot_id
-              : availableSlots[0]?.id || '',
-          }))
-        })
-        .catch(() => {
-          if (cancelled) return
-          setSlots([])
-          setForm((prev) => ({ ...prev, slot_id: '' }))
-        })
-    }
-    loadAvailability()
-    const refreshTimer = window.setInterval(loadAvailability, 30000)
-    return () => {
-      cancelled = true
-      window.clearInterval(refreshTimer)
-    }
-  }, [form.doctor, form.date])
-
-  useEffect(() => {
     loadTodayStats()
     loadAttendance()
+    loadOnlineAppointments()
   }, [message])
+
+  useEffect(() => {
+    const statsInterval = window.setInterval(loadTodayStats, 10000)
+    return () => window.clearInterval(statsInterval)
+  }, [])
 
   if (!localStorage.getItem('reception_session_token') || !staff) {
     navigate('/reception-login', { replace: true })
@@ -140,6 +182,22 @@ const ReceptionDashboard = () => {
   const handlePhoneChange = (value) => {
     const normalized = normalizeUzPhoneWithPrefix(value)
     setForm((prev) => ({ ...prev, phone_number: normalized }))
+  }
+
+  const selectPatientForBooking = (patient) => {
+    const digits = String(patient.phone_number || '').replace(/\D/g, '')
+    const localPhone = digits.startsWith('998') ? digits.slice(3) : digits
+    setForm((prev) => ({
+      ...prev,
+      full_name: patient.full_name || '',
+      phone_number: localPhone,
+      date_of_birth: patient.date_of_birth || '',
+      doctor: '',
+      specialty_price_ids: [],
+      slot_id: '',
+    }))
+    setGeneratedPatientNumber(patient.patient_number || buildTempPatientNumber())
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   const buildReportRows = (reportStats) => (reportStats?.accepted_patients || []).map((item) => ({
@@ -203,17 +261,26 @@ const ReceptionDashboard = () => {
   const submitRegistration = async (event) => {
     event.preventDefault()
     setMessage('')
-    if (!form.doctor || form.specialty_price_ids.length === 0 || !form.slot_id) {
-      setMessage("Doktor, yo'nalish va bo'sh vaqtni tanlang.")
+    if (!form.doctor || form.specialty_price_ids.length === 0) {
+      setMessage("Doktor va yo'nalishni tanlang.")
       return
     }
 
     const [first_name, ...lastParts] = form.full_name.trim().split(/\s+/)
     try {
+      if (onlineAppointmentId) {
+        const response = await receptionStaffApi.confirmOnlineAppointment(onlineAppointmentId)
+        setMessage(response?.detail || 'Onlayn navbat tasdiqlandi va printerga yuborildi.')
+        setOnlineAppointmentId('')
+        setOnlineAppointments((items) => items.filter((item) => item.id !== onlineAppointmentId))
+        setForm((prev) => ({ ...prev, full_name: '', phone_number: '', date_of_birth: '', specialty_price_ids: [], slot_id: '' }))
+        setGeneratedPatientNumber(buildTempPatientNumber())
+        loadTodayStats()
+        return
+      }
       const bookingResponse = await medicalApi.bookOnline({
         clinic: staff.clinic_id,
         doctor: form.doctor,
-        slot_id: form.slot_id,
         specialty_price_ids: form.specialty_price_ids,
         first_name,
         last_name: lastParts.join(' ') || '-',
@@ -273,17 +340,119 @@ const ReceptionDashboard = () => {
   const canCheckIn = !attendance.today_checked_in_at || attendance.today_checked_out_at
   const canCheckOut = Boolean(attendance.today_checked_in_at) && !attendance.today_checked_out_at
 
+  const persistPrinterToken = (token) => {
+    const cleanToken = String(token || '').trim()
+    if (!cleanToken) return
+    setPrinterToken(cleanToken)
+    localStorage.setItem('gmed_printer_device_token', cleanToken)
+  }
+
+  const copyPrinterToken = async () => {
+    if (!printerToken) return
+    try {
+      await navigator.clipboard.writeText(printerToken)
+      setPrinterTokenCopied(true)
+      window.setTimeout(() => setPrinterTokenCopied(false), 1500)
+    } catch (error) {
+      setMessage('Token nusxalab bo‘lmadi. Tokenni qo‘lda ko‘chiring.')
+    }
+  }
+
+  const handleRegisterPrinter = async () => {
+    setPrinterRegistering(true)
+    try {
+      const response = await printersApi.register({
+        clinic_id: staff?.clinic_id || staff?.clinic || null,
+        reception_room_id: null,
+        device_name: `${staff?.first_name || 'Windows'} ${staff?.last_name || 'PC'}`,
+      })
+      const token = response?.device_token || printerToken
+      if (token) {
+        persistPrinterToken(token)
+      }
+      setMessage(response?.detail || 'Printer uchun token yaratildi.')
+      loadPrinterStatus()
+    } catch (error) {
+      setMessage(error?.message || 'Printerni ro‘yxatdan o‘tkazib bo‘lmadi')
+    } finally {
+      setPrinterRegistering(false)
+    }
+  }
+
+  const handleTestPrint = async () => {
+    setPrinterTesting(true)
+    try {
+      const response = await printersApi.testPrint()
+      setMessage(response?.detail || 'Printerga test chop yaratildi.')
+      loadPrinterStatus()
+    } catch (error) {
+      setMessage(error?.message || 'Test chop yaratib bo\'lmadi')
+    } finally {
+      setPrinterTesting(false)
+    }
+  }
+
+  const openCancelConfirm = (patient) => setCancelConfirmPatient(patient)
+
   const handleReceptionCancel = async (appointmentId) => {
     if (!appointmentId) return
     setCancelLoadingId(String(appointmentId))
     try {
       await medicalApi.receptionCancelAppointment(appointmentId)
       setMessage('Qabul bekor qilindi')
+      setCancelConfirmPatient(null)
       loadTodayStats()
     } catch (error) {
       setMessage(error?.message || 'Qabulni bekor qilib bo\'lmadi')
     } finally {
       setCancelLoadingId('')
+    }
+  }
+
+  const openServiceModal = (patient) => {
+    setServicePatient(patient)
+    setServiceSelection([])
+  }
+
+  const selectOnlineAppointment = (appointment) => {
+    const digits = String(appointment.phone || '').replace(/\D/g, '')
+    setForm((prev) => ({
+      ...prev,
+      full_name: appointment.patient_name || '',
+      phone_number: digits.startsWith('998') ? digits.slice(3) : digits,
+      date_of_birth: appointment.date_of_birth || '',
+      doctor: appointment.doctor_id || '',
+      specialty_price_ids: (appointment.selected_specialties || []).map((item) => String(item.id)),
+      slot_id: '',
+    }))
+    setGeneratedPatientNumber(appointment.patient_number || buildTempPatientNumber())
+    setOnlineAppointmentId(appointment.id)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const cancelOnlineAppointment = async (appointment) => {
+    if (!window.confirm(`${appointment.patient_name} navbati bekor qilinsinmi?`)) return
+    try {
+      await receptionStaffApi.cancelOnlineAppointment(appointment.id)
+      setOnlineAppointments((items) => items.filter((item) => item.id !== appointment.id))
+      setMessage('Onlayn navbat bekor qilindi.')
+    } catch (error) {
+      setMessage(error?.message || 'Onlayn navbatni bekor qilib bo‘lmadi')
+    }
+  }
+
+  const handleAddServices = async () => {
+    if (!servicePatient || serviceSelection.length === 0) return
+    setServiceSaving(true)
+    try {
+      const response = await medicalApi.receptionAddServices(servicePatient.id, serviceSelection)
+      setMessage(`${response?.detail || 'Xizmatlar saqlandi'} Jami: ${Number(response?.consultation_fee || 0).toLocaleString()} so'm`)
+      setServicePatient(null)
+      loadTodayStats()
+    } catch (error) {
+      setMessage(error?.message || 'Xizmatlarni saqlab bo‘lmadi')
+    } finally {
+      setServiceSaving(false)
     }
   }
 
@@ -301,6 +470,9 @@ const ReceptionDashboard = () => {
           </div>
         </div>
         <div className="reception-header-actions">
+          <button type="button" className="reception-printer-toggle" onClick={() => setShowPrinterPanel((prev) => !prev)}>
+            Printer
+          </button>
           <button type="button" className="reception-checkin-btn" onClick={handleCheckIn} disabled={!canCheckIn || attendanceLoading}>Ishga keldim</button>
           <button type="button" className="reception-checkout-btn" onClick={handleCheckOut} disabled={!canCheckOut || attendanceLoading}>Ishdan ketdim</button>
           <button type="button" className="reception-logout-button" onClick={logout}>Chiqish</button>
@@ -326,6 +498,57 @@ const ReceptionDashboard = () => {
         <button type="button" onClick={() => setShowReportPanel((prev) => !prev)}>{showReportPanel ? 'Yopish' : 'Yuklab olish'}</button>
       </section>
 
+      {showPrinterPanel && (
+        <section className="reception-printer-panel">
+          <div className="reception-printer-header">
+            <div>
+              <span className="reception-eyebrow">PRINTER</span>
+              <h3>Printer holati</h3>
+            </div>
+            <div className="reception-printer-actions">
+              <button type="button" className="reception-printer-button primary" onClick={handleRegisterPrinter} disabled={printerRegistering}>
+                {printerRegistering ? 'Ro‘yxatdan o‘tilmoqda...' : 'Printer ulash'}
+              </button>
+              <button type="button" className="reception-printer-button secondary" onClick={handleTestPrint} disabled={printerTesting}>
+                {printerTesting ? 'Chop etilmoqda...' : 'Test chop etish'}
+              </button>
+            </div>
+          </div>
+
+          {printerToken && (
+            <div className="reception-printer-token-box">
+              <div className="reception-printer-token-row">
+                <div>
+                  <div className="reception-printer-token-label">Device token</div>
+                  <strong>{printerToken}</strong>
+                </div>
+                <button type="button" className="reception-printer-copy-btn" onClick={copyPrinterToken}>
+                  {printerTokenCopied ? 'Nusxalandi' : 'Kopiya'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {printerLoading ? (
+            <p className="reception-printer-text">Printer holati tekshirilmoqda...</p>
+          ) : printerStatus.devices.length === 0 ? (
+            <p className="reception-printer-warning">Hech qanday lokal printer aniqlanmagan.</p>
+          ) : (
+            <div className="reception-printer-list">
+              {printerStatus.devices.map((device) => (
+                <div key={device.id} className="reception-printer-item">
+                  <div>
+                    <strong>{device.device_name || 'G-MED Printer'}</strong>
+                    <p>{device.printer_name || 'Printer nomi yo‘q'}</p>
+                  </div>
+                  <span className={`reception-printer-badge ${device.status}`}>{device.status_label}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
       {showReportPanel && (
         <section className="reception-report-panel">
           <label>
@@ -341,6 +564,18 @@ const ReceptionDashboard = () => {
             </select>
           </label>
           <button type="button" onClick={downloadReport} disabled={isDownloading}>{isDownloading ? 'Yuklanmoqda...' : 'Yuklab olish'}</button>
+        </section>
+      )}
+
+      {onlineAppointments.length > 0 && (
+        <section className="reception-online-panel">
+          <div className="reception-patients-heading"><h2>Onlayn navbatlar</h2><span>{onlineAppointments.length} ta</span></div>
+          {onlineAppointments.map((appointment) => (
+            <div className="reception-online-row" key={appointment.id}>
+              <div><strong>{appointment.patient_name}</strong><span>{appointment.patient_number} • {appointment.phone} • Tug‘ilgan sana: {appointment.date_of_birth || '-'}</span><span>{appointment.doctor_name} • Navbat #{appointment.queue_position} • {Number(appointment.amount || 0).toLocaleString()} so‘m</span></div>
+              <div className="reception-row-actions"><button type="button" className="reception-service-btn" onClick={() => selectOnlineAppointment(appointment)}>Tasdiqlash</button><button type="button" className="reception-cancel-btn" onClick={() => cancelOnlineAppointment(appointment)}>Bekor qilish</button></div>
+            </div>
+          ))}
         </section>
       )}
 
@@ -413,7 +648,7 @@ const ReceptionDashboard = () => {
                           : [...p.specialty_price_ids, String(item.id)],
                       }))}
                     />
-                    <span>{item.specialization?.name}</span>
+                    <span>{item.custom_name || item.specialization?.name}</span>
                     <b>{Number(item.consultation_fee).toLocaleString()} so'm</b>
                   </label>
                 )
@@ -423,11 +658,11 @@ const ReceptionDashboard = () => {
 
           <div className="reception-auto-slot">
             <span>Avtomatik navbat vaqti</span>
-            <strong>{slots[0] ? `${String(slots[0].start_time).slice(0, 5)} - ${String(slots[0].end_time).slice(0, 5)}` : (form.doctor ? "Bo'sh vaqt topilmadi" : 'Doktor tanlang')}</strong>
-            <small>Doktorning belgilangan intervali bo'yicha</small>
+            <strong>{form.doctor ? `Hozirgi vaqt: ${new Date().toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })}` : 'Doktor tanlang'}</strong>
+            <small>Navbat bosilganda real vaqt qayd etiladi</small>
           </div>
 
-          <button type="submit" disabled={!form.slot_id || form.specialty_price_ids.length === 0}>Navbatga yozish</button>
+          <button type="submit" disabled={!form.doctor || form.specialty_price_ids.length === 0}>Navbatga yozish</button>
         </form>
 
         {message && <div className="reception-dashboard-message">{message}</div>}
@@ -440,21 +675,82 @@ const ReceptionDashboard = () => {
             <div className="reception-patient-row" key={item.id}>
               <strong>#{Number(item.queue_position || 0)} • {item.patient_name}</strong>
               <span>{item.time} • {item.doctor_name}</span>
-              <div className="reception-row-actions"><b>{Number(item.amount).toLocaleString()} so'm</b><button type="button" className="reception-cancel-btn" onClick={() => handleReceptionCancel(item.id)} disabled={cancelLoadingId === String(item.id)}>{cancelLoadingId === String(item.id) ? 'Bekor...' : 'Bekor qilish'}</button></div>
+              <div className="reception-row-actions"><b>{Number(item.amount).toLocaleString()} so'm</b><button type="button" className="reception-service-btn" onClick={() => openServiceModal(item)}>Xizmat qo‘shish</button><button type="button" className="reception-cancel-btn" onClick={() => openCancelConfirm(item)} disabled={cancelLoadingId === String(item.id)}>{cancelLoadingId === String(item.id) ? 'Bekor...' : 'Bekor qilish'}</button></div>
             </div>
           ))}
         </div>
         <div>
-          <h2>Qabul qilinganlar</h2>
-          {(stats?.doctor_accepted_patients || []).map((item) => (
-            <div className="reception-patient-row" key={item.id}>
-              <strong>#{Number(item.queue_position || 0)} • {item.patient_name}</strong>
-              <span>{item.time} • {item.doctor_name}</span>
-              <b>{Number(item.amount).toLocaleString()} so'm</b>
-            </div>
+          <div className="reception-patients-heading">
+            <h2>Qabul qilinganlar</h2>
+            <span>{patientResults.length} ta bemor</span>
+          </div>
+          <input
+            className="reception-patient-search"
+            value={patientSearch}
+            onChange={(e) => setPatientSearch(e.target.value)}
+            placeholder="Telefon, IFO yoki bemor raqami bo‘yicha qidiring"
+          />
+          {patientLookupLoading ? <p className="reception-search-status">Qidirilmoqda...</p> : null}
+          {!patientLookupLoading && patientResults.length === 0 ? <p className="reception-search-status">Bemor topilmadi</p> : null}
+          {patientResults.map((patient) => (
+            <button
+              type="button"
+              className="reception-patient-row reception-directory-row reception-patient-select"
+              key={patient.id}
+              onClick={() => selectPatientForBooking(patient)}
+            >
+              <strong>{patient.full_name}</strong>
+              <span>{patient.patient_number} • {patient.phone_number || 'Telefon kiritilmagan'} • Tug‘ilgan sana: {patient.date_of_birth || '-'}</span>
+            </button>
           ))}
         </div>
       </section>
+
+      {cancelConfirmPatient && (
+        <div className="reception-modal-overlay" onClick={() => setCancelConfirmPatient(null)}>
+          <div className="reception-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Qabulni bekor qilish</h3>
+            <div className="reception-modal-details">
+              <strong>{cancelConfirmPatient.patient_name}</strong>
+              <span>IFO: {cancelConfirmPatient.patient_name}</span>
+              <span>Telefon: {cancelConfirmPatient.phone || '-'}</span>
+              <span>Tug‘ilgan sana: {cancelConfirmPatient.date_of_birth || '-'}</span>
+              <span>Jami to‘lov: {Number(cancelConfirmPatient.amount || 0).toLocaleString()} so‘m</span>
+            </div>
+            <p>Ushbu bemorning navbati bekor qilinsinmi?</p>
+            <div className="reception-modal-actions">
+              <button type="button" className="reception-cancel-btn" onClick={() => handleReceptionCancel(cancelConfirmPatient.id)} disabled={Boolean(cancelLoadingId)}>{cancelLoadingId ? 'Bekor qilinmoqda...' : 'Ha, bekor qilish'}</button>
+              <button type="button" className="reception-modal-secondary" onClick={() => setCancelConfirmPatient(null)} disabled={Boolean(cancelLoadingId)}>Yo‘q</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {servicePatient && (
+        <div className="reception-modal-overlay" onClick={() => setServicePatient(null)}>
+          <div className="reception-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Xizmat qo‘shish</h3>
+            <p className="reception-modal-subtitle">{servicePatient.patient_name} • Hozirgi jami: {Number(servicePatient.amount || 0).toLocaleString()} so‘m</p>
+            <div className="reception-service-options">
+              {(doctors.find((doctor) => String(doctor.id) === String(servicePatient.doctor_id))?.specialty_prices || []).map((item) => {
+                const selected = serviceSelection.includes(String(item.id))
+                const alreadySelected = (servicePatient.selected_specialties || []).some((specialty) => String(specialty.id) === String(item.id))
+                return (
+                  <label key={item.id} className={alreadySelected ? 'disabled' : ''}>
+                    <input type="checkbox" checked={selected || alreadySelected} disabled={alreadySelected || serviceSaving} onChange={() => setServiceSelection((previous) => selected ? previous.filter((id) => id !== String(item.id)) : [...previous, String(item.id)])} />
+                    <span>{item.custom_name || item.specialization?.name}</span>
+                    <b>{Number(item.consultation_fee || 0).toLocaleString()} so‘m</b>
+                  </label>
+                )
+              })}
+            </div>
+            <div className="reception-modal-actions">
+              <button type="button" className="reception-modal-primary" onClick={handleAddServices} disabled={serviceSaving || serviceSelection.length === 0}>{serviceSaving ? 'Saqlanmoqda...' : 'Saqlash'}</button>
+              <button type="button" className="reception-modal-secondary" onClick={() => setServicePatient(null)} disabled={serviceSaving}>Bekor qilish</button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   )
 }
