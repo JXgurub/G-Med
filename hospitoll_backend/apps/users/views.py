@@ -4,11 +4,13 @@ from datetime import timedelta
 import logging
 import re
 from typing import Any, cast
+from uuid import uuid4
 
 from django.conf import settings
 from django.core import signing
 from django.utils import timezone
-from django.contrib.auth.hashers import make_password
+from django.contrib.auth.hashers import check_password, make_password
+from django.db import IntegrityError, transaction
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,6 +21,8 @@ from rest_framework_simplejwt.views import TokenObtainPairView
 from .serializers import (
     EmailTokenObtainPairSerializer,
     PatientTokenObtainSerializer,
+    PatientRegistrationRequestSerializer,
+    PatientRegistrationVerifySerializer,
     UserSerializer,
     PasswordResetRequestSerializer,
     PasswordResetVerifySerializer,
@@ -34,7 +38,7 @@ from .serializers import (
     PharmacyPasswordResetVerifySerializer,
     PharmacyPasswordResetConfirmSerializer,
 )
-from .models import CustomUser, PasswordResetCode
+from .models import CustomUser, PasswordResetCode, PatientRegistrationSession
 from .models import DoctorResetTelegramSession, ClinicResetTelegramSession, PharmacyResetTelegramSession
 from .models import PatientResetTelegramSession
 from .throttles import (
@@ -54,6 +58,8 @@ CLINIC_RESET_CODE_SECONDS = 120
 CLINIC_RESET_SESSION_SECONDS = 3600
 PHARMACY_RESET_CODE_SECONDS = 120
 PHARMACY_RESET_SESSION_SECONDS = 3600
+PATIENT_REGISTRATION_CODE_SECONDS = 300
+PATIENT_REGISTRATION_MAX_ATTEMPTS = 5
 
 
 def _doctor_bot_username() -> str:
@@ -74,6 +80,10 @@ def _pharmacy_reset_bot_link(token) -> str:
 
 def _patient_reset_bot_link(token) -> str:
     return f"https://t.me/{_doctor_bot_username()}?start=pt_{token}"
+
+
+def _patient_registration_bot_link(token) -> str:
+    return f"https://t.me/{_doctor_bot_username()}?start=reg_{token.hex}"
 
 
 def _normalize_passport_id(value: str) -> str:
@@ -113,6 +123,98 @@ class PatientTokenObtainView(TokenObtainPairView):
     serializer_class = PatientTokenObtainSerializer
     throttle_scope = 'auth'
     throttle_classes = [LoginScopedRateThrottle]
+
+
+class PatientRegistrationView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+    throttle_classes = [LoginScopedRateThrottle]
+
+    def post(self, request):
+        serializer = PatientRegistrationRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        registration = serializer.save()
+        return Response(
+            {
+                'detail': "Telegram botni ochib Start bosing. Tasdiqlash kodi botga yuboriladi.",
+                'token': str(registration.token),
+                'bot_link': _patient_registration_bot_link(registration.token),
+                'expires_in': 600,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class PatientRegistrationVerifyView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'auth'
+    throttle_classes = [LoginScopedRateThrottle]
+
+    def post(self, request):
+        serializer = PatientRegistrationVerifySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        token = serializer.validated_data['token']
+        code = serializer.validated_data['code']
+        password = serializer.validated_data['password']
+        now = timezone.now()
+
+        try:
+            with transaction.atomic():
+                registration = PatientRegistrationSession.objects.select_for_update().filter(token=token).first()
+                if not registration or registration.is_expired:
+                    return Response({'detail': 'Ro‘yxatdan o‘tish muddati tugagan. Qayta urinib ko‘ring.'}, status=status.HTTP_400_BAD_REQUEST)
+                if not registration.telegram_user_id or not registration.telegram_chat_id:
+                    return Response({'detail': 'Avval Telegram botni ochib Start tugmasini bosing.'}, status=status.HTTP_400_BAD_REQUEST)
+                if not registration.code_hash or not registration.code_expires_at or registration.code_expires_at <= now:
+                    return Response({'detail': 'Kod muddati tugagan. Telegram bot havolasini qayta oching.'}, status=status.HTTP_400_BAD_REQUEST)
+                if registration.failed_attempts >= PATIENT_REGISTRATION_MAX_ATTEMPTS:
+                    return Response({'detail': 'Urinishlar limiti tugadi. Qayta ro‘yxatdan o‘ting.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                if not check_password(code, registration.code_hash):
+                    registration.failed_attempts += 1
+                    registration.save(update_fields=['failed_attempts'])
+                    return Response({'detail': 'Tasdiqlash kodi noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                from apps.patients.models import Patient
+                from .serializers import _patient_phone_exists
+
+                if _patient_phone_exists(registration.phone_number):
+                    return Response({'detail': 'Bu telefon raqami bilan bemor hisobi mavjud.'}, status=status.HTTP_400_BAD_REQUEST)
+
+                email = f'patient_{uuid4().hex}@hospitoll.local'
+                user = CustomUser(
+                    username=email,
+                    email=email,
+                    first_name=registration.first_name,
+                    last_name=registration.last_name,
+                    phone_number=registration.phone_number,
+                    role='patient',
+                )
+                user.set_password(password)
+                user.save(force_insert=True)
+                patient = Patient.objects.create(
+                    user=user,
+                    phone_number=registration.phone_number,
+                    telegram_user_id=registration.telegram_user_id,
+                    telegram_chat_id=registration.telegram_chat_id,
+                    telegram_linked_at=now,
+                )
+
+                chat_id = registration.telegram_chat_id
+                registration.delete()
+        except IntegrityError:
+            return Response({'detail': 'Telegram akkaunt yoki telefon raqami boshqa bemor hisobiga bog‘langan.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from apps.medical.telegram_bot_service import TelegramBotService
+
+            TelegramBotService()._require_client().send_message(
+                int(chat_id),
+                "✅ G-MED bemor hisobingiz Telegram akkauntiga bog‘landi.",
+            )
+        except Exception:
+            logger.exception('Patient Telegram signup confirmation could not be sent')
+
+        return Response({'detail': "Ro'yxatdan o'tish muvaffaqiyatli yakunlandi."}, status=status.HTTP_201_CREATED)
 
 
 class ProfileView(APIView):

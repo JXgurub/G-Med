@@ -229,6 +229,28 @@ class PatientResetTelegramSession(models.Model):
         return timezone.now() >= self.expires_at
 
 
+class PatientRegistrationSession(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    token = models.UUIDField(default=uuid4, unique=True, db_index=True)
+    first_name = models.CharField(max_length=150)
+    last_name = models.CharField(max_length=150)
+    phone_number = models.CharField(max_length=20)
+    code_hash = models.CharField(max_length=255, blank=True, default='')
+    telegram_user_id = models.BigIntegerField(blank=True, null=True, db_index=True)
+    telegram_chat_id = models.BigIntegerField(blank=True, null=True)
+    expires_at = models.DateTimeField(db_index=True)
+    code_expires_at = models.DateTimeField(blank=True, null=True)
+    failed_attempts = models.PositiveSmallIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    @property
+    def is_expired(self):
+        return timezone.now() >= self.expires_at
+
+
 class PharmacyResetTelegramSession(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
     token = models.UUIDField(default=uuid4, unique=True, db_index=True)

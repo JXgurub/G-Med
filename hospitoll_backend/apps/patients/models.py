@@ -44,6 +44,9 @@ class Patient(models.Model):
         related_name='patient',
         limit_choices_to={'role': 'patient'}
     )
+    telegram_user_id = models.BigIntegerField(blank=True, null=True, unique=True, db_index=True)
+    telegram_chat_id = models.BigIntegerField(blank=True, null=True)
+    telegram_linked_at = models.DateTimeField(blank=True, null=True)
     clinics = models.ManyToManyField(
         'clinics.Clinic',
         related_name='patients',
@@ -91,6 +94,14 @@ class Patient(models.Model):
         _('phone number'),
         max_length=20,
         blank=True
+    )
+    legacy_passport_id = models.CharField(
+        _('legacy passport ID'),
+        max_length=50,
+        blank=True,
+        default='',
+        db_column='passport_id',
+        editable=False,
     )
     address = models.CharField(
         _('address'),

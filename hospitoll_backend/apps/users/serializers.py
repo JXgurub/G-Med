@@ -1,14 +1,17 @@
 from rest_framework import serializers
+from datetime import timedelta
 from django.utils import timezone
-from django.contrib.auth.hashers import check_password
+from django.contrib.auth.hashers import check_password, make_password
+from django.db import transaction
 from django.db.models import Q, CharField, F, Value
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Replace
 import re
+from uuid import uuid4
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.exceptions import AuthenticationFailed
 
 from .code_lockout import clear_lock_state, ensure_not_blocked, register_failed_code_attempt
-from .models import CodeVerificationLockState, CustomUser, PasswordResetCode
+from .models import CodeVerificationLockState, CustomUser, PasswordResetCode, PatientRegistrationSession
 
 
 def _normalize_phone_number(value: str) -> str:
@@ -29,6 +32,13 @@ def _phones_match(provided: str, stored: str) -> bool:
 
     # Be tolerant to country code formatting (+998xxxxxxxxx vs xxxxxxxxx).
     return len(provided_norm) >= 9 and len(stored_norm) >= 9 and provided_norm[-9:] == stored_norm[-9:]
+
+
+def _phone_expr(field_name: str):
+    expr = Coalesce(F(field_name), Value(''), output_field=CharField())
+    for token in (' ', '\t', '\n', '\r', '+', '-', '(', ')'):
+        expr = Replace(expr, Value(token), Value(''))
+    return expr
 
 
 def _digits_only(value: str) -> str:
@@ -277,6 +287,67 @@ class EmailTokenObtainPairSerializer(serializers.Serializer):
         return response_data
 
 
+def _patient_phone_exists(phone_number: str) -> bool:
+    from apps.patients.models import Patient
+
+    normalized_phone = _normalize_phone_number(phone_number)
+    tail = normalized_phone[-9:]
+    patients = Patient.objects.select_related('user').annotate(
+        patient_phone_norm=_phone_expr('phone_number'),
+        user_phone_norm=_phone_expr('user__phone_number'),
+    ).filter(
+        Q(patient_phone_norm__endswith=tail)
+        | Q(user_phone_norm__endswith=tail)
+    )
+    return any(
+        _phones_match(phone_number, (patient.phone_number or patient.user.phone_number or '').strip())
+        for patient in patients
+    )
+
+
+class PatientRegistrationRequestSerializer(serializers.Serializer):
+    first_name = serializers.CharField(max_length=150)
+    last_name = serializers.CharField(max_length=150)
+    phone_number = serializers.CharField(max_length=20)
+
+    def validate_phone_number(self, value):
+        phone_number = value.strip()
+        normalized_phone = _normalize_phone_number(phone_number)
+        if len(normalized_phone) < 9:
+            raise serializers.ValidationError("Telefon raqam noto'g'ri.")
+
+        if _patient_phone_exists(phone_number):
+            raise serializers.ValidationError("Bu telefon raqami bilan bemor hisobi mavjud.")
+
+        return phone_number
+
+    def create(self, validated_data):
+        now = timezone.now()
+        phone_number = validated_data['phone_number']
+        PatientRegistrationSession.objects.filter(expires_at__lte=now).delete()
+        PatientRegistrationSession.objects.filter(
+            phone_number=phone_number,
+        ).delete()
+        return PatientRegistrationSession.objects.create(
+            first_name=validated_data['first_name'].strip(),
+            last_name=validated_data['last_name'].strip(),
+            phone_number=phone_number,
+            expires_at=now + timedelta(minutes=10),
+        )
+
+
+class PatientRegistrationVerifySerializer(serializers.Serializer):
+    token = serializers.UUIDField()
+    code = serializers.RegexField(regex=r'^\d{6}$')
+    password = serializers.CharField(write_only=True, min_length=6)
+    password_confirm = serializers.CharField(write_only=True, min_length=6)
+
+    def validate(self, attrs):
+        if attrs['password'] != attrs['password_confirm']:
+            raise serializers.ValidationError({'password_confirm': 'Parollar mos emas.'})
+        return attrs
+
+
 class PatientTokenObtainSerializer(serializers.Serializer):
     phone_number = serializers.CharField()
     password = serializers.CharField(write_only=True)
@@ -293,12 +364,6 @@ class PatientTokenObtainSerializer(serializers.Serializer):
             raise AuthenticationFailed("Telefon raqam yoki parol noto'g'ri.")
 
         # Normalize common formatting characters to compare phone values safely.
-        def _phone_expr(field_name: str):
-            expr = Coalesce(F(field_name), Value(''), output_field=CharField())
-            for token in (' ', '\t', '\n', '\r', '+', '-', '(', ')'):
-                expr = Replace(expr, Value(token), Value(''))
-            return expr
-
         tail = phone_number[-9:] if len(phone_number) >= 9 else phone_number
         candidates = (
             Patient.objects.select_related('user')

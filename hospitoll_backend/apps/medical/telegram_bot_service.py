@@ -21,8 +21,8 @@ from django.utils import timezone
 from apps.doctors.models import Doctor, DoctorAvailability
 from apps.medical.models import Appointment, TelegramConversationState
 from apps.medical.schedule_utils import validate_doctor_booking_window
-from apps.patients.models import PatientDoctorRating
-from apps.users.models import ClinicResetTelegramSession, DoctorResetTelegramSession, PatientResetTelegramSession, PharmacyResetTelegramSession, PasswordResetCode
+from apps.patients.models import Patient, PatientDoctorRating
+from apps.users.models import ClinicResetTelegramSession, DoctorResetTelegramSession, PatientRegistrationSession, PatientResetTelegramSession, PharmacyResetTelegramSession, PasswordResetCode
 
 logger = logging.getLogger(__name__)
 
@@ -138,6 +138,9 @@ class TelegramBotService:
                 .first()
             )
             chat_id = int(getattr(linked_appointment, 'telegram_chat_id', 0) or 0)
+        if not chat_id:
+            patient = Patient.objects.filter(id=record.patient_id).only('telegram_chat_id').first()
+            chat_id = int(getattr(patient, 'telegram_chat_id', 0) or 0)
 
         attachment = getattr(record, 'attachment', None)
         if not chat_id:
@@ -487,10 +490,11 @@ class TelegramBotService:
     def _handle_start(self, ctx: TelegramMessageContext, token: str) -> None:
         if not token:
             linked_exists = Appointment.objects.filter(
-                telegram_user_id=ctx.user_id,
+                models.Q(telegram_user_id=ctx.user_id)
+                | models.Q(patient__telegram_user_id=ctx.user_id),
                 scheduled_date__gte=timezone.now(),
             ).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW]).exists()
-            if linked_exists:
+            if linked_exists or Patient.objects.filter(telegram_user_id=ctx.user_id).exists():
                 self._handle_myappointments(ctx)
                 return
             self._send_main_menu(
@@ -515,12 +519,17 @@ class TelegramBotService:
             self._handle_patient_reset_start(ctx, token[3:])
             return
 
+        if token.startswith('reg_'):
+            self._handle_patient_registration_start(ctx, token[4:])
+            return
+
         appointment_token = self._normalize_appointment_token(token)
         try:
             appointment = Appointment.objects.select_related("doctor", "clinic", "patient").get(telegram_token=appointment_token)
         except (Appointment.DoesNotExist, ValidationError, ValueError):
             linked_exists = Appointment.objects.filter(
-                telegram_user_id=ctx.user_id,
+                models.Q(telegram_user_id=ctx.user_id)
+                | models.Q(patient__telegram_user_id=ctx.user_id),
                 scheduled_date__gte=timezone.now(),
             ).exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW]).exists()
             if linked_exists:
@@ -753,6 +762,52 @@ class TelegramBotService:
             "Agar bu so'rov sizniki bo'lmasa, xabarni e'tiborsiz qoldiring.",
         )
 
+    def _handle_patient_registration_start(self, ctx: TelegramMessageContext, token: str) -> None:
+        try:
+            registration_token = UUID(token)
+        except (ValueError, TypeError, AttributeError):
+            self._require_client().send_message(ctx.chat_id, "Ro‘yxatdan o‘tish havolasi noto‘g‘ri.")
+            return
+
+        now = timezone.now()
+        try:
+            with transaction.atomic():
+                registration = PatientRegistrationSession.objects.select_for_update().get(token=registration_token)
+                if registration.is_expired:
+                    self._require_client().send_message(ctx.chat_id, "Ro‘yxatdan o‘tish havolasi eskirgan. Saytdan qayta boshlang.")
+                    return
+                if registration.telegram_user_id and registration.telegram_user_id != ctx.user_id:
+                    self._require_client().send_message(ctx.chat_id, "Bu havola boshqa Telegram akkauntiga bog‘langan.")
+                    return
+                if registration.failed_attempts >= 5:
+                    self._require_client().send_message(ctx.chat_id, "Urinishlar limiti tugadi. Saytdan qayta ro‘yxatdan o‘ting.")
+                    return
+                if Patient.objects.filter(telegram_user_id=ctx.user_id).exists():
+                    self._require_client().send_message(ctx.chat_id, "Bu Telegram akkaunt allaqachon bemor hisobiga bog‘langan.")
+                    return
+
+                code = f"{secrets.randbelow(1000000):06d}"
+                registration.telegram_user_id = ctx.user_id
+                registration.telegram_chat_id = ctx.chat_id
+                registration.code_hash = make_password(code)
+                registration.code_expires_at = now + timedelta(seconds=300)
+                registration.save(update_fields=[
+                    'telegram_user_id',
+                    'telegram_chat_id',
+                    'code_hash',
+                    'code_expires_at',
+                ])
+        except PatientRegistrationSession.DoesNotExist:
+            self._require_client().send_message(ctx.chat_id, "Ro‘yxatdan o‘tish sessiyasi topilmadi. Saytdan qayta boshlang.")
+            return
+
+        self._require_client().send_message(
+            ctx.chat_id,
+            "🔐 G-MED bemor ro‘yxatdan o‘tish kodi\n\n"
+            f"Kod: <b>{code}</b>\n"
+            "Kod 5 daqiqa amal qiladi. Uni ro‘yxatdan o‘tish sahifasiga kiriting.",
+        )
+
     def _handle_pharmacy_reset_start(self, ctx: TelegramMessageContext, token: str) -> None:
         try:
             session = (
@@ -813,7 +868,8 @@ class TelegramBotService:
     def _handle_myappointments(self, ctx: TelegramMessageContext) -> None:
         upcoming = (
             Appointment.objects.filter(
-                telegram_user_id=ctx.user_id,
+                models.Q(telegram_user_id=ctx.user_id)
+                | models.Q(patient__telegram_user_id=ctx.user_id),
                 scheduled_date__gte=timezone.now(),
             )
             .exclude(status__in=[Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW])

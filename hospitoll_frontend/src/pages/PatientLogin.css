@@ -79,6 +79,22 @@
   font-size: 0.85rem;
 }
 
+.patient-login-message {
+  background: rgba(100, 179, 52, 0.12);
+  color: #367d1f;
+  padding: 0.65rem 0.9rem;
+  border-radius: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.patient-login-bot-link {
+  display: block;
+  text-align: center;
+  color: #1e6fd7;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
 .patient-login-button {
   padding: 0.85rem 1rem;
   border-radius: 0.9rem;
@@ -113,6 +129,22 @@
 }
 
 .patient-login-forgot:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.patient-login-switch {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: #1e6fd7;
+  font-weight: 600;
+  font-size: 0.9rem;
+  padding: 0.25rem 0;
+  cursor: pointer;
+}
+
+.patient-login-switch:disabled {
   opacity: 0.7;
   cursor: not-allowed;
 }

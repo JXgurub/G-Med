@@ -1,5 +1,7 @@
 from unittest.mock import patch
 from datetime import date, timedelta
+from uuid import UUID
+import re
 
 from django.contrib.auth import get_user_model
 from django.test import override_settings
@@ -11,10 +13,170 @@ from apps.clinics.models import Clinic
 from apps.doctors.models import Doctor
 from apps.patients.models import Patient
 from apps.pharmacies.models import Pharmacy
-from apps.users.models import ClinicResetTelegramSession, DoctorResetTelegramSession, PatientResetTelegramSession, PharmacyResetTelegramSession
+from apps.users.models import ClinicResetTelegramSession, DoctorResetTelegramSession, PatientRegistrationSession, PatientResetTelegramSession, PharmacyResetTelegramSession
+from apps.medical.telegram_bot_service import TelegramBotService
 
 
 User = get_user_model()
+
+
+class PatientRegistrationTests(APITestCase):
+    def setUp(self):
+        self.url = reverse('patient_registration')
+        self.payload = {
+            'first_name': 'New',
+            'last_name': 'Patient',
+            'phone_number': '+998901234567',
+            'password': 'Patient123!',
+            'password_confirm': 'Patient123!',
+        }
+
+    def request_code(self):
+        response = self.client.post(self.url, self.payload, format='json')
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn('bot_link', body)
+        self.assertEqual(Patient.objects.count(), 0)
+
+        sent_messages = []
+
+        class _Client:
+            def send_message(self, chat_id, text, reply_markup=None):
+                sent_messages.append({'chat_id': chat_id, 'text': text})
+
+        session_token = UUID(body['token'])
+        with patch.object(TelegramBotService, '_require_client', return_value=_Client()):
+            TelegramBotService().handle_update({
+                'message': {
+                    'from': {'id': 812345},
+                    'chat': {'id': 912345},
+                    'text': f'/start reg_{session_token.hex}',
+                },
+            })
+
+        self.assertTrue(sent_messages)
+        code_match = re.search(r'Kod: <b>(\d{6})</b>', sent_messages[-1]['text'])
+        self.assertIsNotNone(code_match)
+        return body['token'], code_match.group(1)
+
+    def test_registration_creates_patient_user(self):
+        token, code = self.request_code()
+        with patch.object(TelegramBotService, '_require_client', return_value=type('Client', (), {'send_message': lambda *args, **kwargs: None})()):
+            response = self.client.post(
+                reverse('patient_registration_verify'),
+                {
+                    'token': token,
+                    'code': code,
+                    'password': 'Patient123!',
+                    'password_confirm': 'Patient123!',
+                },
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 201)
+        patient = Patient.objects.select_related('user').get(phone_number='+998901234567')
+        self.assertEqual(patient.user.role, 'patient')
+        self.assertEqual(patient.user.first_name, 'New')
+        self.assertTrue(patient.user.check_password('Patient123!'))
+        self.assertEqual(patient.telegram_user_id, 812345)
+        self.assertEqual(patient.telegram_chat_id, 912345)
+        self.assertIsNotNone(patient.telegram_linked_at)
+
+        login_response = self.client.post(
+            reverse('patient_token_obtain'),
+            {
+                'phone_number': '+998901234567',
+                'password': 'Patient123!',
+            },
+            format='json',
+        )
+        self.assertEqual(login_response.status_code, 200)
+        self.assertEqual(login_response.json()['user']['role'], 'patient')
+
+        reuse_response = self.client.post(
+            reverse('patient_registration_verify'),
+            {'token': token, 'code': code},
+            format='json',
+        )
+        self.assertEqual(reuse_response.status_code, 400)
+
+    def test_registration_rejects_existing_patient_phone(self):
+        user = User.objects.create_user(
+            username='existing_patient',
+            email='existing.patient@example.com',
+            password='Patient123!',
+            role='patient',
+            phone_number='+998901234567',
+        )
+        Patient.objects.create(user=user, phone_number='+998901234567')
+
+        response = self.client.post(self.url, self.payload, format='json')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Patient.objects.count(), 1)
+
+    def test_registration_rejects_incorrect_code_without_creating_patient(self):
+        token, code = self.request_code()
+        wrong_code = f'{(int(code) + 1) % 1000000:06d}'
+
+        response = self.client.post(
+            reverse('patient_registration_verify'),
+            {
+                'token': token,
+                'code': wrong_code,
+                'password': 'Patient123!',
+                'password_confirm': 'Patient123!',
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Patient.objects.count(), 0)
+        self.assertEqual(PatientRegistrationSession.objects.get(token=token).failed_attempts, 1)
+
+    def test_linked_patient_can_use_bot_menu_without_booking_token(self):
+        user = User.objects.create_user(
+            username='patient_linked_bot',
+            email='patient.linked.bot@example.com',
+            password='Patient123!',
+            role='patient',
+        )
+        Patient.objects.create(user=user, telegram_user_id=812345, telegram_chat_id=912345)
+        sent_messages = []
+
+        class _Client:
+            def send_message(self, chat_id, text, reply_markup=None):
+                sent_messages.append(text)
+
+        with patch.object(TelegramBotService, '_require_client', return_value=_Client()):
+            TelegramBotService().handle_update({
+                'message': {
+                    'from': {'id': 812345},
+                    'chat': {'id': 912345},
+                    'text': '/start',
+                },
+            })
+
+        self.assertTrue(sent_messages)
+        self.assertIn('Yaqin randevu topilmadi', sent_messages[-1])
+
+    def test_registration_rejects_mismatched_passwords(self):
+        response = self.client.post(self.url, self.payload, format='json')
+        self.assertEqual(response.status_code, 200)
+
+        verify_response = self.client.post(
+            reverse('patient_registration_verify'),
+            {
+                'token': response.json()['token'],
+                'code': '123456',
+                'password': 'Patient123!',
+                'password_confirm': 'Different123!',
+            },
+            format='json',
+        )
+
+        self.assertEqual(verify_response.status_code, 400)
+        self.assertEqual(Patient.objects.count(), 0)
 
 
 class DoctorPasswordResetFlowTests(APITestCase):

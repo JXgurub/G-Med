@@ -74,7 +74,9 @@ const getTokenKey = (baseKey) => {
 }
 
 const isAuthEndpoint = (endpoint) => {
-  return endpoint.startsWith('/users/token') || endpoint.startsWith('/users/patient-token')
+  return endpoint.startsWith('/users/token')
+    || endpoint.startsWith('/users/patient-token')
+    || endpoint.startsWith('/users/patient-registration')
 }
 
 const isPublicNoAuthEndpoint = (endpoint) => {
@@ -380,6 +382,13 @@ export const aiDoctorApi = {
 export const authApi = {
   login: (credentials) => api.post('/users/token/', credentials),
   patientLogin: (credentials) => api.post('/users/patient-token/', credentials),
+  patientRegister: (details) => api.post('/users/patient-registration/', details),
+  patientRegisterVerify: (token, code, password, passwordConfirm) => api.post('/users/patient-registration/verify/', {
+    token,
+    code,
+    password,
+    password_confirm: passwordConfirm,
+  }),
   refresh: (token) => api.post('/users/token/refresh/', { refresh: token }),
   getProfile: () => api.get('/users/profile/'),
   changePassword: (current_password, new_password) => api.post('/users/change-password/', { current_password, new_password }),
