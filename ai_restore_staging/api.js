@@ -328,52 +328,11 @@ export const api = {
       body: formData,
     }),
 
-  postFormWithProgress: (endpoint, formData, onProgress) => new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    const storage = getStorage()
-    const token = storage.getItem(getTokenKey(ACCESS_TOKEN_KEY))
-    xhr.open('POST', `${API_BASE_URL}${endpoint}`)
-    xhr.withCredentials = true
-    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && typeof onProgress === 'function') {
-        onProgress(Math.round((event.loaded / event.total) * 100))
-      }
-    }
-    xhr.onload = () => {
-      let responseData = {}
-      try {
-        responseData = JSON.parse(xhr.responseText || '{}')
-      } catch (error) {
-        responseData = {}
-      }
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve(responseData)
-        return
-      }
-      reject(new Error(responseData.detail || responseData.message || `HTTP error! status: ${xhr.status}`))
-    }
-    xhr.onerror = () => reject(new Error('Tarmoq xatosi. Qayta urinib ko\'ring.'))
-    xhr.onabort = () => reject(new Error('Fayl yuklash bekor qilindi.'))
-    xhr.send(formData)
-  }),
-
   // DELETE request
   delete: (endpoint) =>
     api.request(endpoint, {
       method: 'DELETE',
     }),
-}
-
-export const aiDoctorApi = {
-  uploadFile: (formData, onProgress) => api.postFormWithProgress('/ai-doctor/upload/', formData, onProgress),
-  getAnalyses: (params) => api.get('/ai-doctor/analyses/', params),
-  getAnalysis: (id, params) => api.get(`/ai-doctor/analyses/${id}/`, params),
-  deleteAnalysis: (id, params = {}) => {
-    const query = new URLSearchParams(params).toString()
-    const endpoint = `/ai-doctor/analyses/${id}/${query ? `?${query}` : ''}`
-    return api.delete(endpoint)
-  },
 }
 
 // Auth API endpoints

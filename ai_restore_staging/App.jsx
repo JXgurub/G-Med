@@ -9,7 +9,6 @@ import { PharmacyProvider } from './context/PharmacyContext'
 import { PaymentProvider } from './context/PaymentContext'
 const Layout = lazy(() => import('./layouts/Layout'))
 const Home = lazy(() => import('./pages/Home'))
-const AnalysisPage = lazy(() => import('./pages/AnalysisPage'))
 const LoginRedirect = lazy(() => import('./pages/LoginRedirect'))
 const ClinicDetailPage = lazy(() => import('./pages/ClinicDetailPage'))
 const ClinicOwnerLogin = lazy(() => import('./pages/ClinicOwnerLogin'))
@@ -72,7 +71,6 @@ function App() {
                     <Route path="/admin-login" element={<AdminLogin />} />
                     <Route path="/admin-dashboard" element={<AdminDashboard />} />
                     <Route path="/JXgroup" element={<SecretLoginHub />} />
-                    <Route path="/analiz-tahlili/*" element={<AnalysisPage />} />
                     <Route path="/pharmacy-search" element={<Navigate to="/" replace />} />
                     <Route path="/pharmacy-owner-login" element={<PharmacyOwnerLogin />} />
                     <Route path="/pharmacy-owner-forgot-password" element={<PharmacyOwnerForgotPassword />} />

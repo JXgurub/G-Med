@@ -24,8 +24,6 @@ if not DEBUG and SECRET_KEY in {
     raise ImproperlyConfigured('DJANGO_SECRET_KEY must be a strong random value in production')
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=lambda v: [s.strip() for s in v.split(',')])
-GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
-GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-2.5-flash')
 
 # Application definition
 INSTALLED_APPS = [
@@ -56,7 +54,6 @@ INSTALLED_APPS = [
     'apps.patients',
     'apps.pharmacies',
     'apps.medical',
-    'apps.ai_doctor',
     'apps.subscriptions',
     'apps.payments',
     'apps.search',
@@ -186,8 +183,6 @@ REST_FRAMEWORK = {
         'password_reset_request': '5/hour',
         'password_reset_verify': '30/hour',
         'password_reset_confirm': '20/hour',
-        'ai_analysis_upload': '20/hour',
-        'ai_analysis_read': '120/hour',
     },
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,

@@ -70,8 +70,6 @@ services:
     container_name: hospitoll_backend
     environment:
       DEBUG: "False"
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-2.5-flash}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DB_ENGINE: postgresql
       DB_NAME: ${DB_NAME}
@@ -140,8 +138,6 @@ services:
     container_name: hospitoll_celery_worker
     environment:
       DEBUG: "False"
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-2.5-flash}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DB_ENGINE: postgresql
       DB_NAME: ${DB_NAME}
@@ -174,7 +170,6 @@ services:
       SENTRY_DSN: ${SENTRY_DSN}
       ENVIRONMENT: production
     volumes:
-      - media_volume:/app/media
       - logs_volume:/app/logs
     depends_on:
       db:
