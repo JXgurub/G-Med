@@ -1,11 +1,20 @@
 from typing import Any, cast
 
-from rest_framework.test import APITestCase
+from django.conf import settings
+from django.test import override_settings
 from django.urls import reverse
+from rest_framework.test import APITestCase
 
 from apps.users.models import CustomUser
-from apps.site_settings.models import SystemAlert
+from apps.site_settings.models import HomeContactSettings, SystemAlert
 from core.error_logging import ErrorLogger
+
+PUBLIC_HOME_CONTACT_THROTTLE_SETTINGS = dict(settings.REST_FRAMEWORK)
+PUBLIC_HOME_CONTACT_THROTTLE_SETTINGS['DEFAULT_THROTTLE_RATES'] = dict(
+    settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES', {}),
+    anon='1/hour',
+    user='100/minute',
+)
 
 
 class SiteSettingsSystemAlertTests(APITestCase):
@@ -119,3 +128,18 @@ class SiteSettingsSystemAlertTests(APITestCase):
         response = self.client.post(url, payload, format='json')
         self.assertEqual(response.status_code, 201)
         self.assertTrue(SystemAlert.objects.filter(message='Unexpected server failure.').exists())
+
+    @override_settings(REST_FRAMEWORK=PUBLIC_HOME_CONTACT_THROTTLE_SETTINGS)
+    def test_home_contact_public_get_is_not_rate_limited(self):
+        settings_obj = HomeContactSettings.get_solo()
+        settings_obj.text = 'Home contact text'
+        settings_obj.phone_number = '+998901234567'
+        settings_obj.telegram_link = 'https://t.me/gmed'
+        settings_obj.save(update_fields=['text', 'phone_number', 'telegram_link'])
+
+        first_response = self.client.get(reverse('home-contact-settings'))
+        second_response = self.client.get(reverse('home-contact-settings'))
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(second_response.status_code, 200)
+        self.assertIn('phone_number', second_response.json())

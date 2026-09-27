@@ -10,6 +10,45 @@ const INITIAL_BOOKING_FORM = {
   dateOfBirth: ''
 }
 
+const normalizeDoctorSpecialtyRows = (doctor) => {
+  if (!doctor) return []
+
+  const rows = Array.isArray(doctor.specialty_prices) ? doctor.specialty_prices : []
+  const mergedRows = new Map()
+
+  rows
+    .filter((item) => item && item.is_active !== false)
+    .forEach((item) => {
+      const specializationId = item.specialization_id || item.specialization?.id
+      const id = specializationId ?? item.id ?? `${doctor.id}-${item.custom_name || item.name || 'specialty'}`
+      const customName = item.custom_name || item.specialization?.name || item.name || 'Yo\'nalish'
+      mergedRows.set(id, {
+        ...item,
+        id: item.id ?? id,
+        custom_name: customName,
+        name: customName,
+        consultation_fee: Number(item.consultation_fee ?? item.price ?? doctor.consultation_fee ?? 0),
+        is_active: true,
+      })
+    })
+
+  ;(Array.isArray(doctor.specializations) ? doctor.specializations : []).forEach((specialization, index) => {
+    const id = specialization?.id ?? `${doctor.id}-spec-${index}`
+    if (mergedRows.has(id)) return
+    mergedRows.set(id, {
+      id,
+      custom_name: specialization?.name || 'Yo\'nalish',
+      name: specialization?.name || 'Yo\'nalish',
+      specialization: { name: specialization?.name || 'Yo\'nalish' },
+      consultation_fee: Number(doctor.consultation_fee || 0),
+      is_active: true,
+      doctor_custom: false,
+    })
+  })
+
+  return [...mergedRows.values()].sort((a, b) => String(a.custom_name || '').localeCompare(String(b.custom_name || ''), 'uz'))
+}
+
 const formatDateInputValue = (value) => {
   const year = value.getFullYear()
   const month = String(value.getMonth() + 1).padStart(2, '0')
@@ -67,25 +106,39 @@ const ClinicDetailPage = () => {
       const doctorsList = doctorsData?.results || doctorsData || []
       setDoctors(doctorsList)
       
-      // Group doctors by specialties
+      // Keep doctor-created specialties for booking, not in the clinic directory.
       const groups = {}
       doctorsList.forEach(doctor => {
-        if (doctor.specialty_prices && doctor.specialty_prices.length > 0) {
-          doctor.specialty_prices.filter((sp) => !sp.doctor_custom).forEach(sp => {
-            const specName = sp.specialization.name
-            if (!groups[specName]) {
-              groups[specName] = {
-                specialization: sp.specialization,
-                doctors: []
-              }
+        const specialtyRows = normalizeDoctorSpecialtyRows(doctor).filter((row) => !row.doctor_custom)
+        if (specialtyRows.length === 0) {
+          const specName = "Yo'nalish belgilanmagan"
+          if (!groups[specName]) {
+            groups[specName] = {
+              specialization: { name: specName },
+              doctors: []
             }
-            groups[specName].doctors.push({
-              doctor: doctor,
-              price: sp.consultation_fee,
-              specialtyPriceId: sp.id
-            })
+          }
+          groups[specName].doctors.push({
+            doctor,
+            price: Number(doctor.consultation_fee || 0),
+            specialtyPriceId: null
           })
+          return
         }
+        specialtyRows.forEach((sp) => {
+          const specName = sp.specialization?.name || sp.custom_name || 'Yo\'nalish'
+          if (!groups[specName]) {
+            groups[specName] = {
+              specialization: { name: specName },
+              doctors: []
+            }
+          }
+          groups[specName].doctors.push({
+            doctor: doctor,
+            price: sp.consultation_fee,
+            specialtyPriceId: sp.id
+          })
+        })
       })
       
       setSpecialtyGroups(groups)
@@ -163,8 +216,13 @@ const ClinicDetailPage = () => {
   }
 
   const openBooking = async (doctorData) => {
-    setSelectedDoctor(doctorData)
-    setSelectedSpecialtyPriceIds([])
+    const normalizedDoctor = {
+      ...doctorData,
+      specialty_prices: normalizeDoctorSpecialtyRows(doctorData).filter((item) => item.doctor_custom === true),
+    }
+
+    setSelectedDoctor(normalizedDoctor)
+    setSelectedSpecialtyPriceIds(normalizedDoctor.specialty_prices.length > 0 ? normalizedDoctor.specialty_prices.map((item) => String(item.id)) : [])
     setSelectedSlot(null)
     setBookingMessage(null)
     setBookingResult(null)
@@ -191,11 +249,6 @@ const ClinicDetailPage = () => {
     const lastName = bookingForm.lastName.trim()
     const phoneNumber = bookingForm.phone.replace(/[^\d+]/g, '')
     const phoneDigits = phoneNumber.replace(/\D/g, '')
-    const legacyFlowEnabled =
-      clinic?.attendance_enabled === false &&
-      clinic?.diagnosis_entry_enabled === false &&
-      clinic?.reception_room_enabled === false
-
     if (!selectedDoctor || !selectedSlot) {
       setBookingMessage('Iltimos, bo\'sh vaqtni tanlang')
       return
@@ -227,13 +280,13 @@ const ClinicDetailPage = () => {
         ...(bookingForm.dateOfBirth ? { date_of_birth: bookingForm.dateOfBirth } : {})
       })
       setBookingResult(result)
-      if (legacyFlowEnabled && result?.telegram_bot_link) {
+      if (result?.telegram_bot_link) {
         setBookingMessage('Navbat olindi. Telegram botga yo\'naltirilmoqda...')
         setTimeout(() => {
           window.location.assign(result.telegram_bot_link)
         }, 300)
       } else {
-        setBookingMessage('Navbat olindi. Klinikaga borib navbatingizni Telegram botda tasdiqlang.')
+        setBookingMessage('Telegram bot havolasi yaratilmadi. Iltimos, qayta urinib ko\'ring.')
       }
       setBookingForm({ ...INITIAL_BOOKING_FORM })
       setSelectedSlot(null)
@@ -378,7 +431,7 @@ const ClinicDetailPage = () => {
               <div className="booking-section">
                 <label>Doktor yo'nalishlari</label>
                 <div className="booking-specialty-options">
-                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).map((item) => {
+                  {(selectedDoctor?.specialty_prices || []).filter((item) => item && item.is_active !== false).map((item) => {
                     const itemId = String(item.id)
                     const checked = selectedSpecialtyPriceIds.includes(itemId)
                     return (
@@ -390,12 +443,12 @@ const ClinicDetailPage = () => {
                             checked ? current.filter((id) => id !== itemId) : [...current, itemId]
                           ))}
                         />
-                        <span>{item.custom_name || item.specialization?.name}</span>
+                        <span>{item.custom_name || item.specialization?.name || item.name || 'Yo\'nalish'}</span>
                         <strong>{Number(item.consultation_fee || 0).toLocaleString()} so'm</strong>
                       </label>
                     )
                   })}
-                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).length === 0 && (
+                  {(selectedDoctor?.specialty_prices || []).filter((item) => item && item.is_active !== false).length === 0 && (
                     <div className="booking-empty">Doktor hozircha o'z yo'nalishlarini qo'shmagan</div>
                   )}
                 </div>

@@ -14,6 +14,9 @@ const Navbar = () => {
             <Link to="/" className="navbar-link">Asosiy</Link>
           </li>
           <li>
+            <a href="/analiz-tahlili/" className="navbar-link">AI tahlil</a>
+          </li>
+          <li>
             <Link to="/contact" className="navbar-link">Bog'lanish</Link>
           </li>
           <li>

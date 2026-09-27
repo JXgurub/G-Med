@@ -7,9 +7,10 @@ from unittest.mock import patch
 
 from apps.users.models import CustomUser
 from apps.clinics.models import Clinic
-from apps.doctors.models import Doctor, Specialization, DoctorAvailability, DoctorEmployment, DoctorWorkRecord
+from apps.doctors.models import Doctor, Specialization, DoctorAvailability, DoctorEmployment, DoctorWorkRecord, DoctorSpecialization
 from apps.patients.models import Patient
 from apps.medical.models import Appointment, MedicalRecord
+from apps.doctors.serializers import DoctorSerializer
 
 
 class DoctorEmploymentLifecycleTests(APITestCase):
@@ -185,6 +186,94 @@ class DoctorEmploymentLifecycleTests(APITestCase):
         payload = response.json()
         self.assertIn('passport_id', payload)
         self.assertIn('allaqachon mavjud', str(payload['passport_id']).lower())
+
+    def test_doctor_serializer_exposes_all_active_specialty_price_rows(self):
+        generic_spec = Specialization.objects.create(name='Kardiologiya REG', code='CARD-REG-1')
+        custom_spec = Specialization.objects.create(name='Qoshimcha yo\'nalish REG', code='CUSTOM-REG-1')
+
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=generic_spec,
+            consultation_fee=150000,
+            doctor_custom=False,
+            custom_name='',
+            is_active=True,
+        )
+        custom_row = DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=custom_spec,
+            consultation_fee=250000,
+            doctor_custom=True,
+            custom_name='Qoshimcha yo\'nalish',
+            is_active=True,
+        )
+
+        payload = DoctorSerializer(self.doctor).data
+        visible_ids = {item['id'] for item in payload.get('specialty_prices', [])}
+
+        generic_row = DoctorSpecialization.objects.get(doctor=self.doctor, specialization=generic_spec)
+        self.assertIn(str(generic_row.id), visible_ids)
+        self.assertIn(str(custom_row.id), visible_ids)
+
+    def test_doctor_serializer_includes_specializations_and_prices_on_public_list(self):
+        generic_spec = Specialization.objects.create(name='Kardiologiya fallback', code='CARD-FALLBACK-1')
+        custom_spec = Specialization.objects.create(name='Maxsus vaqti', code='CUSTOM-FALLBACK-1')
+        self.doctor.specializations.add(generic_spec)
+
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=generic_spec,
+            consultation_fee=150000,
+            doctor_custom=False,
+            custom_name='',
+            is_active=True,
+        )
+        custom_row = DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=custom_spec,
+            consultation_fee=250000,
+            doctor_custom=True,
+            custom_name='Maxsus vaqti',
+            is_active=True,
+        )
+
+        payload = DoctorSerializer(self.doctor).data
+        visible_ids = {item['id'] for item in payload.get('specialty_prices', [])}
+
+        generic_row = DoctorSpecialization.objects.get(doctor=self.doctor, specialization=generic_spec)
+        self.assertIn(str(generic_row.id), visible_ids)
+        self.assertIn(str(custom_row.id), visible_ids)
+
+    def test_clinic_level_specialty_listing_excludes_doctor_custom_rows(self):
+        generic_spec = Specialization.objects.create(name='Kardiologiya clinic listing', code='CARD-LISTING-1')
+        custom_spec = Specialization.objects.create(name='Doktor qo\'shgan yo\'nalish', code='CUSTOM-LISTING-1')
+
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=generic_spec,
+            consultation_fee=150000,
+            doctor_custom=False,
+            custom_name='',
+            is_active=True,
+        )
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=custom_spec,
+            consultation_fee=250000,
+            doctor_custom=True,
+            custom_name='Doktor qo\'shgan yo\'nalish',
+            is_active=True,
+        )
+
+        self.auth_as(self.owner_a)
+        response = self.client.get(reverse('doctor-specialization-by-clinic'), {'clinic_id': str(self.clinic_a.id)})
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        visible_ids = {str(item['id']) for item in payload}
+
+        self.assertIn(str(DoctorSpecialization.objects.get(doctor=self.doctor, specialization=generic_spec).id), visible_ids)
+        self.assertNotIn(str(DoctorSpecialization.objects.get(doctor=self.doctor, specialization=custom_spec).id), visible_ids)
 
     def test_terminate_keeps_profile_but_unassigns_clinic(self):
         self.auth_as(self.owner_a)

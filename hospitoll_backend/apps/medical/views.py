@@ -994,7 +994,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 id__in=selected_price_ids,
                 doctor=doctor,
                 is_active=True,
-                doctor_custom=True,
             ).count()
             if valid_price_count != len(set(selected_price_ids)):
                 return Response({'detail': "Tanlangan yo'nalish doktorga tegishli emas yoki faol emas."}, status=status.HTTP_400_BAD_REQUEST)
@@ -1232,7 +1231,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 id__in=requested_ids - current_ids,
                 doctor_id=appointment.doctor_id,
                 is_active=True,
-                doctor_custom=True,
             ).select_related('specialization')
             if additions.count() != len(requested_ids - current_ids):
                 return Response({'detail': "Tanlangan xizmat doktorga tegishli emas yoki faol emas."}, status=status.HTTP_400_BAD_REQUEST)

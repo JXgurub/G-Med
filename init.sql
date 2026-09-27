@@ -25,21 +25,21 @@ CREATE SCHEMA IF NOT EXISTS hospitoll;
 ALTER DATABASE hospitoll_db SET search_path TO hospitoll, public;
 
 -- Create roles with proper permissions
-DO $$
-BEGIN
-	IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hospitoll_admin') THEN
-		EXECUTE format('CREATE ROLE hospitoll_admin WITH LOGIN PASSWORD %L', :'HOSPITOLL_ADMIN_PASSWORD');
-	ELSE
-		EXECUTE format('ALTER ROLE hospitoll_admin WITH LOGIN PASSWORD %L', :'HOSPITOLL_ADMIN_PASSWORD');
-	END IF;
+SELECT format('CREATE ROLE hospitoll_admin WITH LOGIN PASSWORD %L', :'HOSPITOLL_ADMIN_PASSWORD')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hospitoll_admin');
+\gexec
 
-	IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hospitoll_app') THEN
-		EXECUTE format('CREATE ROLE hospitoll_app WITH LOGIN PASSWORD %L', :'HOSPITOLL_APP_PASSWORD');
-	ELSE
-		EXECUTE format('ALTER ROLE hospitoll_app WITH LOGIN PASSWORD %L', :'HOSPITOLL_APP_PASSWORD');
-	END IF;
-END
-$$;
+SELECT format('ALTER ROLE hospitoll_admin WITH LOGIN PASSWORD %L', :'HOSPITOLL_ADMIN_PASSWORD')
+WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hospitoll_admin');
+\gexec
+
+SELECT format('CREATE ROLE hospitoll_app WITH LOGIN PASSWORD %L', :'HOSPITOLL_APP_PASSWORD')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hospitoll_app');
+\gexec
+
+SELECT format('ALTER ROLE hospitoll_app WITH LOGIN PASSWORD %L', :'HOSPITOLL_APP_PASSWORD')
+WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hospitoll_app');
+\gexec
 
 -- Grant permissions
 GRANT ALL PRIVILEGES ON SCHEMA hospitoll TO hospitoll_admin;

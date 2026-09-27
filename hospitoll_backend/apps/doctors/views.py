@@ -14,9 +14,10 @@ from datetime import datetime, timedelta
 import re
 
 from .models import Doctor, Specialization, DoctorAvailability, DoctorWorkRecord, DoctorSpecialization, DoctorEmployment
-from apps.medical.models import Appointment
+from apps.medical.models import Appointment, MedicalRecord, Prescription, LabTest
 from apps.medical.telegram_bot_service import TelegramBotService
 from apps.patients.models import PatientDoctorRating
+from apps.users.models import DoctorResetTelegramSession
 from .serializers import (
     DoctorSerializer,
     DoctorCreateSerializer,
@@ -31,39 +32,56 @@ from core.error_logging import ErrorLogger
 
 
 DEFAULT_SPECIALIZATIONS = [
-    ('Allergologiya va Immunologiya', 'ALLERGY_IMMUNO'),
-    ('Andrologiya', 'ANDRO'),
+    ('Stomatologiya', 'STOM'),
+    ('Dermatologiya', 'DERMA'),
+    ('Kardiologiya', 'CARDIO'),
+    ('Nevrologiya', 'NEURO'),
+    ('Endokrinologiya', 'ENDO'),
+    ('Pulmonologiya', 'PULMO'),
     ('Gastroenterologiya', 'GASTRO'),
     ('Gematologiya', 'HEMATO'),
-    ('Ginekologiya va Akusherlik', 'GYNE'),
-    ('Dermatologiya', 'DERMA'),
-    ('Diabetologiya', 'DIABETO'),
-    ('Endokrinologiya', 'ENDO'),
-    ('Kardiologiya', 'CARDIO'),
-    ('Mammologiya', 'MAMMO'),
-    ('Nefrologiya', 'NEPHRO'),
-    ('Nevrologiya', 'NEURO'),
-    ('Narkologiya', 'NARCO'),
-    ('Onkologiya', 'ONCO'),
-    ('Ortopediya va Travmatologiya', 'ORTHO'),
-    ('Otorinolaringologiya (LOR)', 'ENT'),
-    ('Oftalmologiya', 'OPHTH'),
+    ('Infeksion kasalliklar', 'INFECT'),
     ('Pediatriya', 'PEDI'),
-    ('Proktologiya', 'PROCTO'),
-    ('Psixiatriya va Psixoterapiya', 'PSYCH'),
-    ('Pulmonologiya', 'PULMO'),
-    ('Reabilitatologiya', 'REHAB'),
-    ('Revmatologiya', 'RHEUM'),
-    ('Stomatologiya', 'DENT'),
-    ('Terapiya', 'THERAPY'),
+    ('Ginekologiya va akusherlik', 'GYNE'),
     ('Urologiya', 'URO'),
-    ('Flebologiya', 'PHLEBO'),
-    ('Xirurgiya', 'SURGERY'),
+    ('Andrologiya', 'ANDRO'),
+    ('Umumiy jarrohlik', 'SURGERY'),
+    ('Travmatologiya va ortopediya', 'ORTHO_TRAUMA'),
+    ('Oftalmologiya', 'OPHTH'),
+    ('Otorinolaringologiya (LOR)', 'ENT'),
+    ('Neyroxirurgiya', 'NEURO_SURG'),
+    ('Onkologiya', 'ONCO'),
+    ('Terapiya', 'THERAPY'),
+    ('Revmatologiya', 'RHEUM'),
+    ('Nefrologiya', 'NEPHRO'),
+    ('Kardiojarrohlik', 'CARDIO_SURG'),
+    ('Allergologiya va immunologiya', 'ALLERGY_IMMUNO'),
+    ('Radiologiya va diagnostika', 'RADIO_DIAG'),
+    ('Anesteziologiya va reanimatsiya', 'ANESTH'),
+    ('Reabilitatsiya', 'REHAB'),
+    ('Psixiatriya', 'PSYCHIATRY'),
+    ('Genetika', 'GENETICS'),
+    ('Fizioterapiya', 'PHYSIOTHERAPY'),
+    ('Geriatriya', 'GERIATRICS'),
+    ('Dietologiya', 'DIET'),
+    ('Patologiya', 'PATHOLOGY'),
+    ('Umumiy amaliyot', 'GENERAL_PRACTICE'),
 ]
 
 
 def _allowed_slot_minutes() -> set[int]:
     return {int(value) for value, _ in Doctor.SLOT_MINUTES_CHOICES}
+
+
+def _is_admin_user(user) -> bool:
+    if not user or not getattr(user, 'is_authenticated', False):
+        return False
+    return bool(
+        getattr(user, 'is_superuser', False)
+        or getattr(user, 'is_staff', False)
+        or getattr(user, 'is_administrator', False)
+        or getattr(user, 'role', None) == 'admin'
+    )
 
 
 class DoctorViewSet(viewsets.ModelViewSet):
@@ -226,11 +244,17 @@ class DoctorViewSet(viewsets.ModelViewSet):
         if not end_time:
             return False
 
-        return now_local.time() < end_time
+        end_dt = timezone.make_aware(
+            datetime.combine(now_local.date(), end_time),
+            timezone.get_current_timezone(),
+        )
+        return now_local < end_dt
 
     def get_permissions(self):
-        if self.action in ['list', 'retrieve']:
+        if self.action in ['list', 'retrieve', 'public_register', 'public_directory']:
             return [permissions.AllowAny()]
+        if self.action in ['admin_list', 'admin_toggle_status', 'admin_approve', 'admin_delete']:
+            return [permissions.IsAuthenticated()]
         if self.action in ['my', 'check_in', 'check_out', 'cancel_today_appointments', 'terminate']:
             return [permissions.IsAuthenticated()]
         return [permissions.IsAuthenticated()]
@@ -276,7 +300,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
     def create(self, request, *args, **kwargs):
         if not request.user.is_authenticated:
             return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (request.user.is_clinic or request.user.is_superuser or request.user.is_staff):
+        if not (request.user.is_clinic or _is_admin_user(request.user)):
             return Response({'detail': 'Faqat klinika egasi doktor qo\'sha oladi.'}, status=status.HTTP_403_FORBIDDEN)
 
         data = request.data.copy()
@@ -292,6 +316,137 @@ class DoctorViewSet(viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
+    @action(detail=False, methods=['post'], url_path='public-register', url_name='public-register')
+    def public_register(self, request):
+        """Allow an independent doctor to register without assigning a clinic immediately."""
+        payload = request.data or {}
+        if not payload.get('first_name') or not payload.get('last_name'):
+            return Response({'detail': 'Ism va familiya majburiy.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not payload.get('email'):
+            return Response({'detail': 'Email majburiy.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not payload.get('password'):
+            return Response({'detail': 'Parol majburiy.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not payload.get('license_number'):
+            return Response({'detail': 'Tibbiy litsenziya raqami majburiy.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        data = {
+            'clinic': None,
+            'is_active': True,
+            'is_verified': False,
+            'email': payload.get('email'),
+            'password': payload.get('password'),
+            'first_name': payload.get('first_name'),
+            'last_name': payload.get('last_name'),
+            'phone_number': payload.get('phone_number', ''),
+            'pinfl': payload.get('pinfl', ''),
+            'license_number': payload.get('license_number'),
+            'diploma_number': payload.get('diploma_number', ''),
+            'first_work_year': payload.get('first_work_year'),
+            'first_work_month': payload.get('first_work_month'),
+            'date_of_birth': payload.get('date_of_birth'),
+            'passport_id': payload.get('passport_id', ''),
+            'city': payload.get('city', ''),
+            'bio': payload.get('bio', ''),
+            'consultation_fee': payload.get('consultation_fee', 0),
+            'available_from': payload.get('available_from', '09:00'),
+            'available_until': payload.get('available_until', '17:00'),
+            'lunch_break_start': payload.get('lunch_break_start'),
+            'lunch_break_end': payload.get('lunch_break_end'),
+            'slot_minutes': payload.get('slot_minutes', 30),
+            'working_days': payload.get('working_days', 'Mon,Tue,Wed,Thu,Fri'),
+            'specialization_ids': payload.get('specialization_ids', []),
+            'specialty_prices': payload.get('specialty_prices', []),
+        }
+
+        serializer = DoctorCreateSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        doctor = serializer.save()
+        public_data = DoctorSerializer(doctor).data
+        return Response(public_data, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=['get'], url_path='public-directory', url_name='public-directory')
+    def public_directory(self, request):
+        queryset = Doctor.objects.select_related('user', 'clinic').prefetch_related('specializations').filter(
+            clinic__isnull=True,
+            is_active=True,
+            is_verified=True,
+        ).order_by('-rating', '-total_ratings', '-created_at')
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'], url_path='admin-list', url_name='admin-list')
+    def admin_list(self, request):
+        if not _is_admin_user(request.user):
+            return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+
+        queryset = self.get_queryset().order_by('-is_verified', '-created_at')
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='admin-toggle-status', url_name='admin-toggle-status')
+    def admin_toggle_status(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+
+        doctor = self.get_object()
+        doctor.is_active = not doctor.is_active
+        doctor.save(update_fields=['is_active', 'updated_at'])
+        return Response({'detail': 'Doktor holati yangilandi.', 'doctor': DoctorSerializer(doctor).data}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='admin-approve', url_name='admin-approve')
+    def admin_approve(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+
+        doctor = self.get_object()
+        doctor.is_verified = True
+        doctor.is_active = True
+        doctor.save(update_fields=['is_verified', 'is_active', 'updated_at'])
+        return Response({'detail': 'Doktor tasdiqlandi.', 'doctor': DoctorSerializer(doctor).data}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['delete'], url_path='admin-delete', url_name='admin-delete')
+    def admin_delete(self, request, pk=None):
+        if not _is_admin_user(request.user):
+            return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+
+        payload = request.data or {}
+        confirm_flag = payload.get('confirm')
+        if confirm_flag is None:
+            confirm_flag = request.query_params.get('confirm')
+        is_confirmed = str(confirm_flag).strip().lower() in {'1', 'true', 'yes', 'y', 'confirm'}
+
+        if not is_confirmed:
+            return Response({
+                'detail': 'Doktorni o\'chirish uchun tasdiqlash kerak. confirm=true yuboring.',
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        doctor = self.get_object()
+        with transaction.atomic():
+            doctor_id = doctor.id
+            PatientDoctorRating.objects.filter(doctor_id=doctor_id).delete()
+            Appointment.objects.filter(doctor_id=doctor_id).delete()
+            MedicalRecord.objects.filter(doctor_id=doctor_id).delete()
+            Prescription.objects.filter(doctor_id=doctor_id).delete()
+            LabTest.objects.filter(doctor_id=doctor_id).delete()
+            DoctorAvailability.objects.filter(doctor_id=doctor_id).delete()
+            DoctorWorkRecord.objects.filter(doctor_id=doctor_id).delete()
+            DoctorEmployment.objects.filter(doctor_id=doctor_id).delete()
+            DoctorSpecialization.objects.filter(doctor_id=doctor_id).delete()
+            DoctorResetTelegramSession.objects.filter(doctor_id=doctor_id).delete()
+            doctor.delete()
+
+        return Response({'detail': 'Doktor va unga tegishli barcha ma\'lumotlar o\'chirildi.'}, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=['post'], url_path='reorder-display')
     def reorder_display(self, request):
         if not request.user.is_authenticated:
@@ -306,7 +461,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
         if not doctor:
             return Response({'detail': 'Doktor topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if not (request.user.is_superuser or request.user.is_staff or request.user.is_clinic):
+        if not (_is_admin_user(request.user) or request.user.is_clinic):
             return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
 
         clinic = getattr(request.user, 'clinic', None)
@@ -349,7 +504,7 @@ class DoctorViewSet(viewsets.ModelViewSet):
     def identity_check(self, request):
         if not request.user.is_authenticated:
             return Response({'detail': 'Ruxsat berilmagan.'}, status=status.HTTP_403_FORBIDDEN)
-        if not (request.user.is_clinic or request.user.is_superuser or request.user.is_staff):
+        if not (request.user.is_clinic or _is_admin_user(request.user)):
             return Response({'detail': 'Faqat klinika egasi tekshirishi mumkin.'}, status=status.HTTP_403_FORBIDDEN)
 
         payload = request.data or {}
@@ -996,10 +1151,25 @@ class SpecializationViewSet(viewsets.ModelViewSet):
     serializer_class = SpecializationSerializer
 
     def _ensure_default_specializations(self):
+        canonical_names = {name.lower(): name for name, _ in DEFAULT_SPECIALIZATIONS}
+        canonical_codes = {code.lower(): code for _, code in DEFAULT_SPECIALIZATIONS}
+        all_specializations = list(Specialization.objects.all())
+
+        legacy_ids = []
+        for specialization in all_specializations:
+            key_name = (specialization.name or '').strip().lower()
+            key_code = (specialization.code or '').strip().lower()
+            if key_name not in canonical_names and key_code not in canonical_codes:
+                legacy_ids.append(specialization.pk)
+
+        if legacy_ids:
+            Specialization.objects.filter(pk__in=legacy_ids).delete()
+
+        existing_by_code = {spec.code.lower(): spec for spec in Specialization.objects.all() if spec.code}
+        existing_by_name = {spec.name.lower(): spec for spec in Specialization.objects.all()}
+
         for name, code in DEFAULT_SPECIALIZATIONS:
-            specialization = Specialization.objects.filter(code=code).first()
-            if not specialization:
-                specialization = Specialization.objects.filter(name__iexact=name).first()
+            specialization = existing_by_code.get(code.lower()) or existing_by_name.get(name.lower())
 
             if specialization:
                 updates = []
@@ -1017,14 +1187,18 @@ class SpecializationViewSet(viewsets.ModelViewSet):
                     updates.append('is_active')
                 if updates:
                     specialization.save(update_fields=updates)
+                existing_by_code[code.lower()] = specialization
+                existing_by_name[name.lower()] = specialization
                 continue
 
-            Specialization.objects.create(
+            specialization = Specialization.objects.create(
                 code=code,
                 name=name,
                 description='Auto-seeded default specialization',
                 is_active=True,
             )
+            existing_by_code[code.lower()] = specialization
+            existing_by_name[name.lower()] = specialization
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:
@@ -1215,7 +1389,7 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             slots = slots.filter(start_time__gte=min_time, start_time__lte=close_time)
 
             # Compare complete local datetimes as a final guard against stale slots.
-            current_time = timezone.now()
+            current_time = localtime()
             valid_slot_ids = [
                 slot.id
                 for slot in slots

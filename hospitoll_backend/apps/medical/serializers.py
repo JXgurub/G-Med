@@ -68,7 +68,7 @@ class OnlineAppointmentSerializer(serializers.Serializer):
     doctor = serializers.PrimaryKeyRelatedField(queryset=Doctor.objects.all())
     slot_id = serializers.PrimaryKeyRelatedField(queryset=DoctorAvailability.objects.all(), required=False, allow_null=True)
     specialty_price_id = serializers.UUIDField(required=False, allow_null=True)
-    specialty_price_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=False)
+    specialty_price_ids = serializers.ListField(child=serializers.UUIDField(), required=False, allow_empty=True)
     full_name = serializers.CharField(max_length=255, required=False, allow_blank=True)
     first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
     last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)

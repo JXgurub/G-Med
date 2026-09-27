@@ -8,9 +8,11 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.clinics.models import Clinic, ReceptionStaff
+from apps.clinics.views import ClinicViewSet
 from apps.doctors.models import Doctor
 from apps.medical.models import Appointment
 from apps.patients.models import Patient
+from apps.pharmacies.views import PharmacyViewSet
 from apps.users.models import CustomUser
 
 
@@ -19,6 +21,13 @@ LOGIN_THROTTLE_TEST_SETTINGS['DEFAULT_THROTTLE_RATES'] = dict(
     settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES', {}),
     anon='1/day',
     auth='100/minute',
+)
+
+PUBLIC_LIST_THROTTLE_TEST_SETTINGS = dict(settings.REST_FRAMEWORK)
+PUBLIC_LIST_THROTTLE_TEST_SETTINGS['DEFAULT_THROTTLE_RATES'] = dict(
+    settings.REST_FRAMEWORK.get('DEFAULT_THROTTLE_RATES', {}),
+    anon='1/hour',
+    user='100/minute',
 )
 
 
@@ -197,3 +206,32 @@ class ReceptionStatsAndThrottleTests(TestCase):
 
         self.assertEqual(first.status_code, 401)
         self.assertEqual(second.status_code, 401)
+
+    def test_public_api_list_views_disable_global_throttling(self):
+        clinic_view = ClinicViewSet()
+        clinic_view.action = 'list'
+        self.assertEqual(clinic_view.get_throttles(), [])
+
+        clinic_detail = ClinicViewSet()
+        clinic_detail.action = 'retrieve'
+        self.assertEqual(clinic_detail.get_throttles(), [])
+
+        pharmacy_view = PharmacyViewSet()
+        pharmacy_view.action = 'list'
+        self.assertEqual(pharmacy_view.get_throttles(), [])
+
+        pharmacy_detail = PharmacyViewSet()
+        pharmacy_detail.action = 'retrieve'
+        self.assertEqual(pharmacy_detail.get_throttles(), [])
+
+    @override_settings(REST_FRAMEWORK=PUBLIC_LIST_THROTTLE_TEST_SETTINGS)
+    def test_public_clinic_and_pharmacy_lists_are_not_rate_limited(self):
+        first_clinic = self.client.get(reverse('clinic-list'))
+        second_clinic = self.client.get(reverse('clinic-list'))
+        first_pharmacy = self.client.get(reverse('pharmacy-list'))
+        second_pharmacy = self.client.get(reverse('pharmacy-list'))
+
+        self.assertEqual(first_clinic.status_code, 200)
+        self.assertEqual(second_clinic.status_code, 200)
+        self.assertEqual(first_pharmacy.status_code, 200)
+        self.assertEqual(second_pharmacy.status_code, 200)

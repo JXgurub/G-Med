@@ -41,6 +41,11 @@ class HomeContactSettingsView(APIView):
             return [AllowAny()]
         return [IsAuthenticated(), IsAdministrator()]
 
+    def get_throttles(self):
+        if self.request.method == 'GET':
+            return []
+        return super().get_throttles()
+
     def get(self, request):
         settings_obj = HomeContactSettings.get_solo()
         serializer = HomeContactSettingsSerializer(settings_obj, context={'request': request})

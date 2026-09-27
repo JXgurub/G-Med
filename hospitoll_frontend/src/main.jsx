@@ -1,28 +1,22 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { registerSW } from 'virtual:pwa-register'
 import App from './App.jsx'
 import ErrorBoundary from './components/ErrorBoundary.jsx'
 import { api } from './services/api'
 import './index.css'
 
-const updateSW = registerSW({
-  immediate: true,
-  onNeedRefresh() {
-    window.dispatchEvent(new Event('pwa-update-found'))
-    window.setTimeout(() => {
-      void updateSW(true)
-    }, 250)
-  },
-  onOfflineReady() {
-    window.dispatchEvent(new Event('pwa-offline-ready'))
-  },
-})
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    registrations.forEach((registration) => {
+      registration.unregister()
+    })
+  })
+}
 
 if (typeof window !== 'undefined' && 'caches' in window) {
   caches.keys().then((keys) => {
     keys
-      .filter((key) => key.includes('api-cache'))
+      .filter((key) => key.includes('api-cache') || key.includes('pages-cache') || key.includes('assets-cache') || key.includes('workbox'))
       .forEach((key) => caches.delete(key))
   })
 }

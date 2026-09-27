@@ -35,6 +35,11 @@ class PharmacyViewSet(viewsets.ModelViewSet):
         # For create, update, delete - require authentication
         return [permissions.IsAuthenticated()]
 
+    def get_throttles(self):
+        if self.action in {'list', 'retrieve'}:
+            return []
+        return super().get_throttles()
+
     def get_serializer_class(self):
         if self.action == 'create':
             return PharmacyCreateSerializer

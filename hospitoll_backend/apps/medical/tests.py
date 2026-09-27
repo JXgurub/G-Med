@@ -1187,6 +1187,42 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         appointment = Appointment.objects.get(id=appointment_id)
         self.assertEqual(float(appointment.consultation_fee), 25000.0)
 
+    def test_online_booking_accepts_standard_specialty_row_even_when_not_doctor_custom(self):
+        target_date = timezone.localdate() + timedelta(days=1)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='11:00',
+            end_time='11:30',
+            status='available',
+        )
+
+        specialization = Specialization.objects.create(name='Terapevt', code='TRP')
+        specialty_price = DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=specialization,
+            consultation_fee=32000,
+            is_active=True,
+            doctor_custom=False,
+        )
+
+        url = reverse('appointment-online-booking')
+        response = self.client.post(url, {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'specialty_price_id': str(specialty_price.id),
+            'slot_id': str(slot.id),
+            'first_name': 'Ali',
+            'last_name': 'Valiyev',
+            'phone_number': '+998901111120',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        appointment_id = response.json().get('appointment', {}).get('id')
+        self.assertTrue(appointment_id)
+        appointment = Appointment.objects.get(id=appointment_id)
+        self.assertEqual(float(appointment.consultation_fee), 32000.0)
+
     def test_online_booking_without_specialty_id_uses_uniform_active_specialty_fee(self):
         self.doctor.consultation_fee = 35000
         self.doctor.save(update_fields=['consultation_fee'])
@@ -1223,6 +1259,41 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         self.assertTrue(appointment_id)
         appointment = Appointment.objects.get(id=appointment_id)
         self.assertEqual(float(appointment.consultation_fee), 25000.0)
+
+    def test_online_booking_with_empty_specialty_ids_uses_single_active_fee(self):
+        self.doctor.consultation_fee = 0
+        self.doctor.save(update_fields=['consultation_fee'])
+
+        target_date = timezone.localdate() + timedelta(days=1)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='09:00',
+            end_time='09:30',
+            status='available',
+        )
+
+        specialization = Specialization.objects.create(name='Pulmonolog', code='PUL')
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=specialization,
+            consultation_fee=27000,
+            is_active=True,
+        )
+
+        response = self.client.post(reverse('appointment-online-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'slot_id': str(slot.id),
+            'specialty_price_ids': [],
+            'first_name': 'Ali',
+            'last_name': 'Valiyev',
+            'phone_number': '+998901111180',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        appointment = Appointment.objects.get(id=response.json()['appointment']['id'])
+        self.assertEqual(float(appointment.consultation_fee), 27000.0)
 
     def test_online_booking_with_invalid_specialty_id_returns_400(self):
         target_date = timezone.localdate() + timedelta(days=1)
@@ -1562,6 +1633,32 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         appointment = Appointment.objects.get(id=response.json()['appointment']['id'])
         self.assertEqual(appointment.status, Appointment.Status.PENDING_TELEGRAM_CONFIRMATION)
         self.assertEqual(appointment.patient.date_of_birth.isoformat(), '1995-04-12')
+
+    def test_public_booking_allows_no_specialty_selection_with_single_fee(self):
+        self.doctor.consultation_fee = 0
+        self.doctor.save(update_fields=['consultation_fee'])
+
+        target_date = timezone.localdate() + timedelta(days=1)
+        specialization = Specialization.objects.create(name='Nefrolog', code='NEF')
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=specialization,
+            consultation_fee=24000,
+            is_active=True,
+        )
+
+        response = self.client.post(reverse('appointment-public-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'full_name': 'Public No Specialty',
+            'phone_number': '+998901111782',
+            'date': target_date.isoformat(),
+            'time': '14:00',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        appointment = Appointment.objects.get(id=response.json()['appointment']['id'])
+        self.assertEqual(float(appointment.consultation_fee), 24000.0)
 
     def test_public_booking_rejects_date_after_tomorrow(self):
         target_date = timezone.localdate() + timedelta(days=2)

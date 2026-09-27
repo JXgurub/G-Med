@@ -39,6 +39,11 @@ class ClinicViewSet(viewsets.ModelViewSet):
         # For create, update, delete - require admin
         return [permissions.IsAuthenticated(), IsAdministrator()]
 
+    def get_throttles(self):
+        if self.action in {'list', 'retrieve'}:
+            return []
+        return super().get_throttles()
+
     def get_serializer_class(self):
         if self.action == 'create':
             return ClinicCreateSerializer
@@ -206,6 +211,11 @@ class ClinicDepartmentViewSet(viewsets.ModelViewSet):
             return [permissions.AllowAny()]
         # Require authentication for create, update, delete
         return [permissions.IsAuthenticated()]
+
+    def get_throttles(self):
+        if self.action in {'list', 'retrieve'}:
+            return []
+        return super().get_throttles()
 
 
 class ReceptionStaffViewSet(viewsets.ModelViewSet):

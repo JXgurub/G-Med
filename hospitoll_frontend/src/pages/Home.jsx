@@ -333,6 +333,21 @@ const Home = () => {
         </div>
       </section>
 
+      <section className="ai-analysis-section" id="ai-analysis">
+        <div className="container">
+          <div className="ai-analysis-banner">
+            <div className="ai-analysis-copy">
+              <span className="ai-analysis-kicker">Smart diagnostika</span>
+              <h2>AI tahlil qilish</h2>
+              <p>Laboratoriya natijalari, rasm yoki PDF fayllarini yuklab, tezkor tibbiy izoh va tavsiyalar oling.</p>
+            </div>
+            <div className="ai-analysis-actions">
+              <a href="/analiz-tahlili/" className="ai-analysis-button">Analiz tahlili</a>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Clinics Section */}
       <section className="clinics-section">
         <div className="container">

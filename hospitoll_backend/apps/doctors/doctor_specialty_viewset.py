@@ -30,14 +30,16 @@ class DoctorSpecializationViewSet(viewsets.ModelViewSet):
         user = self.request.user
         queryset = DoctorSpecialization.objects.select_related('doctor', 'specialization')
         
-        # If user is a doctor, show only their specializations
+        # If user is a doctor, show only their specializations, including custom rows.
         if hasattr(user, 'doctor') and user.doctor is not None:  # type: ignore
             queryset = queryset.filter(doctor=user.doctor)  # type: ignore
-        
-        # If user is clinic owner, show specializations for their clinic's doctors
+
+        # Clinic owners should only see the generic clinic-level specialty catalog.
+        # Doctor-created custom rows remain private to the doctor and must not leak
+        # into the clinic onboarding / assignment list.
         elif hasattr(user, 'clinic') and user.clinic is not None:  # type: ignore
-            queryset = queryset.filter(doctor__clinic=user.clinic)  # type: ignore
-        
+            queryset = queryset.filter(doctor__clinic=user.clinic, doctor_custom=False)  # type: ignore
+
         return queryset
 
     def create(self, request, *args, **kwargs):
@@ -123,8 +125,9 @@ class DoctorSpecializationViewSet(viewsets.ModelViewSet):
         
         specializations = DoctorSpecialization.objects.filter(
             doctor__clinic_id=clinic_id,
-            is_active=True
+            is_active=True,
+            doctor_custom=False,
         ).select_related('specialization', 'doctor')
-        
+
         serializer = self.get_serializer(specializations, many=True)
         return Response(serializer.data)
