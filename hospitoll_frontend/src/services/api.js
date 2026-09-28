@@ -607,6 +607,18 @@ export const siteSettingsApi = {
   adminResolveSystemAlert: (id) => api.patch(`/site-settings/system-alerts/${id}/resolve/`, {}),
 }
 
+export const childSafetyApi = {
+  getRegions: (parentId) => api.get('/child-safety/regions/', parentId ? { parent_id: parentId } : undefined),
+  getRegion: (id) => api.get(`/child-safety/regions/${id}/`),
+  getStatistics: (id) => api.get(`/child-safety/statistics/${id}/`),
+  castVote: (data) => api.post('/child-safety/vote/', data),
+  adminGetRegions: () => api.get('/child-safety/admin/regions/'),
+  adminCreateRegion: (data) => api.post('/child-safety/admin/regions/', data),
+  adminDeleteRegion: (regionId) => api.delete(`/child-safety/admin/regions/${regionId}/`),
+  adminGetVotes: (regionId) => api.get(`/child-safety/admin/regions/${regionId}/votes/`),
+  adminRevokeVote: (voteId, reasonCategory, reason) => api.post(`/child-safety/admin/votes/${voteId}/revoke/`, { reason_category: reasonCategory, reason }),
+}
+
 export const prescriptionsApi = {
   getAll: (params) => api.get('/medical/prescriptions/', params),
   getById: (id) => api.get(`/medical/prescriptions/${id}/`),

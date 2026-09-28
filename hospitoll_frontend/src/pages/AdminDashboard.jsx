@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAdmin } from '../context/AdminContext'
-import { siteSettingsApi } from '../services/api'
+import { childSafetyApi, siteSettingsApi } from '../services/api'
 import useSmartAutoRefresh from '../hooks/useSmartAutoRefresh'
 import ChangePasswordModal from '../components/ChangePasswordModal'
 import SetPaymentAmountModal from '../components/SetPaymentAmountModal'
@@ -89,6 +89,16 @@ const AdminDashboard = () => {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [activeTab, setActiveTab] = useState('clinics')
+  const [childSafetyRegions, setChildSafetyRegions] = useState([])
+  const [childSafetyLoading, setChildSafetyLoading] = useState(false)
+  const [childSafetyError, setChildSafetyError] = useState('')
+  const [childSafetyNotice, setChildSafetyNotice] = useState('')
+  const [childSafetyForm, setChildSafetyForm] = useState({ level: 'region', name: '', parent_id: '' })
+  const [moderationRegionId, setModerationRegionId] = useState('')
+  const [moderationVotes, setModerationVotes] = useState([])
+  const [moderationReasons, setModerationReasons] = useState({})
+  const [moderationLoading, setModerationLoading] = useState(false)
+  const [moderationPendingVoteId, setModerationPendingVoteId] = useState('')
 
   // Home contact settings (Bog'lanish)
   const [homeContactLoading, setHomeContactLoading] = useState(false)
@@ -137,6 +147,20 @@ const AdminDashboard = () => {
     }
   }, [])
 
+  const loadChildSafetyRegions = useCallback(async ({ silent = false } = {}) => {
+    try {
+      if (!silent) setChildSafetyLoading(true)
+      setChildSafetyError('')
+      const data = await childSafetyApi.adminGetRegions()
+      setChildSafetyRegions(Array.isArray(data) ? data : [])
+    } catch (error) {
+      console.error('Bolalar xavfsizligi hududlarini yuklashda xatolik:', error)
+      setChildSafetyError('Hududlar yuklanmadi. Admin API ruxsatini tekshiring.')
+    } finally {
+      if (!silent) setChildSafetyLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     if (loading) return
     if (!admin) {
@@ -179,7 +203,11 @@ const AdminDashboard = () => {
       loadSystemAlerts({ silent: true }),
     ]
 
-    if (activeTab !== 'contact' && activeTab !== 'alerts' && typeof refreshAdminData === 'function') {
+    if (activeTab === 'childSafety') {
+      tasks.push(loadChildSafetyRegions({ silent: true }))
+    }
+
+    if (activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && typeof refreshAdminData === 'function') {
       tasks.push(refreshAdminData())
     }
 
@@ -188,7 +216,7 @@ const AdminDashboard = () => {
     } catch (error) {
       console.error('Admin realtime refresh xatoligi:', error)
     }
-  }, [admin, activeTab, loadLeads, loadSystemAlerts, refreshAdminData])
+  }, [admin, activeTab, loadChildSafetyRegions, loadLeads, loadSystemAlerts, refreshAdminData])
 
   useEffect(() => {
     if (!admin) return
@@ -205,6 +233,88 @@ const AdminDashboard = () => {
 
   const unreadLeadsCount = contactLeads.filter((l) => l?.is_read === false).length
   const unresolvedAlertsCount = systemAlerts.filter((a) => a?.is_resolved === false).length
+
+  const loadChildSafetyVotes = async (regionId) => {
+    setModerationRegionId(regionId)
+    setModerationLoading(true)
+    setChildSafetyError('')
+    try {
+      const data = await childSafetyApi.adminGetVotes(regionId)
+      setModerationVotes(Array.isArray(data) ? data : [])
+    } catch (error) {
+      console.error('Ovozlarni yuklashda xatolik:', error)
+      setChildSafetyError('Tanlangan hudud ovozlari yuklanmadi.')
+      setModerationVotes([])
+    } finally {
+      setModerationLoading(false)
+    }
+  }
+
+  const handleCreateSafetyRegion = async (event) => {
+    event.preventDefault()
+    setChildSafetyError('')
+    setChildSafetyNotice('')
+    try {
+      await childSafetyApi.adminCreateRegion({
+        ...childSafetyForm,
+        parent_id: childSafetyForm.level === 'region' ? null : childSafetyForm.parent_id,
+      })
+      setChildSafetyForm((current) => ({ ...current, name: '' }))
+      setChildSafetyNotice('Hudud qo‘shildi.')
+      await loadChildSafetyRegions()
+    } catch (error) {
+      setChildSafetyError(error?.message || 'Hududni qo‘shib bo‘lmadi.')
+    }
+  }
+  const handleDeleteSafetyRegion = async (region) => {
+    const confirmed = window.confirm(
+      `“${region.name}” hududini o‘chirishni tasdiqlaysizmi? Ovozlar yoki quyi hududlar bo‘lsa, ular saqlanib, hudud arxivlanadi.`
+    )
+    if (!confirmed) return
+
+    setChildSafetyError('')
+    setChildSafetyNotice('')
+    try {
+      const result = await childSafetyApi.adminDeleteRegion(region.id)
+      setChildSafetyNotice(result?.archived
+        ? 'Hudud va uning quyi hududlari tarixi saqlangan holda arxivlandi.'
+        : 'Hudud o‘chirildi.')
+      setModerationRegionId('')
+      setModerationVotes([])
+      await loadChildSafetyRegions()
+    } catch (error) {
+      setChildSafetyError(error?.message || 'Hududni o‘chirishda xatolik yuz berdi.')
+    }
+  }
+
+  const handleRevokeSafetyVote = async (voteId) => {
+    const moderation = moderationReasons[voteId] || {}
+    const reason = String(moderation.reason || '').trim()
+    if (!['abuse', 'fraud'].includes(moderation.reason_category)) {
+      setChildSafetyError('Bekor qilish sababi Abuse yoki Fraud bo‘lishi kerak.')
+      return
+    }
+    if (reason.length < 10) {
+      setChildSafetyError('Bekor qilish sababi kamida 10 ta belgidan iborat bo‘lsin.')
+      return
+    }
+    setModerationPendingVoteId(voteId)
+    setChildSafetyError('')
+    setChildSafetyNotice('')
+    try {
+      await childSafetyApi.adminRevokeVote(voteId, moderation.reason_category, reason)
+      setChildSafetyNotice('Ovoz moderatorlik auditi bilan bekor qilindi.')
+      setModerationReasons((current) => ({ ...current, [voteId]: { reason_category: '', reason: '' } }))
+      await Promise.all([
+        loadChildSafetyRegions({ silent: true }),
+        loadChildSafetyVotes(moderationRegionId),
+      ])
+    } catch (error) {
+      setChildSafetyError(error?.message || 'Ovozni bekor qilishda xatolik yuz berdi.')
+    } finally {
+      setModerationPendingVoteId('')
+    }
+  }
 
   const handleMarkLeadRead = async (leadId) => {
     try {
@@ -744,6 +854,12 @@ const AdminDashboard = () => {
           ) : null}
         </button>
         <button
+          className={`tab-btn ${activeTab === 'childSafety' ? 'active' : ''}`}
+          onClick={() => setActiveTab('childSafety')}
+        >
+          🛡️ Bolalar xavfsizligi ({childSafetyRegions.length})
+        </button>
+        <button
           className={`tab-btn ${activeTab === 'alerts' ? 'active' : ''}`}
           onClick={() => setActiveTab('alerts')}
         >
@@ -758,7 +874,7 @@ const AdminDashboard = () => {
 
       {/* Controls */}
       <div className="controls-section">
-        {activeTab !== 'contact' && activeTab !== 'alerts' && (
+        {activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && (
         <div className="search-box">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2"/>
@@ -773,7 +889,7 @@ const AdminDashboard = () => {
         </div>
         )}
 
-        {activeTab !== 'contact' && activeTab !== 'alerts' && (
+        {activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && (
         <div className="filter-buttons">
           {['all', 'active', 'suspended', 'unpaid'].map(status => (
             <button
@@ -787,7 +903,7 @@ const AdminDashboard = () => {
         </div>
         )}
 
-        {activeTab !== 'contact' && activeTab !== 'alerts' && (
+        {activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && (
           <button 
             className={`btn-add-clinic`}
             onClick={() => activeTab === 'clinics' ? toggleClinicForm() : togglePharmacyForm()}
@@ -1094,6 +1210,171 @@ const AdminDashboard = () => {
             )}
           </div>
         </div>
+      )}
+
+      {activeTab === 'childSafety' && (
+        <section className="child-safety-admin add-clinic-form">
+          <header className="child-safety-admin-header">
+            <div>
+              <h2>Bolalar xavfsizligi hududlari</h2>
+              <p>Ovozlar avtomatik hisoblanadi. Admin jami ovozlar va bahoni qo‘lda o‘zgartira olmaydi.</p>
+            </div>
+            <button type="button" className="btn-add-clinic" onClick={() => loadChildSafetyRegions()} disabled={childSafetyLoading}>
+              Yangilash
+            </button>
+          </header>
+
+          {childSafetyError ? <p className="child-safety-admin-message error" role="alert">{childSafetyError}</p> : null}
+          {childSafetyNotice ? <p className="child-safety-admin-message success" role="status">{childSafetyNotice}</p> : null}
+
+          <form className="child-safety-admin-form" onSubmit={handleCreateSafetyRegion}>
+            <label>
+              Hudud turi
+              <select
+                value={childSafetyForm.level}
+                onChange={(event) => setChildSafetyForm({ level: event.target.value, name: '', parent_id: '' })}
+              >
+                <option value="region">Viloyat / shahar</option>
+                <option value="district">Tuman / shahar</option>
+                <option value="mahalla">Mahalla</option>
+              </select>
+            </label>
+            {childSafetyForm.level !== 'region' ? (
+              <label>
+                Yuqori hudud
+                <select
+                  value={childSafetyForm.parent_id}
+                  onChange={(event) => setChildSafetyForm({ ...childSafetyForm, parent_id: event.target.value })}
+                  required
+                >
+                  <option value="">Tanlang</option>
+                  {childSafetyRegions
+                    .filter((region) => region.level === (childSafetyForm.level === 'district' ? 'region' : 'district'))
+                    .map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
+                </select>
+              </label>
+            ) : null}
+            <label>
+              Hudud nomi
+              <input
+                type="text"
+                maxLength={160}
+                value={childSafetyForm.name}
+                onChange={(event) => setChildSafetyForm({ ...childSafetyForm, name: event.target.value })}
+                placeholder="Masalan, Chilonzor tumani"
+                required
+              />
+            </label>
+            <button type="submit" className="btn-add-clinic" disabled={childSafetyLoading || (childSafetyForm.level !== 'region' && !childSafetyForm.parent_id)}>
+              Hudud qo‘shish
+            </button>
+          </form>
+
+          <div className="child-safety-admin-table-wrap">
+            <table className="child-safety-admin-table">
+              <thead>
+                <tr>
+                  <th>Hudud</th>
+                  <th>Jami ovoz</th>
+                  <th>Xavfsiz</th>
+                  <th>Ehtiyot</th>
+                  <th>Muammo bor</th>
+                  <th>Jamoatchilik bahosi</th>
+                  <th>Oxirgi ovoz</th>
+                  <th>Moderatsiya</th>
+                  <th>Amal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {childSafetyRegions.map((region) => (
+                  <tr key={region.id}>
+                    <td>
+                      <strong>{region.name}</strong>
+                      <small>{region.parent_name ? `${region.parent_name} · ` : ''}{({ region: 'Viloyat / shahar', district: 'Tuman / shahar', mahalla: 'Mahalla' })[region.level]}</small>
+                    </td>
+                    <td>{Number(region.total_votes || 0).toLocaleString('uz-UZ')}</td>
+                    <td>{Number(region.safe_votes || 0).toLocaleString('uz-UZ')}</td>
+                    <td>{Number(region.caution_votes || 0).toLocaleString('uz-UZ')}</td>
+                    <td>{Number(region.danger_votes || 0).toLocaleString('uz-UZ')}</td>
+                    <td>{region.community_score === null ? '—' : `${Number(region.community_score).toFixed(1)} / 10`}</td>
+                    <td>{region.last_vote_at ? formatAlertTime(region.last_vote_at) : 'Hozircha yo‘q'}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="child-safety-admin-review"
+                        onClick={() => loadChildSafetyVotes(region.id)}
+                      >
+                        {moderationRegionId === region.id ? 'Tanlangan' : 'Ovozlarni ko‘rish'}
+                      </button>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="child-safety-admin-delete"
+                        onClick={() => handleDeleteSafetyRegion(region)}
+                        title="Hududni o‘chirish yoki tarixini saqlab arxivlash"
+                      >
+                        O‘chirish
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {!childSafetyLoading && childSafetyRegions.length === 0 ? (
+                  <tr><td colSpan="9">Hududlar hali kiritilmagan.</td></tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+
+          {moderationRegionId ? (
+            <div className="child-safety-moderation">
+              <h3>Faol ovozlar: {childSafetyRegions.find((region) => region.id === moderationRegionId)?.name || 'Hudud'}</h3>
+              {moderationLoading ? <p>Ovozlar yuklanmoqda...</p> : moderationVotes.length === 0 ? (
+                <p>Bu hududda faol ovozlar yo‘q.</p>
+              ) : moderationVotes.map((vote) => (
+                <div className="child-safety-moderation-row" key={vote.id}>
+                  <div>
+                    <strong>{({ safe: 'Xavfsiz', caution: 'Ehtiyot bo‘lish kerak', danger: 'Xavfsizlik muammolari bor' })[vote.choice]}</strong>
+                    <small>{formatAlertTime(vote.created_at)} · foydalanuvchi ma’lumoti ko‘rsatilmaydi</small>
+                  </div>
+                  <select
+                    value={moderationReasons[vote.id]?.reason_category || ''}
+                    onChange={(event) => setModerationReasons({
+                      ...moderationReasons,
+                      [vote.id]: { ...moderationReasons[vote.id], reason_category: event.target.value },
+                    })}
+                    aria-label="Bekor qilish sababi turi"
+                  >
+                    <option value="">Abuse yoki Fraud tanlang</option>
+                    <option value="abuse">Abuse</option>
+                    <option value="fraud">Fraud</option>
+                  </select>
+                  <input
+                    type="text"
+                    minLength={10}
+                    maxLength={1000}
+                    placeholder="Abuse/fraud sababi (kamida 10 belgi)"
+                    value={moderationReasons[vote.id]?.reason || ''}
+                    onChange={(event) => setModerationReasons({
+                      ...moderationReasons,
+                      [vote.id]: { ...moderationReasons[vote.id], reason: event.target.value },
+                    })}
+                  />
+                  <button
+                    type="button"
+                    className="child-safety-admin-revoke"
+                    onClick={() => handleRevokeSafetyVote(vote.id)}
+                    disabled={moderationPendingVoteId === vote.id
+                      || !['abuse', 'fraud'].includes(moderationReasons[vote.id]?.reason_category)
+                      || (moderationReasons[vote.id]?.reason || '').trim().length < 10}
+                  >
+                    {moderationPendingVoteId === vote.id ? 'Bekor qilinmoqda...' : 'Abuse ovozini bekor qilish'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </section>
       )}
 
       {/* Add Clinic Form */}

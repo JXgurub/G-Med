@@ -9,6 +9,7 @@ import { PharmacyProvider } from './context/PharmacyContext'
 import { PaymentProvider } from './context/PaymentContext'
 const Layout = lazy(() => import('./layouts/Layout'))
 const Home = lazy(() => import('./pages/Home'))
+const ChildSafety = lazy(() => import('./pages/ChildSafety'))
 const AnalysisPage = lazy(() => import('./pages/AnalysisPage'))
 const LoginRedirect = lazy(() => import('./pages/LoginRedirect'))
 const ClinicDetailPage = lazy(() => import('./pages/ClinicDetailPage'))
@@ -53,6 +54,7 @@ function App() {
                   <Routes>
                     <Route path="/" element={<Layout />}>
                       <Route index element={<Home />} />
+                      <Route path="child-safety" element={<ChildSafety />} />
                       <Route path="login" element={<LoginRedirect />} />
                       <Route path="patient-login" element={<PatientLogin />} />
                       <Route path="patient-forgot-password" element={<PatientForgotPassword />} />

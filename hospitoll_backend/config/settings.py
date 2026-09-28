@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'apps.analytics',
     'apps.site_settings',
     'apps.printers',
+    'apps.child_safety',
 ]
 
 MIDDLEWARE = [
@@ -188,6 +189,7 @@ REST_FRAMEWORK = {
         'password_reset_confirm': '20/hour',
         'ai_analysis_upload': '20/hour',
         'ai_analysis_read': '120/hour',
+        'child_safety_vote': '10/hour',
     },
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,

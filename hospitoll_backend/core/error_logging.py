@@ -273,7 +273,7 @@ class ErrorLoggingMiddleware:
             'method': request.method,
             'path': path,
             'user_id': request.user.id if request.user.is_authenticated else None,
-            'remote_ip': self._get_client_ip(request),
+            'remote_ip': None if path == '/api/v1/child-safety/vote/' else self._get_client_ip(request),
         }
         
         if response.status_code >= 500:
