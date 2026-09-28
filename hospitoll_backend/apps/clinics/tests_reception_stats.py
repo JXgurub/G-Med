@@ -1,4 +1,5 @@
 from datetime import datetime, date
+from unittest.mock import patch
 
 from django.conf import settings
 from django.contrib.auth.hashers import make_password
@@ -223,6 +224,54 @@ class ReceptionStatsAndThrottleTests(TestCase):
         pharmacy_detail = PharmacyViewSet()
         pharmacy_detail.action = 'retrieve'
         self.assertEqual(pharmacy_detail.get_throttles(), [])
+
+    @patch('apps.medical.views.AppointmentViewSet._enqueue_reception_print_job')
+    def test_reception_patient_search_and_online_appointment_actions(self, enqueue_print):
+        patient_response = self.client.get(
+            '/api/v1/clinics/reception-staff/patients/',
+            {'q': 'Patient Stats'},
+            **self._reception_headers(),
+        )
+        self.assertEqual(patient_response.status_code, 200)
+        self.assertEqual(len(patient_response.json()), 1)
+
+        first = self._create_appointment(
+            timezone.make_aware(datetime(2026, 9, 28, 10, 0)),
+            25000,
+            Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+        )
+        pending_response = self.client.get(
+            '/api/v1/clinics/reception-staff/online-appointments/',
+            **self._reception_headers(),
+        )
+        self.assertEqual(pending_response.status_code, 200)
+        self.assertEqual([item['id'] for item in pending_response.json()], [str(first.id)])
+
+        confirm_response = self.client.post(
+            f'/api/v1/clinics/reception-staff/online-appointments/{first.id}/confirm/',
+            {},
+            format='json',
+            **self._reception_headers(),
+        )
+        self.assertEqual(confirm_response.status_code, 200)
+        first.refresh_from_db()
+        self.assertEqual(first.status, Appointment.Status.SCHEDULED)
+        enqueue_print.assert_called_once()
+
+        second = self._create_appointment(
+            timezone.make_aware(datetime(2026, 9, 28, 11, 0)),
+            25000,
+            Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+        )
+        cancel_response = self.client.post(
+            f'/api/v1/clinics/reception-staff/online-appointments/{second.id}/cancel/',
+            {},
+            format='json',
+            **self._reception_headers(),
+        )
+        self.assertEqual(cancel_response.status_code, 200)
+        second.refresh_from_db()
+        self.assertEqual(second.status, Appointment.Status.CANCELLED)
 
     @override_settings(REST_FRAMEWORK=PUBLIC_LIST_THROTTLE_TEST_SETTINGS)
     def test_public_clinic_and_pharmacy_lists_are_not_rate_limited(self):

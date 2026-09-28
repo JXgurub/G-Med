@@ -1,0 +1,3 @@
+[submodule "tmp_ai_doctor"]
+	path = tmp_ai_doctor
+	url = https://github.com/JXgurub/Ai-doktor.git

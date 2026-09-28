@@ -38,13 +38,7 @@ class DoctorSpecializationSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
     def get_display_name(self, obj):
-        clinic_registration = getattr(getattr(obj.doctor, 'clinic', None), 'registration_number', '')
-        raw_name = obj.custom_name or (obj.specialization.name if obj.specialization else '')
-        if not raw_name and clinic_registration == 'CLN-260727-6662':
-            return 'Stomatologiya'
-        if not raw_name:
-            return 'Yo\'nalish'
-        return raw_name
+        return obj.custom_name or (obj.specialization.name if obj.specialization else '')
 
     def validate_custom_name(self, value):
         # Renaming is scoped to the doctor's own row; shared taxonomy stays untouched.
@@ -55,8 +49,8 @@ class DoctorSpecializationSerializer(serializers.ModelSerializer):
 
 class DoctorSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
-    specializations = serializers.SerializerMethodField()
-    specialty_prices = serializers.SerializerMethodField()
+    specializations = SpecializationSerializer(many=True, read_only=True)
+    specialty_prices = DoctorSpecializationSerializer(many=True, read_only=True)
     monthly_hours = serializers.SerializerMethodField()
     today_hours = serializers.SerializerMethodField()
     today_work_record = serializers.SerializerMethodField()
@@ -132,23 +126,6 @@ class DoctorSerializer(serializers.ModelSerializer):
             'version',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at', 'display_order']
-
-    def _visible_specialty_queryset(self, obj):
-        return DoctorSpecialization.objects.filter(
-            doctor=obj,
-            is_active=True,
-        ).select_related('specialization').order_by('specialization__name')
-
-    def get_specializations(self, obj):
-        visible_rows = self._visible_specialty_queryset(obj)
-        specializations = Specialization.objects.filter(
-            id__in=visible_rows.values_list('specialization_id', flat=True)
-        ).order_by('name')
-        return SpecializationSerializer(specializations, many=True).data
-
-    def get_specialty_prices(self, obj):
-        visible_rows = self._visible_specialty_queryset(obj)
-        return DoctorSpecializationSerializer(visible_rows, many=True).data
 
     def validate(self, attrs):
         instance = getattr(self, 'instance', None)

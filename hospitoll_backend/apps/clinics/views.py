@@ -267,7 +267,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         token = signing.dumps({'staff_id': str(staff.id), 'clinic_id': str(staff.clinic_id)}, salt='reception-staff-session')
         return Response({'token': token, 'staff': ReceptionStaffSerializer(staff).data})
 
-    @action(detail=False, methods=['get'], url_path='me', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    @action(detail=False, methods=['get'], url_path='me', permission_classes=[permissions.AllowAny])
     def me(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -275,7 +275,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(timezone.localdate())})
         return Response(serializer.data)
 
-    @action(detail=False, methods=['post'], url_path='check-in', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    @action(detail=False, methods=['post'], url_path='check-in', permission_classes=[permissions.AllowAny])
     def check_in(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -295,7 +295,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(today)})
         return Response({'detail': 'Ishga kelish vaqti saqlandi.', 'staff': serializer.data})
 
-    @action(detail=False, methods=['post'], url_path='check-out', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    @action(detail=False, methods=['post'], url_path='check-out', permission_classes=[permissions.AllowAny])
     def check_out(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -315,7 +315,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         serializer = ReceptionStaffSerializer(staff, context={'reception_stats_date': str(today)})
         return Response({'detail': 'Ishdan ketish vaqti saqlandi.', 'staff': serializer.data})
 
-    @action(detail=False, methods=['get'], url_path='doctors', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    @action(detail=False, methods=['get'], url_path='doctors', permission_classes=[permissions.AllowAny])
     def doctors(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -331,7 +331,6 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
                 if item.get('doctor_custom') is True
             ]
         return Response(serialized_doctors)
-
     @action(detail=False, methods=['get'], url_path='patients', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def patients(self, request):
         staff = self._resolve_staff_from_session(request)
@@ -349,10 +348,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             parts = query.split()
             name_query = Q(user__first_name__icontains=query) | Q(user__last_name__icontains=query)
             if len(parts) > 1:
-                name_query |= Q(
-                    user__first_name__icontains=parts[0],
-                    user__last_name__icontains=' '.join(parts[1:]),
-                )
+                name_query |= Q(user__first_name__icontains=parts[0], user__last_name__icontains=' '.join(parts[1:]))
             patients = patients.filter(
                 Q(phone_number__icontains=query) | Q(patient_number__icontains=query) | name_query
             )
@@ -404,13 +400,12 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             return None, Response({'detail': 'Onlayn navbat topilmadi yoki allaqachon ko‘rib chiqilgan.'}, status=status.HTTP_404_NOT_FOUND)
         return (staff, appointment), None
 
-    @action(detail=True, methods=['post'], url_path='online-appointments/confirm', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    @action(detail=False, methods=['post'], url_path=r'online-appointments/(?P<pk>[^/.]+)/confirm', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def confirm_online_appointment(self, request, pk=None):
         resolved, error = self._resolve_online_appointment(request, pk)
         if error:
             return error
         staff, appointment = resolved
-        from django.utils import timezone
         from apps.medical.models import Appointment
         appointment.status = Appointment.Status.SCHEDULED
         appointment.reception_staff = staff
@@ -421,7 +416,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         AppointmentViewSet()._enqueue_reception_print_job(appointment, appointment.clinic, appointment.doctor)
         return Response({'detail': 'Onlayn navbat tasdiqlandi va printerga yuborildi.', 'queue_position': appointment.queue_position})
 
-    @action(detail=True, methods=['post'], url_path='online-appointments/cancel', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    @action(detail=False, methods=['post'], url_path=r'online-appointments/(?P<pk>[^/.]+)/cancel', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def cancel_online_appointment(self, request, pk=None):
         resolved, error = self._resolve_online_appointment(request, pk)
         if error:
@@ -434,7 +429,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             appointment.slot.save(update_fields=['status'])
         return Response({'detail': 'Onlayn navbat bekor qilindi.'})
 
-    @action(detail=False, methods=['get'], url_path='stats', permission_classes=[permissions.AllowAny], throttle_classes=[])
+    @action(detail=False, methods=['get'], url_path='stats', permission_classes=[permissions.AllowAny])
     def stats(self, request):
         staff = self._resolve_staff_from_session(request)
         if not staff:
@@ -474,7 +469,6 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             month_end = month_start.replace(year=month_start.year + 1, month=1)
         else:
             month_end = month_start.replace(month=month_start.month + 1)
-
         monthly = Appointment.objects.filter(
             clinic_id=staff.clinic_id,
             scheduled_date__date__gte=month_start,
@@ -485,15 +479,12 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             'queue_position': int(item.queue_position or 0),
             'patient_name': item.patient.user.get_full_name() if item.patient and item.patient.user else 'Bemor',
             'phone': item.patient.phone_number if item.patient else '',
-            'patient_number': item.patient.patient_number if item.patient else '',
-            'date_of_birth': item.patient.date_of_birth.isoformat() if item.patient and item.patient.date_of_birth else None,
             'birth_year': (
                 item.patient.birth_year
                 if item.patient and item.patient.birth_year
                 else (item.patient.date_of_birth.year if item.patient and item.patient.date_of_birth else None)
             ),
             'doctor_name': item.doctor.user.get_full_name() if item.doctor and item.doctor.user else 'Doktor',
-            'doctor_id': str(item.doctor_id) if item.doctor_id else None,
             'selected_specialties': item.selected_specialties or [],
             'amount': float(item.consultation_fee or 0),
             'time': timezone.localtime(item.scheduled_date).strftime('%H:%M')

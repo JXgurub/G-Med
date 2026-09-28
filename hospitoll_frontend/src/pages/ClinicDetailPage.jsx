@@ -6,47 +6,7 @@ import './ClinicDetailPage.css'
 const INITIAL_BOOKING_FORM = {
   firstName: '',
   lastName: '',
-  phone: '+998',
-  dateOfBirth: ''
-}
-
-const normalizeDoctorSpecialtyRows = (doctor) => {
-  if (!doctor) return []
-
-  const rows = Array.isArray(doctor.specialty_prices) ? doctor.specialty_prices : []
-  const mergedRows = new Map()
-
-  rows
-    .filter((item) => item && item.is_active !== false)
-    .forEach((item) => {
-      const specializationId = item.specialization_id || item.specialization?.id
-      const id = specializationId ?? item.id ?? `${doctor.id}-${item.custom_name || item.name || 'specialty'}`
-      const customName = item.custom_name || item.specialization?.name || item.name || 'Yo\'nalish'
-      mergedRows.set(id, {
-        ...item,
-        id: item.id ?? id,
-        custom_name: customName,
-        name: customName,
-        consultation_fee: Number(item.consultation_fee ?? item.price ?? doctor.consultation_fee ?? 0),
-        is_active: true,
-      })
-    })
-
-  ;(Array.isArray(doctor.specializations) ? doctor.specializations : []).forEach((specialization, index) => {
-    const id = specialization?.id ?? `${doctor.id}-spec-${index}`
-    if (mergedRows.has(id)) return
-    mergedRows.set(id, {
-      id,
-      custom_name: specialization?.name || 'Yo\'nalish',
-      name: specialization?.name || 'Yo\'nalish',
-      specialization: { name: specialization?.name || 'Yo\'nalish' },
-      consultation_fee: Number(doctor.consultation_fee || 0),
-      is_active: true,
-      doctor_custom: false,
-    })
-  })
-
-  return [...mergedRows.values()].sort((a, b) => String(a.custom_name || '').localeCompare(String(b.custom_name || ''), 'uz'))
+  phone: '+998'
 }
 
 const formatDateInputValue = (value) => {
@@ -86,7 +46,6 @@ const ClinicDetailPage = () => {
   })
   const [bookingLoading, setBookingLoading] = useState(false)
   const [bookingMessage, setBookingMessage] = useState(null)
-  const [bookingResult, setBookingResult] = useState(null)
   const { today: minBookingDate, tomorrow: maxBookingDate } = getDateWindow()
 
   useEffect(() => {
@@ -106,39 +65,25 @@ const ClinicDetailPage = () => {
       const doctorsList = doctorsData?.results || doctorsData || []
       setDoctors(doctorsList)
       
-      // Keep doctor-created specialties for booking, not in the clinic directory.
+      // Group doctors by specialties
       const groups = {}
       doctorsList.forEach(doctor => {
-        const specialtyRows = normalizeDoctorSpecialtyRows(doctor).filter((row) => !row.doctor_custom)
-        if (specialtyRows.length === 0) {
-          const specName = "Yo'nalish belgilanmagan"
-          if (!groups[specName]) {
-            groups[specName] = {
-              specialization: { name: specName },
-              doctors: []
+        if (doctor.specialty_prices && doctor.specialty_prices.length > 0) {
+          doctor.specialty_prices.filter((sp) => !sp.doctor_custom).forEach(sp => {
+            const specName = sp.specialization.name
+            if (!groups[specName]) {
+              groups[specName] = {
+                specialization: sp.specialization,
+                doctors: []
+              }
             }
-          }
-          groups[specName].doctors.push({
-            doctor,
-            price: Number(doctor.consultation_fee || 0),
-            specialtyPriceId: null
+            groups[specName].doctors.push({
+              doctor: doctor,
+              price: sp.consultation_fee,
+              specialtyPriceId: sp.id
+            })
           })
-          return
         }
-        specialtyRows.forEach((sp) => {
-          const specName = sp.specialization?.name || sp.custom_name || 'Yo\'nalish'
-          if (!groups[specName]) {
-            groups[specName] = {
-              specialization: { name: specName },
-              doctors: []
-            }
-          }
-          groups[specName].doctors.push({
-            doctor: doctor,
-            price: sp.consultation_fee,
-            specialtyPriceId: sp.id
-          })
-        })
       })
       
       setSpecialtyGroups(groups)
@@ -216,16 +161,10 @@ const ClinicDetailPage = () => {
   }
 
   const openBooking = async (doctorData) => {
-    const normalizedDoctor = {
-      ...doctorData,
-      specialty_prices: normalizeDoctorSpecialtyRows(doctorData).filter((item) => item.doctor_custom === true),
-    }
-
-    setSelectedDoctor(normalizedDoctor)
-    setSelectedSpecialtyPriceIds(normalizedDoctor.specialty_prices.length > 0 ? normalizedDoctor.specialty_prices.map((item) => String(item.id)) : [])
+    setSelectedDoctor(doctorData)
+    setSelectedSpecialtyPriceIds([])
     setSelectedSlot(null)
     setBookingMessage(null)
-    setBookingResult(null)
     setAvailabilityNotice('')
     setBookingForm({ ...INITIAL_BOOKING_FORM })
     const today = getDateWindow().today
@@ -249,12 +188,13 @@ const ClinicDetailPage = () => {
     const lastName = bookingForm.lastName.trim()
     const phoneNumber = bookingForm.phone.replace(/[^\d+]/g, '')
     const phoneDigits = phoneNumber.replace(/\D/g, '')
+
     if (!selectedDoctor || !selectedSlot) {
       setBookingMessage('Iltimos, bo\'sh vaqtni tanlang')
       return
     }
     if (!firstName || !lastName || !phoneNumber || phoneNumber === '+998') {
-      setBookingMessage('Ism, familiya va telefonni to\'ldiring')
+      setBookingMessage('Barcha maydonlarni to\'ldiring (telefon ham majburiy)')
       return
     }
     if (!/^\+998\d{9}$/.test(phoneNumber) || phoneDigits.length !== 12) {
@@ -276,18 +216,14 @@ const ClinicDetailPage = () => {
         slot_id: selectedSlot.id,
         first_name: firstName,
         last_name: lastName,
-        phone_number: phoneNumber,
-        ...(bookingForm.dateOfBirth ? { date_of_birth: bookingForm.dateOfBirth } : {})
+        phone_number: phoneNumber
       })
-      setBookingResult(result)
       if (result?.telegram_bot_link) {
-        setBookingMessage('Navbat olindi. Telegram botga yo\'naltirilmoqda...')
-        setTimeout(() => {
-          window.location.assign(result.telegram_bot_link)
-        }, 300)
-      } else {
-        setBookingMessage('Telegram bot havolasi yaratilmadi. Iltimos, qayta urinib ko\'ring.')
+        // Redirect to Telegram for confirmation
+        window.location.href = result.telegram_bot_link
+        return
       }
+      setBookingMessage(`Muvaffaqiyatli! Sizning navbat raqamingiz: ${result.queue_number}`)
       setBookingForm({ ...INITIAL_BOOKING_FORM })
       setSelectedSlot(null)
       await fetchAvailability(selectedDoctor.id, selectedDate)
@@ -431,7 +367,7 @@ const ClinicDetailPage = () => {
               <div className="booking-section">
                 <label>Doktor yo'nalishlari</label>
                 <div className="booking-specialty-options">
-                  {(selectedDoctor?.specialty_prices || []).filter((item) => item && item.is_active !== false).map((item) => {
+                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).map((item) => {
                     const itemId = String(item.id)
                     const checked = selectedSpecialtyPriceIds.includes(itemId)
                     return (
@@ -443,12 +379,12 @@ const ClinicDetailPage = () => {
                             checked ? current.filter((id) => id !== itemId) : [...current, itemId]
                           ))}
                         />
-                        <span>{item.custom_name || item.specialization?.name || item.name || 'Yo\'nalish'}</span>
+                        <span>{item.custom_name || item.specialization?.name}</span>
                         <strong>{Number(item.consultation_fee || 0).toLocaleString()} so'm</strong>
                       </label>
                     )
                   })}
-                  {(selectedDoctor?.specialty_prices || []).filter((item) => item && item.is_active !== false).length === 0 && (
+                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).length === 0 && (
                     <div className="booking-empty">Doktor hozircha o'z yo'nalishlarini qo'shmagan</div>
                   )}
                 </div>
@@ -500,6 +436,7 @@ const ClinicDetailPage = () => {
                     required
                   />
                 </div>
+
                 <div className="booking-section">
                   <label>Familiya</label>
                   <input
@@ -521,23 +458,7 @@ const ClinicDetailPage = () => {
                     required
                   />
                 </div>
-                <div className="booking-section">
-                  <label>Tug‘ilgan sana (ixtiyoriy)</label>
-                  <input
-                    type="date"
-                    value={bookingForm.dateOfBirth}
-                    onChange={(e) => setBookingForm({ ...bookingForm, dateOfBirth: e.target.value })}
-                  />
-                </div>
               </div>
-
-              {bookingResult && (
-                <div className="booking-result-card">
-                  <strong>Bemor raqami: {bookingResult.patient_number}</strong>
-                  <span>Joriy navbat raqami: {bookingResult.queue_number}</span>
-                  <a href={bookingResult.telegram_bot_link} target="_blank" rel="noreferrer">Telegram botda tasdiqlash</a>
-                </div>
-              )}
 
               {bookingMessage && <div className="booking-message">{bookingMessage}</div>}
             </div>

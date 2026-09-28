@@ -1165,25 +1165,6 @@
   gap: 0.9rem 1rem;
 }
 
-.queue-ticket-settings {
-  border: 1px solid var(--border-color);
-  background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
-  border-radius: 0.9rem;
-  padding: 1rem;
-}
-
-.queue-ticket-settings h3 {
-  margin: 0;
-  font-size: 1rem;
-  color: var(--text-dark);
-}
-
-.queue-ticket-settings-help {
-  margin: 0.35rem 0 0.85rem;
-  font-size: 0.85rem;
-  color: var(--text-light);
-}
-
 .clinic-settings-form textarea {
   width: 100%;
   padding: 0.65rem 0.75rem;
