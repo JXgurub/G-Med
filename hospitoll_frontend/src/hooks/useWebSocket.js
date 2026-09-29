@@ -35,7 +35,7 @@ export const useNotifications = (userId, onUpdate) => {
     wsService.connectNotifications(userId, handleMessage, handleConnect, handleDisconnect);
 
     return () => {
-      wsService.disconnect(`notifications_${userId}`);
+      wsService.removeNotificationListener(userId, handleMessage);
     };
   }, [userId, onUpdate]);
 

@@ -1,5 +1,5 @@
-import { Suspense, lazy } from 'react'
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
+import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom'
 import { Navigate } from 'react-router-dom'
 import { ClinicProvider } from './context/ClinicContext'
 import { DoctorProvider } from './context/DoctorContext'
@@ -7,6 +7,8 @@ import { AdminProvider } from './context/AdminContext'
 import { PatientProvider } from './context/PatientContext'
 import { PharmacyProvider } from './context/PharmacyContext'
 import { PaymentProvider } from './context/PaymentContext'
+import { authApi, siteSettingsApi } from './services/api'
+import { useNotifications } from './hooks/useWebSocket'
 const Layout = lazy(() => import('./layouts/Layout'))
 const Home = lazy(() => import('./pages/Home'))
 const ChildSafety = lazy(() => import('./pages/ChildSafety'))
@@ -40,6 +42,208 @@ const Contact = lazy(() => import('./pages/Contact'))
 
 const RouteLoader = () => <div style={{ padding: '2rem', textAlign: 'center' }}>Yuklanmoqda...</div>
 
+const BroadcastNotificationListener = () => {
+  const location = useLocation()
+  const [userId, setUserId] = useState(null)
+  const [notice, setNotice] = useState(null)
+  const [noticeQueue, setNoticeQueue] = useState([])
+  const [pushConfig, setPushConfig] = useState(null)
+  const [pushStatus, setPushStatus] = useState('checking')
+  const resolvedToken = useRef('')
+  const seenNotificationIds = useRef(new Set())
+
+  const enqueueNotifications = useCallback((notifications) => {
+    setNoticeQueue((current) => {
+      const pendingIds = new Set(current.map((notification) => notification.id))
+      const unseen = notifications.filter((notification) => (
+        notification.id
+        && !seenNotificationIds.current.has(notification.id)
+        && !pendingIds.has(notification.id)
+      ))
+      unseen.forEach((notification) => seenNotificationIds.current.add(notification.id))
+      return [...current, ...unseen]
+    })
+  }, [])
+
+  useEffect(() => {
+    const token = sessionStorage.getItem('doctor_access_token')
+      || sessionStorage.getItem('access_token')
+      || localStorage.getItem('access_token')
+    const role = sessionStorage.getItem('user_role') || localStorage.getItem('user_role')
+    if (!token || role === 'admin') {
+      resolvedToken.current = ''
+      setUserId(null)
+      return
+    }
+    if (resolvedToken.current === token && userId) return
+
+    let cancelled = false
+    authApi.getProfile()
+      .then((profile) => {
+        if (!cancelled) {
+          resolvedToken.current = token
+          setUserId(profile?.id || null)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setUserId(null)
+      })
+    return () => { cancelled = true }
+  }, [location.pathname, userId])
+
+  useEffect(() => {
+    if (!userId) {
+      seenNotificationIds.current.clear()
+      setNotice(null)
+      setNoticeQueue([])
+      setPushConfig(null)
+      setPushStatus('checking')
+      return
+    }
+    let cancelled = false
+    siteSettingsApi.getBroadcastInbox()
+      .then((notifications) => {
+        if (!cancelled) enqueueNotifications(Array.isArray(notifications) ? notifications : [])
+      })
+      .catch((error) => console.error('Bildirishnomalarni yuklashda xatolik:', error))
+    return () => { cancelled = true }
+  }, [enqueueNotifications, userId])
+
+  const registerPushDevice = useCallback(async (config) => {
+    if (!config?.enabled || !userId || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushStatus('unsupported')
+      return
+    }
+    try {
+      const registration = await navigator.serviceWorker.register('/push/sw.js', { scope: '/push/' })
+      let subscription = await registration.pushManager.getSubscription()
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: decodeVapidPublicKey(config.public_key),
+        })
+      }
+      await siteSettingsApi.registerWebPushSubscription(subscription.toJSON())
+      setPushStatus('enabled')
+    } catch (error) {
+      console.error('Telefon bildirishnomasini sozlashda xatolik:', error)
+      setPushStatus('error')
+    }
+  }, [userId])
+
+  useEffect(() => {
+    if (!userId) return undefined
+    let cancelled = false
+    siteSettingsApi.getWebPushConfig()
+      .then((config) => {
+        if (cancelled) return
+        setPushConfig(config)
+        if (!config?.enabled) {
+          setPushStatus('unavailable')
+        } else if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+          setPushStatus('unsupported')
+        } else if (Notification.permission === 'granted') {
+          void registerPushDevice(config)
+        } else if (Notification.permission === 'denied') {
+          setPushStatus('denied')
+        } else {
+          setPushStatus('prompt')
+        }
+      })
+      .catch(() => setPushStatus('error'))
+    return () => { cancelled = true }
+  }, [registerPushDevice, userId])
+
+  const enablePushNotifications = async () => {
+    if (!pushConfig?.enabled || !('Notification' in window)) return
+    const permission = await Notification.requestPermission()
+    if (permission === 'granted') {
+      await registerPushDevice(pushConfig)
+    } else {
+      setPushStatus(permission === 'denied' ? 'denied' : 'prompt')
+    }
+  }
+
+  const handleBroadcast = useCallback((event) => {
+    const notification = event.detail?.data
+    if (notification?.notification_type === 'admin_broadcast') {
+      const payload = notification.payload || {}
+      enqueueNotifications([{
+        id: payload.notification_id,
+        title: payload.title,
+        message: payload.message,
+      }])
+    }
+  }, [enqueueNotifications])
+
+  useEffect(() => {
+    window.addEventListener('hospitoll:notification', handleBroadcast)
+    return () => window.removeEventListener('hospitoll:notification', handleBroadcast)
+  }, [handleBroadcast])
+
+  useEffect(() => {
+    if (notice || noticeQueue.length === 0) return
+    setNotice(noticeQueue[0])
+    setNoticeQueue((current) => current.slice(1))
+  }, [notice, noticeQueue])
+
+  useEffect(() => {
+    if (!notice) return undefined
+    const timeout = window.setTimeout(() => setNotice(null), 10000)
+    return () => window.clearTimeout(timeout)
+  }, [notice])
+
+  useNotifications(userId)
+
+  return (
+    <>
+      {pushStatus === 'prompt' ? (
+        <aside className="push-permission-prompt" role="status">
+          <div>
+            <strong>Telefon bildirishnomalarini yoqing</strong>
+            <p>G-MED xabarlarini telefoningizning bildirishnomalar qatorida oling.</p>
+          </div>
+          <button type="button" onClick={enablePushNotifications}>Yoqish</button>
+        </aside>
+      ) : null}
+      {pushStatus === 'denied' ? (
+        <aside className="push-permission-prompt" role="status">
+          <div>
+            <strong>Bildirishnomalar ruxsat etilmagan</strong>
+            <p>Telefon yoki brauzer sozlamalaridan G-MED bildirishnomalariga ruxsat bering.</p>
+          </div>
+        </aside>
+      ) : null}
+      {notice ? (
+        <aside className="admin-broadcast-toast" role="status" aria-live="polite">
+          <div>
+            <strong>{notice.title || 'Bildirishnoma'}</strong>
+            <p>{notice.message || ''}</p>
+          </div>
+          <button
+            type="button"
+            aria-label="Bildirishnomani yopish"
+            onClick={() => {
+              const dismissed = notice
+              setNotice(null)
+              if (dismissed.id) {
+                siteSettingsApi.markBroadcastRead(dismissed.id)
+                  .catch((error) => console.error('Bildirishnomani o‘qilgan deb belgilab bo‘lmadi:', error))
+              }
+            }}
+          >×</button>
+        </aside>
+      ) : null}
+    </>
+  )
+}
+
+const decodeVapidPublicKey = (base64Key) => {
+  const padding = '='.repeat((4 - (base64Key.length % 4)) % 4)
+  const decoded = atob((base64Key + padding).replace(/-/g, '+').replace(/_/g, '/'))
+  return Uint8Array.from(decoded, (character) => character.charCodeAt(0))
+}
+
 function App() {
   return (
     <AdminProvider>
@@ -50,6 +254,7 @@ function App() {
               <PaymentProvider>
                 <Router>
                 <PwaStatusWidget />
+                <BroadcastNotificationListener />
                 <Suspense fallback={<RouteLoader />}>
                   <Routes>
                     <Route path="/" element={<Layout />}>

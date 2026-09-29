@@ -121,6 +121,12 @@ const AdminDashboard = () => {
   const [systemAlerts, setSystemAlerts] = useState([])
   const [systemAlertsLoading, setSystemAlertsLoading] = useState(false)
   const [selectedAlertId, setSelectedAlertId] = useState(null)
+  const [broadcastStats, setBroadcastStats] = useState({ site_users: 0, telegram_users: 0, push_devices: 0 })
+  const [broadcastLoading, setBroadcastLoading] = useState(false)
+  const [broadcastSending, setBroadcastSending] = useState(false)
+  const [broadcastError, setBroadcastError] = useState('')
+  const [broadcastNotice, setBroadcastNotice] = useState('')
+  const [broadcastForm, setBroadcastForm] = useState({ title: '', message: '', channels: ['site', 'telegram'] })
 
   const loadSystemAlerts = useCallback(async ({ silent = false } = {}) => {
     try {
@@ -132,6 +138,19 @@ const AdminDashboard = () => {
       setSystemAlerts([])
     } finally {
       if (!silent) setSystemAlertsLoading(false)
+    }
+  }, [])
+
+  const loadBroadcastStats = useCallback(async () => {
+    try {
+      setBroadcastLoading(true)
+      setBroadcastError('')
+      const data = await siteSettingsApi.adminGetBroadcastStats()
+      setBroadcastStats(data || { site_users: 0, telegram_users: 0 })
+    } catch (error) {
+      setBroadcastError(error?.response?.data?.detail || error.message || 'Foydalanuvchi statistikasi yuklanmadi.')
+    } finally {
+      setBroadcastLoading(false)
     }
   }, [])
 
@@ -167,6 +186,10 @@ const AdminDashboard = () => {
       navigate('/admin-login')
     }
   }, [admin, loading, navigate])
+
+  useEffect(() => {
+    if (admin && activeTab === 'broadcast') void loadBroadcastStats()
+  }, [activeTab, admin, loadBroadcastStats])
 
   useEffect(() => {
     const loadHomeContact = async () => {
@@ -206,8 +229,11 @@ const AdminDashboard = () => {
     if (activeTab === 'childSafety') {
       tasks.push(loadChildSafetyRegions({ silent: true }))
     }
+    if (activeTab === 'broadcast') {
+      tasks.push(loadBroadcastStats())
+    }
 
-    if (activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && typeof refreshAdminData === 'function') {
+    if (activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && activeTab !== 'broadcast' && typeof refreshAdminData === 'function') {
       tasks.push(refreshAdminData())
     }
 
@@ -216,7 +242,7 @@ const AdminDashboard = () => {
     } catch (error) {
       console.error('Admin realtime refresh xatoligi:', error)
     }
-  }, [admin, activeTab, loadChildSafetyRegions, loadLeads, loadSystemAlerts, refreshAdminData])
+  }, [admin, activeTab, loadBroadcastStats, loadChildSafetyRegions, loadLeads, loadSystemAlerts, refreshAdminData])
 
   useEffect(() => {
     if (!admin) return
@@ -526,6 +552,30 @@ const AdminDashboard = () => {
     }
   }
 
+  const handleSendBroadcast = async (event) => {
+    event.preventDefault()
+    setBroadcastError('')
+    setBroadcastNotice('')
+    setBroadcastSending(true)
+    try {
+      const result = await siteSettingsApi.adminSendBroadcast(broadcastForm)
+      const sent = []
+      if (broadcastForm.channels.includes('site')) {
+        sent.push(`Sayt: ${result.site_sent}/${result.site_total} foydalanuvchiga uzatildi`)
+        sent.push(`Telefon push: ${result.push_queued || 0} qurilma`)
+      }
+      if (broadcastForm.channels.includes('telegram')) {
+        sent.push(`Telegram: ${result.telegram_sent}/${result.telegram_total} foydalanuvchiga yuborildi`)
+      }
+      setBroadcastNotice(sent.join(' · '))
+      setBroadcastForm((current) => ({ ...current, title: '', message: '' }))
+    } catch (error) {
+      setBroadcastError(error?.response?.data?.detail || error.message || 'Xabarni yuborib bo‘lmadi.')
+    } finally {
+      setBroadcastSending(false)
+    }
+  }
+
   const formatSavedAt = (dateObj) => {
     if (!dateObj) return ''
     try {
@@ -716,6 +766,8 @@ const AdminDashboard = () => {
     totalRevenuePharmacy: normalizedPharmacies.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
   }
 
+  const isUtilityTab = ['contact', 'alerts', 'childSafety', 'broadcast'].includes(activeTab)
+
   return (
     <div className="admin-dashboard">
       {/* Top Bar */}
@@ -870,11 +922,17 @@ const AdminDashboard = () => {
             </span>
           ) : null}
         </button>
+        <button
+          className={`tab-btn ${activeTab === 'broadcast' ? 'active' : ''}`}
+          onClick={() => setActiveTab('broadcast')}
+        >
+          ✉️ Xabar va bildirishnoma
+        </button>
       </div>
 
       {/* Controls */}
       <div className="controls-section">
-        {activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && (
+        {!isUtilityTab && (
         <div className="search-box">
           <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
             <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2"/>
@@ -889,7 +947,7 @@ const AdminDashboard = () => {
         </div>
         )}
 
-        {activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && (
+        {!isUtilityTab && (
         <div className="filter-buttons">
           {['all', 'active', 'suspended', 'unpaid'].map(status => (
             <button
@@ -903,7 +961,7 @@ const AdminDashboard = () => {
         </div>
         )}
 
-        {activeTab !== 'contact' && activeTab !== 'alerts' && activeTab !== 'childSafety' && (
+        {!isUtilityTab && (
           <button 
             className={`btn-add-clinic`}
             onClick={() => activeTab === 'clinics' ? toggleClinicForm() : togglePharmacyForm()}
@@ -1210,6 +1268,96 @@ const AdminDashboard = () => {
             )}
           </div>
         </div>
+      )}
+
+      {activeTab === 'broadcast' && (
+        <section className="add-clinic-form admin-broadcast" aria-labelledby="admin-broadcast-title">
+          <header className="child-safety-admin-header">
+            <div>
+              <h2 id="admin-broadcast-title">Xabar va bildirishnoma yuborish</h2>
+              <p>Faol sayt foydalanuvchilariga va Telegram botga ulangan akkauntlarga xabar yuboring.</p>
+            </div>
+            <button type="button" className="btn-add-clinic" onClick={() => loadBroadcastStats()} disabled={broadcastLoading}>
+              {broadcastLoading ? 'Yuklanmoqda...' : 'Yangilash'}
+            </button>
+          </header>
+
+          <div className="admin-broadcast-stats">
+            <div className="stat-card active">
+              <div className="stat-icon">🌐</div>
+              <div className="stat-info">
+                <p className="stat-label">Sayt foydalanuvchilari</p>
+                <p className="stat-number">{Number(broadcastStats.site_users || 0).toLocaleString('uz-UZ')}</p>
+              </div>
+            </div>
+            <div className="stat-card paid">
+              <div className="stat-icon">✈️</div>
+              <div className="stat-info">
+                <p className="stat-label">Telegram Bot foydalanuvchilari</p>
+                <p className="stat-number">{Number(broadcastStats.telegram_users || 0).toLocaleString('uz-UZ')}</p>
+              </div>
+            </div>
+            <div className="stat-card active">
+              <div className="stat-icon">📳</div>
+              <div className="stat-info">
+                <p className="stat-label">Telefon bildirishnomalari yoqilgan</p>
+                <p className="stat-number">{Number(broadcastStats.push_devices || 0).toLocaleString('uz-UZ')}</p>
+              </div>
+            </div>
+          </div>
+
+          {broadcastError ? <p className="child-safety-admin-message error" role="alert">{broadcastError}</p> : null}
+          {broadcastNotice ? <p className="child-safety-admin-message success" role="status">{broadcastNotice}</p> : null}
+
+          <form className="admin-broadcast-form" onSubmit={handleSendBroadcast}>
+            <div className="form-group">
+              <label htmlFor="broadcast-title">Sarlavha</label>
+              <input
+                id="broadcast-title"
+                type="text"
+                maxLength={120}
+                value={broadcastForm.title}
+                onChange={(event) => setBroadcastForm({ ...broadcastForm, title: event.target.value })}
+                required
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="broadcast-message">Xabar matni</label>
+              <textarea
+                id="broadcast-message"
+                rows={5}
+                maxLength={3900}
+                value={broadcastForm.message}
+                onChange={(event) => setBroadcastForm({ ...broadcastForm, message: event.target.value })}
+                required
+              />
+            </div>
+            <fieldset className="admin-broadcast-channels">
+              <legend>Yuborish kanallari</legend>
+              {[
+                { value: 'site', label: 'Sayt foydalanuvchilariga' },
+                { value: 'telegram', label: 'Telegram Bot orqali' },
+              ].map((channel) => (
+                <label key={channel.value}>
+                  <input
+                    type="checkbox"
+                    checked={broadcastForm.channels.includes(channel.value)}
+                    onChange={(event) => setBroadcastForm((current) => ({
+                      ...current,
+                      channels: event.target.checked
+                        ? [...current.channels, channel.value]
+                        : current.channels.filter((value) => value !== channel.value),
+                    }))}
+                  />
+                  {channel.label}
+                </label>
+              ))}
+            </fieldset>
+            <button className="btn-submit" type="submit" disabled={broadcastSending || broadcastForm.channels.length === 0}>
+              {broadcastSending ? 'Yuborilmoqda...' : 'Xabarni yuborish'}
+            </button>
+          </form>
+        </section>
       )}
 
       {activeTab === 'childSafety' && (

@@ -26,6 +26,9 @@ if not DEBUG and SECRET_KEY in {
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=lambda v: [s.strip() for s in v.split(',')])
 GEMINI_API_KEY = config('GEMINI_API_KEY', default='')
 GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-2.5-flash')
+WEB_PUSH_VAPID_PUBLIC_KEY = config('WEB_PUSH_VAPID_PUBLIC_KEY', default='')
+WEB_PUSH_VAPID_PRIVATE_KEY_B64 = config('WEB_PUSH_VAPID_PRIVATE_KEY_B64', default='')
+WEB_PUSH_VAPID_SUBJECT = config('WEB_PUSH_VAPID_SUBJECT', default='mailto:mailer@g-med.uz')
 
 # Application definition
 INSTALLED_APPS = [

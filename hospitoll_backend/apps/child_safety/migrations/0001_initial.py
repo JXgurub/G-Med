@@ -3,6 +3,7 @@
 from django.conf import settings
 from django.db import migrations, models
 import django.db.models.deletion
+import uuid
 
 
 class Migration(migrations.Migration):
@@ -17,7 +18,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='SafetyRegion',
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ('name', models.CharField(max_length=160)),
                 ('level', models.CharField(choices=[('region', 'Viloyat / shahar'), ('district', 'Tuman / shahar'), ('mahalla', 'Mahalla')], max_length=16)),
                 ('is_active', models.BooleanField(default=True)),
@@ -33,7 +34,7 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='SafetyVote',
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
                 ('choice', models.CharField(choices=[('safe', 'Xavfsiz'), ('caution', 'Ehtiyot bo‘lish kerak'), ('danger', 'Xavfsizlik muammolari bor')], max_length=12)),
                 ('is_active', models.BooleanField(default=True)),
                 ('created_at', models.DateTimeField(auto_now_add=True)),

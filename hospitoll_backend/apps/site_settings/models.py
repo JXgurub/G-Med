@@ -122,3 +122,50 @@ class SystemAlert(models.Model):
 
     def __str__(self):
         return f"[{self.severity}] {self.alert_type}: {self.message[:80]}"
+
+
+class BroadcastNotification(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    user = models.ForeignKey(
+        'users.CustomUser',
+        on_delete=models.CASCADE,
+        related_name='broadcast_notifications',
+    )
+    title = models.CharField(max_length=120)
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    read_at = models.DateTimeField(blank=True, null=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'read_at', '-created_at'], name='site_notif_user_read_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.user_id})"
+
+
+class WebPushSubscription(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    user = models.ForeignKey(
+        'users.CustomUser',
+        on_delete=models.CASCADE,
+        related_name='web_push_subscriptions',
+    )
+    endpoint = models.URLField(max_length=2048, unique=True)
+    p256dh = models.CharField(max_length=255)
+    auth = models.CharField(max_length=255)
+    user_agent = models.CharField(max_length=512, blank=True, default='')
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'is_active'], name='site_push_user_active_idx'),
+        ]
+
+    def __str__(self):
+        return f"Web push subscription ({self.user_id})"

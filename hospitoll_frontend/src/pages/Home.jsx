@@ -4,7 +4,6 @@ import ClinicCard from '../components/ClinicCard'
 import PharmacyCard from '../components/PharmacyCard'
 import { usePharmacy } from '../context/PharmacyContext'
 import { clinicsApi, clinicDepartmentsApi, siteSettingsApi, resolveMediaUrl } from '../services/api'
-import { getPreferredLoginPath, hasPreferredLoginPortal } from '../utils/loginPortalPreference'
 import './Home.css'
 
 const PHARMACY_PRESCRIPTION_KEY = 'gmed-pharmacy-prescription-search'
@@ -95,17 +94,6 @@ const Home = () => {
   const [pharmacySearchQuery, setPharmacySearchQuery] = useState('')
   const [homeContact, setHomeContact] = useState(null)
   const [prescriptionSearch, setPrescriptionSearch] = useState(null)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true
-    if (!isStandalone || !hasPreferredLoginPortal()) return
-
-    const targetPath = getPreferredLoginPath()
-    if (targetPath && targetPath !== window.location.pathname) {
-      navigate(targetPath, { replace: true })
-    }
-  }, [navigate])
 
   useEffect(() => {
     const loadClinics = async () => {

@@ -86,6 +86,10 @@
   box-shadow: 0 4px 12px rgba(30, 111, 215, 0.3);
 }
 
+.navbar-mobile-safety {
+  display: none;
+}
+
 @media (max-width: 968px) {
   .navbar-menu {
     gap: 0.25rem;
@@ -100,9 +104,34 @@
 @media (max-width: 768px) {
   .navbar-container {
     padding: 1rem;
+    flex-wrap: wrap;
+    gap: 0.75rem;
   }
   
   .navbar-menu {
     display: none;
+  }
+
+  .navbar-mobile-safety {
+    width: 100%;
+    min-height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 0.65rem 1rem;
+    border: 1px solid #cce4dc;
+    border-radius: 0.65rem;
+    background: linear-gradient(100deg, #edf8f3 0%, #f0f6fb 100%);
+    color: #126a5f;
+    font-size: 0.92rem;
+    font-weight: 700;
+    text-decoration: none;
+    transition: background-color 0.2s ease, transform 0.2s ease;
+  }
+
+  .navbar-mobile-safety:active {
+    transform: scale(0.985);
+    background: #e3f2ec;
   }
 }

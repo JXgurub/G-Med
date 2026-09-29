@@ -24,9 +24,12 @@ class WebSocketService {
    */
   connectNotifications(userId, onMessage, onConnect, onDisconnect) {
     const key = `notifications_${userId}`;
-    
-    if (this.connections[key] && this.connections[key].readyState === WebSocket.OPEN) {
-      console.log(`Already connected to notifications for user ${userId}`);
+    const subscribers = this.messageHandlers[key] || new Map();
+    this.messageHandlers[key] = subscribers;
+    if (onMessage) subscribers.set(onMessage, { onConnect, onDisconnect });
+
+    if (this.connections[key] && this.connections[key].readyState <= WebSocket.OPEN) {
+      if (this.connections[key].readyState === WebSocket.OPEN && onConnect) onConnect();
       return;
     }
 
@@ -39,13 +42,16 @@ class WebSocketService {
         this.reconnectAttempts[key] = 0;
         this.connections[key] = ws;
         this.setupPingInterval(ws);
-        if (onConnect) onConnect();
+        this.messageHandlers[key]?.forEach((subscriber) => subscriber.onConnect?.());
       };
 
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          if (onMessage) onMessage(data);
+          this.messageHandlers[key]?.forEach((subscriber) => subscriber.onMessage?.(data));
+          if (data?.type === 'notification') {
+            window.dispatchEvent(new CustomEvent('hospitoll:notification', { detail: data }));
+          }
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
         }
@@ -58,13 +64,31 @@ class WebSocketService {
       ws.onclose = () => {
         console.log(`Disconnected from notifications for user ${userId}`);
         delete this.connections[key];
-        if (onDisconnect) onDisconnect();
-        this.attemptReconnect(key, () => this.connectNotifications(userId, onMessage, onConnect, onDisconnect));
+        const activeSubscribers = this.messageHandlers[key];
+        activeSubscribers?.forEach((subscriber) => subscriber.onDisconnect?.());
+        if (activeSubscribers?.size) {
+          this.attemptReconnect(key, () => {
+            const firstSubscriber = this.messageHandlers[key]?.values().next().value;
+            if (firstSubscriber) {
+              this.connectNotifications(userId, firstSubscriber.onMessage, firstSubscriber.onConnect, firstSubscriber.onDisconnect);
+            }
+          });
+        }
       };
 
       this.connections[key] = ws;
     } catch (error) {
       console.error('Error connecting to notifications WebSocket:', error);
+    }
+  }
+
+  removeNotificationListener(userId, onMessage) {
+    const key = `notifications_${userId}`;
+    const subscribers = this.messageHandlers[key];
+    subscribers?.delete(onMessage);
+    if (!subscribers?.size) {
+      delete this.messageHandlers[key];
+      this.disconnect(key);
     }
   }
 

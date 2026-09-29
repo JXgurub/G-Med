@@ -31,6 +31,13 @@ const Navbar = () => {
             </Link>
           </li>
         </ul>
+        <Link to="/child-safety" className="navbar-mobile-safety">
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none">
+            <path d="M12 3 19 6v5c0 4.8-2.8 8.2-7 10-4.2-1.8-7-5.2-7-10V6l7-3Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+            <path d="m9 12 2 2 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          Bolalar xavfsizligi
+        </Link>
       </div>
     </nav>
   )

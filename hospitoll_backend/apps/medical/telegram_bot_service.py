@@ -43,7 +43,7 @@ class TelegramBotClient:
         self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}"
 
-    def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> None:
+    def send_message(self, chat_id: int, text: str, reply_markup: dict | None = None) -> bool:
         payload: dict[str, Any] = {
             "chat_id": chat_id,
             "text": text,
@@ -57,8 +57,10 @@ class TelegramBotClient:
             data = resp.json() if resp.content else {}
             if not data.get('ok', False):
                 logger.warning("Telegram sendMessage failed: %s", data)
+            return bool(data.get('ok', False))
         except Exception as e:
             logger.exception("Telegram sendMessage exception: %s", e)
+            return False
 
     def send_document(self, chat_id: int, document_url: str, caption: str = '') -> bool:
         payload = {

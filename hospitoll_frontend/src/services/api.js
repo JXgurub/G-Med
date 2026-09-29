@@ -605,6 +605,13 @@ export const siteSettingsApi = {
   adminMarkContactLeadRead: (id) => api.patch(`/site-settings/contact-leads/${id}/read/`, {}),
   adminGetSystemAlerts: (params) => api.get('/site-settings/system-alerts/admin/', params),
   adminResolveSystemAlert: (id) => api.patch(`/site-settings/system-alerts/${id}/resolve/`, {}),
+  adminGetBroadcastStats: () => api.get('/site-settings/broadcast/admin/'),
+  adminSendBroadcast: (data) => api.post('/site-settings/broadcast/admin/', data),
+  getBroadcastInbox: () => api.get('/site-settings/broadcast/inbox/'),
+  markBroadcastRead: (id) => api.patch(`/site-settings/broadcast/inbox/${id}/read/`, {}),
+  getWebPushConfig: () => api.get('/site-settings/push/config/'),
+  registerWebPushSubscription: (subscription) => api.post('/site-settings/push/subscriptions/', { subscription }),
+  removeWebPushSubscription: (endpoint) => api.delete('/site-settings/push/subscriptions/', { endpoint }),
 }
 
 export const childSafetyApi = {

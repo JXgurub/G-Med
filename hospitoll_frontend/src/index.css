@@ -1,3 +1,72 @@
+.admin-broadcast-toast {
+  position: fixed;
+  z-index: 2000;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+  width: min(390px, calc(100vw - 2rem));
+  padding: 1rem;
+  color: #fff;
+  background: #176c43;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 6px;
+  box-shadow: 0 8px 28px rgba(20, 53, 37, 0.24);
+}
+
+.admin-broadcast-toast strong {
+  display: block;
+  margin-bottom: 0.35rem;
+}
+
+.admin-broadcast-toast p {
+  margin: 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.admin-broadcast-toast button {
+  flex: 0 0 auto;
+  padding: 0 0.2rem;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  font-size: 1.25rem;
+  cursor: pointer;
+}
+
+.push-permission-prompt {
+  position: fixed;
+  z-index: 1999;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  width: min(430px, calc(100vw - 2rem));
+  padding: 1rem;
+  color: #173b2b;
+  background: #f2fbf6;
+  border: 1px solid #a8d7bb;
+  border-radius: 6px;
+  box-shadow: 0 8px 28px rgba(20, 53, 37, 0.16);
+}
+
+.push-permission-prompt p {
+  margin: 0.3rem 0 0;
+  line-height: 1.4;
+}
+
+.push-permission-prompt button {
+  flex: 0 0 auto;
+  padding: 0.65rem 0.9rem;
+  color: #fff;
+  background: #176c43;
+  border: 0;
+  border-radius: 4px;
+  font-weight: 700;
+}
 * {
   margin: 0;
   padding: 0;
