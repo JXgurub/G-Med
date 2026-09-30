@@ -157,7 +157,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             }
 
             PrintJob.objects.create(
-                clinic=clinic,
                 reception_room=reception_room,
                 printer_device=printer_device,
                 appointment=appointment,
@@ -2102,7 +2101,11 @@ class MedicalRecordViewSet(viewsets.ModelViewSet):
 
             from .telegram_bot_service import TelegramBotService
             service = TelegramBotService()
-            self._telegram_sent = service.send_medical_record_to_patient(record)
+            try:
+                self._telegram_sent = service.send_medical_record_to_patient(record)
+            except Exception:
+                self._telegram_sent = False
+                logger.exception('Medical record patient notification failed')
             try:
                 service.send_doctor_rating_prompt(record.appointment)
             except Exception:

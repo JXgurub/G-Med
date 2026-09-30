@@ -985,6 +985,20 @@ class MedicalRecordAutoAppointmentTests(MedicalApiTestCase):
         self.assertEqual(appointment.status, Appointment.Status.COMPLETED)
         self.assertEqual(float(appointment.consultation_fee), 70000.0)
 
+    def test_create_multipart_record_succeeds_when_patient_notification_fails(self):
+        with patch.object(TelegramBotService, 'send_medical_record_to_patient', side_effect=RuntimeError('Telegram unavailable')):
+            response = self.client.post(self.url, {
+                'patient': str(self.patient.id),
+                'doctor': str(self.doctor.id),
+                'clinic': str(self.clinic.id),
+                'chief_complaint': '',
+                'assessment': 'Migren',
+                'plan': '',
+            }, format='multipart')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(MedicalRecord.objects.filter(id=response.json().get('id')).exists())
+
     def test_create_record_with_existing_appointment_marks_completed_and_sets_fee(self):
         appointment = Appointment.objects.create(
             patient=self.patient,
@@ -2228,6 +2242,32 @@ class TelegramStartTokenNormalizationTests(MedicalApiTestCase):
         self.assertEqual(self.appointment.telegram_user_id, self.telegram_user_id)
         self.assertEqual(self.appointment.telegram_chat_id, self.telegram_chat_id)
         self.assertTrue(any('Tasdiqlandi' in item.get('text', '') for item in sent_messages))
+
+    def test_start_keeps_appointment_pending_when_reception_confirmation_is_enabled(self):
+        self.appointment.clinic.reception_room_enabled = True
+        self.appointment.clinic.save(update_fields=['reception_room_enabled'])
+        sent_messages = []
+        service = TelegramBotService()
+        cast(Any, service).client = SimpleNamespace(
+            send_message=lambda chat_id, text, reply_markup=None: sent_messages.append(
+                {'chat_id': chat_id, 'text': text, 'reply_markup': reply_markup}
+            ),
+            answer_callback_query=lambda *args, **kwargs: None,
+        )
+
+        service.handle_update({
+            'message': {
+                'from': {'id': self.telegram_user_id},
+                'chat': {'id': self.telegram_chat_id},
+                'text': f'/start {self.appointment.telegram_token.hex}',
+            }
+        })
+
+        self.appointment.refresh_from_db()
+        self.assertEqual(self.appointment.status, Appointment.Status.PENDING_TELEGRAM_CONFIRMATION)
+        self.assertIsNotNone(self.appointment.telegram_confirmed_at)
+        self.assertIsNone(self.appointment.telegram_token)
+        self.assertTrue(any('qabulxona tasdig‘ini kutmoqda' in item['text'] for item in sent_messages))
 
     def test_start_without_token_shows_current_appointments_for_linked_user(self):
         self.appointment.status = Appointment.Status.SCHEDULED

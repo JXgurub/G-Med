@@ -807,6 +807,25 @@ class DoctorEmploymentLifecycleTests(APITestCase):
             target += timedelta(days=1)
         return target
 
+    def test_available_endpoint_rejects_malformed_date(self):
+        response = self.client.get(reverse('doctor-availability-available'), {
+            'doctor': str(self.doctor.id),
+            'date': 'not-a-date',
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('YYYY-MM-DD', response.json()['detail'])
+
+    def test_available_endpoint_rejects_past_date_without_creating_slots(self):
+        past_date = timezone.localdate() - timedelta(days=1)
+        response = self.client.get(reverse('doctor-availability-available'), {
+            'doctor': str(self.doctor.id),
+            'date': past_date.isoformat(),
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(DoctorAvailability.objects.filter(doctor=self.doctor, date=past_date).exists())
+
     def test_available_endpoint_rebuilds_legacy_available_slots_for_current_interval(self):
         target_date = self._next_weekday()
 

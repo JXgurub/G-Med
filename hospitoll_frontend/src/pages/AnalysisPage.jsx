@@ -124,6 +124,25 @@ const AnalysisPage = () => {
     loadHistory()
   }, [])
 
+  useEffect(() => {
+    const handleLizaAction = (event) => {
+      if (event.detail?.action !== 'read_analysis') return
+      const resultText = currentAnalysis?.status === 'completed'
+        ? String(currentAnalysis.result_text || '').trim()
+        : ''
+      if (!resultText) {
+        window.dispatchEvent(new window.CustomEvent('gmed:liza-status', {
+          detail: { message: 'Avval AI tahlilni yuklang yoki tarixdan tayyor natijani tanlang.' },
+        }))
+        return
+      }
+      window.dispatchEvent(new window.CustomEvent('gmed:liza-readout', { detail: { text: resultText } }))
+    }
+
+    window.addEventListener('gmed:liza-action', handleLizaAction)
+    return () => window.removeEventListener('gmed:liza-action', handleLizaAction)
+  }, [currentAnalysis])
+
   const handleFileChange = (e) => {
     const selected = e.target.files?.[0]
     if (!selected) return

@@ -557,11 +557,15 @@ class TelegramBotService:
                 self._require_client().send_message(ctx.chat_id, "Bu randevu boshqa Telegram akkauntga bog‘langan.")
                 return
 
+            requires_reception_confirmation = bool(
+                appointment.clinic and appointment.clinic.reception_room_enabled
+            )
             appointment.telegram_user_id = ctx.user_id
             appointment.telegram_chat_id = ctx.chat_id
             appointment.telegram_confirmed_at = timezone.now()
-            # Keep legacy doctor dashboards working (they filter by 'scheduled')
-            appointment.status = Appointment.Status.SCHEDULED
+            if not requires_reception_confirmation:
+                # Keep legacy doctor dashboards working (they filter by 'scheduled')
+                appointment.status = Appointment.Status.SCHEDULED
 
             # Make token one-time
             appointment.telegram_token = None
@@ -589,10 +593,17 @@ class TelegramBotService:
             else 'Bemor'
         )
 
-        self._require_client().send_message(
-            ctx.chat_id,
-            f"✅ Tasdiqlandi!\n\n👤 {patient_name}\n📍 {clinic_name}\n👨‍⚕️ {doctor_name}\n🕒 {when}\n\n/myappointments orqali boshqaring.",
-        )
+        if requires_reception_confirmation:
+            confirmation_message = (
+                f"✅ Telegram tasdiqlandi. Navbat qabulxona tasdig‘ini kutmoqda.\n\n"
+                f"👤 {patient_name}\n📍 {clinic_name}\n👨‍⚕️ {doctor_name}\n🕒 {when}"
+            )
+        else:
+            confirmation_message = (
+                f"✅ Tasdiqlandi!\n\n👤 {patient_name}\n📍 {clinic_name}\n"
+                f"👨‍⚕️ {doctor_name}\n🕒 {when}\n\n/myappointments orqali boshqaring."
+            )
+        self._require_client().send_message(ctx.chat_id, confirmation_message)
 
     def _handle_doctor_reset_start(self, ctx: TelegramMessageContext, token: str) -> None:
         try:

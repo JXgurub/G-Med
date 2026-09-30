@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { clinicsApi, doctorsApi, medicalApi, resolveMediaUrl } from '../services/api'
+import { usePatient } from '../context/PatientContext'
 import './ClinicDetailPage.css'
 
 const INITIAL_BOOKING_FORM = {
@@ -9,26 +10,40 @@ const INITIAL_BOOKING_FORM = {
   phone: '+998'
 }
 
+const tashkentDateFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Asia/Tashkent',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+})
+
 const formatDateInputValue = (value) => {
-  const year = value.getFullYear()
-  const month = String(value.getMonth() + 1).padStart(2, '0')
-  const day = String(value.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
+  const parts = Object.fromEntries(tashkentDateFormatter.formatToParts(value).map(({ type, value: part }) => [type, part]))
+  return `${parts.year}-${parts.month}-${parts.day}`
+}
+
+const addCalendarDays = (value, days) => {
+  const [year, month, day] = value.split('-').map(Number)
+  const nextDate = new Date(Date.UTC(year, month - 1, day + days))
+  return [nextDate.getUTCFullYear(), nextDate.getUTCMonth() + 1, nextDate.getUTCDate()]
+    .map((part, index) => String(part).padStart(index === 0 ? 4 : 2, '0'))
+    .join('-')
 }
 
 const getDateWindow = () => {
-  const todayDate = new Date()
-  const tomorrowDate = new Date(todayDate)
-  tomorrowDate.setDate(tomorrowDate.getDate() + 1)
+  const today = formatDateInputValue(new Date())
   return {
-    today: formatDateInputValue(todayDate),
-    tomorrow: formatDateInputValue(tomorrowDate)
+    today,
+    tomorrow: addCalendarDays(today, 1),
   }
 }
 
 const ClinicDetailPage = () => {
   const { clinicId } = useParams()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const openedLizaBookingRef = useRef('')
+  const { patientAuth, patientData } = usePatient()
   const [clinic, setClinic] = useState(null)
   const [doctors, setDoctors] = useState([])
   const [specialtyGroups, setSpecialtyGroups] = useState({})
@@ -39,6 +54,7 @@ const ClinicDetailPage = () => {
   const [selectedSpecialtyPriceIds, setSelectedSpecialtyPriceIds] = useState([])
   const [selectedDate, setSelectedDate] = useState(() => getDateWindow().today)
   const [availableSlots, setAvailableSlots] = useState([])
+  const [availabilityLoading, setAvailabilityLoading] = useState(false)
   const [availabilityNotice, setAvailabilityNotice] = useState('')
   const [selectedSlot, setSelectedSlot] = useState(null)
   const [bookingForm, setBookingForm] = useState({
@@ -46,6 +62,10 @@ const ClinicDetailPage = () => {
   })
   const [bookingLoading, setBookingLoading] = useState(false)
   const [bookingMessage, setBookingMessage] = useState(null)
+  const [telegramBotLink, setTelegramBotLink] = useState('')
+  const selectedDoctorSpecialtyPrices = (selectedDoctor?.specialty_prices || [])
+    .filter((item) => item.is_active !== false)
+  const availabilityRequestRef = useRef(0)
   const { today: minBookingDate, tomorrow: maxBookingDate } = getDateWindow()
 
   useEffect(() => {
@@ -141,8 +161,12 @@ const ClinicDetailPage = () => {
   }
 
   const fetchAvailability = async (doctorId, date) => {
+    const requestId = ++availabilityRequestRef.current
+    setAvailabilityLoading(true)
+    setAvailabilityNotice('')
     try {
       const response = await doctorsApi.getAvailability({ doctor: doctorId, date, include_meta: 1 })
+      if (requestId !== availabilityRequestRef.current) return
       const slots = Array.isArray(response) ? response : (response?.slots || [])
       setAvailableSlots(Array.isArray(slots) ? slots : [])
 
@@ -154,32 +178,81 @@ const ClinicDetailPage = () => {
         setAvailabilityNotice('')
       }
     } catch (error) {
+      if (requestId !== availabilityRequestRef.current) return
       console.error('Error loading availability:', error)
       setAvailableSlots([])
-      setAvailabilityNotice('')
+      setAvailabilityNotice(error?.response?.data?.detail || 'Bo‘sh vaqtlarni yuklashda xatolik. Qayta urinib ko‘ring.')
+    } finally {
+      if (requestId === availabilityRequestRef.current) setAvailabilityLoading(false)
     }
   }
 
-  const openBooking = async (doctorData) => {
+  const openBooking = async (doctorData, defaultSpecialtyPriceIds = []) => {
     setSelectedDoctor(doctorData)
-    setSelectedSpecialtyPriceIds([])
+    const activePriceIds = new Set(
+      (doctorData.specialty_prices || [])
+        .filter((item) => item.is_active !== false)
+        .map((item) => String(item.id))
+    )
+    setSelectedSpecialtyPriceIds(defaultSpecialtyPriceIds.filter((id) => activePriceIds.has(String(id))).map(String))
     setSelectedSlot(null)
     setBookingMessage(null)
     setAvailabilityNotice('')
-    setBookingForm({ ...INITIAL_BOOKING_FORM })
+    const fullName = patientData.profile?.fullName || patientAuth?.fullName || ''
+    const nameParts = fullName.trim().split(/\s+/).filter(Boolean)
+    setBookingForm({
+      firstName: nameParts[0] || '',
+      lastName: nameParts.slice(1).join(' ') || '',
+      phone: patientData.profile?.phone || patientAuth?.phone || INITIAL_BOOKING_FORM.phone,
+    })
     const today = getDateWindow().today
     setSelectedDate(today)
     setBookingOpen(true)
     await fetchAvailability(doctorData.id, today)
   }
 
+  useEffect(() => {
+    const doctorId = searchParams.get('lizaDoctor')
+    if (!doctorId || loading || !doctors.length || openedLizaBookingRef.current === doctorId) return
+    const doctor = doctors.find((item) => String(item.id) === doctorId)
+    if (!doctor) {
+      setBookingMessage('Liza tanlagan doktor ushbu klinika ro‘yxatida topilmadi.')
+      return
+    }
+
+    openedLizaBookingRef.current = doctorId
+    const specialtyPriceIds = (searchParams.get('lizaSpecialtyPriceIds') || '').split(',').filter(Boolean)
+    setSearchParams((current) => {
+      current.delete('lizaDoctor')
+      current.delete('lizaSpecialtyPriceIds')
+      return current
+    }, { replace: true })
+    void openBooking(doctor, specialtyPriceIds)
+  }, [doctors, loading, searchParams, setSearchParams])
+
   const handleDateChange = async (event) => {
     const rawDate = event.target.value
-    const nextDate = rawDate < minBookingDate ? minBookingDate : rawDate > maxBookingDate ? maxBookingDate : rawDate
-    setSelectedDate(nextDate)
+    if (!rawDate) {
+      availabilityRequestRef.current += 1
+      setSelectedDate('')
+      setSelectedSlot(null)
+      setAvailableSlots([])
+      setAvailabilityLoading(false)
+      setAvailabilityNotice('Sanani tanlang.')
+      return
+    }
+    const { today, tomorrow } = getDateWindow()
+    setSelectedDate(rawDate)
     setSelectedSlot(null)
+    setAvailableSlots([])
+    if (rawDate < today || rawDate > tomorrow) {
+      availabilityRequestRef.current += 1
+      setAvailabilityLoading(false)
+      setAvailabilityNotice('Faqat bugun yoki ertangi sanani tanlash mumkin.')
+      return
+    }
     if (selectedDoctor?.id) {
-      await fetchAvailability(selectedDoctor.id, nextDate)
+      await fetchAvailability(selectedDoctor.id, rawDate)
     }
   }
 
@@ -204,8 +277,9 @@ const ClinicDetailPage = () => {
 
     setBookingLoading(true)
     setBookingMessage(null)
+    setTelegramBotLink('')
     try {
-      if (selectedSpecialtyPriceIds.length === 0) {
+      if (selectedDoctorSpecialtyPrices.length > 0 && selectedSpecialtyPriceIds.length === 0) {
         setBookingMessage("Kamida bitta yo'nalishni tanlang")
         return
       }
@@ -219,8 +293,9 @@ const ClinicDetailPage = () => {
         phone_number: phoneNumber
       })
       if (result?.telegram_bot_link) {
-        // Redirect to Telegram for confirmation
-        window.location.href = result.telegram_bot_link
+        setTelegramBotLink(result.telegram_bot_link)
+        setBookingMessage('Navbat olindi. Telegram botda tasdiqlang.')
+        window.location.assign(result.telegram_bot_link)
         return
       }
       setBookingMessage(`Muvaffaqiyatli! Sizning navbat raqamingiz: ${result.queue_number}`)
@@ -365,9 +440,9 @@ const ClinicDetailPage = () => {
 
             <div className="booking-modal-body">
               <div className="booking-section">
-                <label>Doktor yo'nalishlari</label>
+                  <label>Doktor yo'nalishlari va narxlari</label>
                 <div className="booking-specialty-options">
-                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).map((item) => {
+                  {selectedDoctorSpecialtyPrices.map((item) => {
                     const itemId = String(item.id)
                     const checked = selectedSpecialtyPriceIds.includes(itemId)
                     return (
@@ -384,8 +459,8 @@ const ClinicDetailPage = () => {
                       </label>
                     )
                   })}
-                  {(selectedDoctor?.specialty_prices || []).filter((item) => item.doctor_custom && item.is_active !== false).length === 0 && (
-                    <div className="booking-empty">Doktor hozircha o'z yo'nalishlarini qo'shmagan</div>
+                  {selectedDoctorSpecialtyPrices.length === 0 && (
+                    <div className="booking-empty">Doktor yo'nalish yoki narx kiritmagan. Yo'nalishsiz ham navbat olishingiz mumkin.</div>
                   )}
                 </div>
               </div>
@@ -404,10 +479,13 @@ const ClinicDetailPage = () => {
               <div className="booking-section">
                 <label>Bo'sh vaqtlar</label>
                 <div className="booking-slots">
-                  {availableSlots.length === 0 && (
-                    <div className="booking-empty">Bo'sh vaqtlar topilmadi</div>
+                  {availabilityLoading && (
+                    <div className="booking-empty" role="status">Vaqtlar yuklanmoqda...</div>
                   )}
-                  {availableSlots.map((slot) => (
+                  {!availabilityLoading && !availabilityNotice && availableSlots.length === 0 && (
+                    <div className="booking-empty">Bu sana uchun bo'sh vaqtlar topilmadi</div>
+                  )}
+                  {!availabilityLoading && availableSlots.map((slot) => (
                     <button
                       key={slot.id}
                       className={`booking-slot ${selectedSlot?.id === slot.id ? 'active' : ''}`}
@@ -460,7 +538,16 @@ const ClinicDetailPage = () => {
                 </div>
               </div>
 
-              {bookingMessage && <div className="booking-message">{bookingMessage}</div>}
+              {bookingMessage && (
+                <div className="booking-message">
+                  {bookingMessage}
+                  {telegramBotLink && (
+                    <a href={telegramBotLink} target="_blank" rel="noopener noreferrer">
+                      Telegram botga o‘tish
+                    </a>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="booking-modal-footer">

@@ -1074,7 +1074,13 @@ class DoctorAvailabilityViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'doctor va date parametrlari kerak.'}, status=status.HTTP_400_BAD_REQUEST)
         # Slot duration is configured per doctor; ignore arbitrary durations to keep a consistent grid.
 
-        target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        try:
+            target_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+        except (TypeError, ValueError):
+            return Response({'detail': 'date YYYY-MM-DD formatida bo‘lishi kerak.'}, status=status.HTTP_400_BAD_REQUEST)
+        if target_date < localdate():
+            return Response({'detail': 'O‘tgan sana uchun bo‘sh vaqtlarni ko‘rib bo‘lmaydi.'}, status=status.HTTP_400_BAD_REQUEST)
+
         doctor = Doctor.objects.select_related('clinic').filter(id=doctor_id).first()
         if not doctor:
             return Response({'detail': 'Doktor topilmadi.'}, status=status.HTTP_404_NOT_FOUND)

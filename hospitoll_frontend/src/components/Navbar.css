@@ -90,6 +90,10 @@
   display: none;
 }
 
+.navbar-mobile-assistant {
+  display: none;
+}
+
 @media (max-width: 968px) {
   .navbar-menu {
     gap: 0.25rem;
@@ -128,6 +132,22 @@
     font-weight: 700;
     text-decoration: none;
     transition: background-color 0.2s ease, transform 0.2s ease;
+  }
+
+  .navbar-mobile-assistant {
+    width: 100%;
+    min-height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.65rem 1rem;
+    border: 1px solid #b8d7d0;
+    border-radius: 0.65rem;
+    background: #f1f8f5;
+    color: #126a5f;
+    font-size: 0.92rem;
+    font-weight: 700;
+    text-decoration: none;
   }
 
   .navbar-mobile-safety:active {

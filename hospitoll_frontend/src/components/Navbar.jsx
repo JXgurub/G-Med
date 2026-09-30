@@ -17,6 +17,9 @@ const Navbar = () => {
             <a href="/analiz-tahlili/" className="navbar-link">AI tahlil</a>
           </li>
           <li>
+            <a href="/liza/index.html" className="navbar-link">Liza yordamchi</a>
+          </li>
+          <li>
             <Link to="/contact" className="navbar-link">Bog'lanish</Link>
           </li>
           <li>
@@ -38,6 +41,7 @@ const Navbar = () => {
           </svg>
           Bolalar xavfsizligi
         </Link>
+        <a href="/liza/index.html" className="navbar-mobile-assistant">Liza yordamchi</a>
       </div>
     </nav>
   )

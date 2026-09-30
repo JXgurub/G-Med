@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { usePatient } from '../context/PatientContext'
 import PasswordInput from '../components/PasswordInput'
 import './PatientPortal.css'
@@ -40,6 +40,7 @@ const copyTextToClipboard = async (text) => {
 
 const PatientPortal = () => {
   const navigate = useNavigate()
+  const location = useLocation()
   const { patientAuth, patientData, updateDoctorRating, updatePatientProfile, changePatientPassword } = usePatient()
   const [activeTab, setActiveTab] = useState('history')
   const [profileForm, setProfileForm] = useState({
@@ -65,6 +66,26 @@ const PatientPortal = () => {
       navigate('/patient-login', { replace: true })
     }
   }, [patientAuth, navigate])
+
+  useEffect(() => {
+    const handleLizaAction = (event) => {
+      if (!patientAuth || event.detail?.action !== 'open_profile') return
+      setActiveTab('profile')
+      window.requestAnimationFrame(() => {
+        document.querySelector('.profile-forms-stack')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      })
+    }
+    window.addEventListener('gmed:liza-action', handleLizaAction)
+    return () => window.removeEventListener('gmed:liza-action', handleLizaAction)
+  }, [patientAuth])
+
+  useEffect(() => {
+    if (!patientAuth || new URLSearchParams(location.search).get('tab') !== 'profile') return
+    setActiveTab('profile')
+    window.requestAnimationFrame(() => {
+      document.querySelector('.profile-forms-stack')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  }, [location.search, patientAuth])
 
   useEffect(() => {
     if (!profile) return

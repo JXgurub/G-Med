@@ -38,6 +38,7 @@ const SubscriptionBlockedPage = lazy(() => import('./pages/SubscriptionBlockedPa
 const PaymentSuccess = lazy(() => import('./pages/PaymentSuccess'))
 const PaymentHistory = lazy(() => import('./components/PaymentHistory'))
 import PwaStatusWidget from './components/PwaStatusWidget'
+import LizaAssistant from './components/LizaAssistant'
 const Contact = lazy(() => import('./pages/Contact'))
 
 const RouteLoader = () => <div style={{ padding: '2rem', textAlign: 'center' }}>Yuklanmoqda...</div>
@@ -254,6 +255,7 @@ function App() {
               <PaymentProvider>
                 <Router>
                 <PwaStatusWidget />
+                <LizaAssistant />
                 <BroadcastNotificationListener />
                 <Suspense fallback={<RouteLoader />}>
                   <Routes>

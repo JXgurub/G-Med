@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="uz">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#080d14">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="liza-api-url" content="/api/v1/liza/command/">
+    <link rel="manifest" href="manifest.webmanifest">
+    <link rel="apple-touch-icon" href="assets/img/pwa-192.png">
+    <title>Liza | G-med yordamchisi</title>
+
+    <link rel="shortcut icon" href="assets/img/pwa-192.png" type="image/png">
+
+    <!-- Bootsrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet"
+        integrity="sha384-EVSTQN3/azprG1Anm3QDgpJLIm9Nao0Yz1ztcQTwFspd3yD65VohhpuuCOmLASjC" crossorigin="anonymous">
+    <!-- Bootsrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+
+    <link rel="stylesheet" href="style.css?v=20261001">
+
+</head>
+    <div class="liza-app">
+        <header class="liza-header">
+            <a class="liza-brand" href="/" aria-label="G-MED bosh sahifasi">
+                <img src="assets/img/logo.jpg" alt="">
+                <span class="liza-brand-copy"><strong>G-MED</strong></span>
+            </a>
+            <div class="header-actions">
+                <button id="InstallBtn" class="header-install" type="button" aria-label="Liza ilovasini o'rnatish" title="Ilovani o'rnatish" hidden>
+                    <i class="bi bi-download" aria-hidden="true"></i>
+                </button>
+            </div>
+        </header>
+
+        <main id="Oval" class="liza-main">
+            <div class="orb-stage">
+                <div id="JarvisHood" class="orb-housing" role="img" aria-label="Liza ovozli yordamchisi">
+                    <div class="square">
+                        <span class="orb-corner corner-top-left"></span>
+                        <span class="orb-corner corner-top-right"></span>
+                        <span class="orb-corner corner-bottom-left"></span>
+                        <span class="orb-corner corner-bottom-right"></span>
+                        <span class="orb-layer orb-layer-one"></span>
+                        <span class="orb-layer orb-layer-two"></span>
+                        <span class="orb-layer orb-layer-three"></span>
+                        <div class="orb-core">
+                            <canvas id="canvasOne" class="orb-particles" aria-hidden="true"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <section class="welcome-copy">
+                <h1>Salom, men <span>Liza</span></h1>
+                <p class="welcome-description">Sog'lig'ingiz bo'yicha yordamchingiz.</p>
+            </section>
+        </main>
+
+        <section id="SiriWave" class="voice-view" hidden>
+            <div class="voice-state"><span class="voice-state-dot"></span> LIZA TINGLAYAPTI</div>
+            <p class="siri-message">Assalomu alaykum, mening ismim Liza</p>
+            <div id="siri-container" class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        </section>
+
+        <footer class="control-deck">
+            <div id="TextInput" class="message-composer">
+                <label class="visually-hidden" for="chatbox">Liza uchun xabar</label>
+                <button id="ChatBtn" class="chat-button" type="button" aria-label="Suhbatlar" data-bs-toggle="offcanvas" data-bs-target="#offcanvasScrolling" aria-controls="offcanvasScrolling">
+                    <i class="bi bi-chat-square-text" aria-hidden="true"></i>
+                </button>
+                <input type="text" class="input-field" name="chatbox" id="chatbox" placeholder="Savolingizni yozing" autocomplete="off" enterkeyhint="send">
+                <button id="SendBtn" class="send-button" type="button" aria-label="Xabarni yuborish" hidden><i class="bi bi-arrow-up" aria-hidden="true"></i></button>
+                <button id="MicBtn" class="mic-button" type="button" aria-label="Ovozli buyruq" aria-pressed="false"><i class="bi bi-mic-fill" aria-hidden="true"></i></button>
+            </div>
+        </footer>
+    </div>
+
+    <div class="offcanvas offcanvas-start chat-canvas" data-bs-scroll="true" data-bs-backdrop="false" tabindex="-1"
+        id="offcanvasScrolling" aria-labelledby="offcanvasScrollingLabel">
+        <div class="offcanvas-header">
+            <h5 class="offcanvas-title" id="offcanvasScrollingLabel">Suhbatlar</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Yopish"></button>
+        </div>
+        <div id="chat-canvas-body" class="offcanvas-body">
+            <!-- Chatting code here -->
+
+        </div>
+    </div>
+
+    <!--Jquery  -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.6.4/jquery.min.js"></script>
+
+    <!-- Bootstrap -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-MrcW6ZMFYlzcLA8Nl+NtUVF0sA7MsXsP1UyJoMp4YLEuNSfAP+JcXn/tWtIaxVXM"
+        crossorigin="anonymous"></script>
+
+    <!-- Siri wave -->
+    <script src="https://unpkg.com/siriwave/dist/siriwave.umd.min.js"></script>
+
+    <script>
+        if (new URLSearchParams(window.location.search).get("desktop") === "1") document.write('<script src="/eel.js"><\/script>');
+    </script>
+    <script src="controller.js"></script>
+    <script src="orb-particles.js"></script>
+    <script src="assistant-client.js"></script>
+
+
+</body>
+
+</html>
