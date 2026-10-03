@@ -430,7 +430,11 @@ export const receptionStaffApi = {
   getDoctors: () => api.getWithHeaders('/clinics/reception-staff/doctors/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
   searchPatients: (query = '') => api.getWithHeaders('/clinics/reception-staff/patients/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }, { q: query }),
   getOnlineAppointments: () => api.getWithHeaders('/clinics/reception-staff/online-appointments/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
-  confirmOnlineAppointment: (id) => api.request(`/clinics/reception-staff/online-appointments/${id}/confirm/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
+  confirmOnlineAppointment: (id, specialty_price_ids, payment_method = 'cash') => api.request(`/clinics/reception-staff/online-appointments/${id}/confirm/`, {
+    method: 'POST',
+    headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ specialty_price_ids, payment_method }),
+  }),
   cancelOnlineAppointment: (id) => api.request(`/clinics/reception-staff/online-appointments/${id}/cancel/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
   getStats: (params) => api.getWithHeaders('/clinics/reception-staff/stats/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }, params),
   getMe: () => api.getWithHeaders('/clinics/reception-staff/me/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),

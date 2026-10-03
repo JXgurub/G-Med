@@ -137,6 +137,153 @@ class LizaCommandTests(SimpleTestCase):
         self.assertEqual(filter_appointments.call_args.kwargs['patient'], patient)
         self.assertTrue(filter_appointments.call_args.kwargs['status__in'])
 
+    @patch('apps.liza.services.requests.get')
+    def test_weather_command_uses_open_meteo(self, get_mock):
+        geocoding_response = Mock()
+        geocoding_response.json.return_value = {
+            'results': [{'name': 'Toshkent', 'country_code': 'UZ', 'latitude': 41.3, 'longitude': 69.2}],
+        }
+        forecast_response = Mock()
+        forecast_response.json.return_value = {
+            'current': {'temperature_2m': 20, 'wind_speed_10m': 4, 'weather_code': 0},
+        }
+        get_mock.side_effect = [geocoding_response, forecast_response]
+
+        user = SimpleNamespace(role='patient', pk='weather-user')
+        reply = handle_command(user=user, message='Toshkentda ob havo qanday?')
+
+        self.assertIn('Toshkentda hozir ochiq', reply)
+        self.assertEqual(get_mock.call_count, 2)
+
+    @patch('apps.liza.services._youtube_search_results', return_value=[
+        {'id': 'abcdefghijk', 'title': 'Sevara Nazarkhan'},
+        {'id': 'bcdefghijkl', 'title': 'Sevara Nazarkhan 2'},
+    ])
+    def test_youtube_command_returns_playable_video_action(self, youtube_search_mock):
+        user = SimpleNamespace(role='patient', pk='youtube-user')
+        message = "Yutubedan Sevara Nazarkhan qo'shig'ini qo'yib ber"
+        reply = handle_command(user=user, message=message)
+        action = get_command_action_data(user=user, message=message)
+
+        self.assertIn('Sevara Nazarkhan', reply)
+        self.assertEqual(action['action'], 'play_youtube')
+        self.assertEqual(action['video_id'], 'abcdefghijk')
+        self.assertEqual(action['queue_count'], 2)
+        youtube_search_mock.assert_called_once_with('sevara nazarkhan')
+
+    @patch('apps.liza.services._youtube_search_results', return_value=[
+        {'id': 'abcdefghijk', 'title': 'Birinchi qo‘shiq'},
+        {'id': 'bcdefghijkl', 'title': 'Ikkinchi qo‘shiq'},
+        {'id': 'cdefghijklm', 'title': 'Uchinchi qo‘shiq'},
+    ])
+    def test_youtube_queue_moves_next_previous_and_pauses(self, youtube_search_mock):
+        user = SimpleNamespace(role='patient', pk='youtube-queue-user')
+        handle_command(user=user, message='YouTube da Yulduz qo‘shiqlar')
+
+        next_reply = handle_command(user=user, message='keyingi qo‘shiq')
+        next_action = get_command_action_data(user=user, message='keyingi qo‘shiq')
+        self.assertIn('Ikkinchi qo‘shiq', next_reply)
+        self.assertEqual(next_action['control'], 'next')
+        self.assertEqual(next_action['video_id'], 'bcdefghijkl')
+
+        previous_reply = handle_command(user=user, message='oldingi qo‘shiq')
+        previous_action = get_command_action_data(user=user, message='oldingi qo‘shiq')
+        self.assertIn('Birinchi qo‘shiq', previous_reply)
+        self.assertEqual(previous_action['control'], 'previous')
+        self.assertEqual(previous_action['video_id'], 'abcdefghijk')
+
+        pause_reply = handle_command(user=user, message='shitob')
+        pause_action = get_command_action_data(user=user, message='shitob')
+        self.assertIn('to‘xtatdim', pause_reply)
+        self.assertEqual(pause_action['control'], 'pause')
+
+        play_reply = handle_command(user=user, message='davom ettir')
+        play_action = get_command_action_data(user=user, message='davom ettir')
+        self.assertIn('davom ettiryapman', play_reply)
+        self.assertEqual(play_action['control'], 'play')
+
+        rewind_reply = handle_command(user=user, message='10 soniya orqaga')
+        rewind_action = get_command_action_data(user=user, message='10 soniya orqaga')
+        self.assertIn('10 soniya orqaga', rewind_reply)
+        self.assertEqual(rewind_action['control'], 'rewind')
+        youtube_search_mock.assert_called_once()
+
+    @patch('apps.liza.services._youtube_search_results', return_value=[
+        {'id': 'abcdefghijk', 'title': 'Hamd am Sobirov'},
+    ])
+    def test_liza_wake_word_ducks_music_before_followup_command(self, _youtube_search_mock):
+        user = SimpleNamespace(role='patient', pk='youtube-wake-user')
+        handle_command(user=user, message='YouTube da Hamdam Sobirov qo‘shiqlari')
+
+        wake_reply = handle_command(user=user, message='Liza')
+        wake_action = get_command_action_data(user=user, message='Liza')
+        self.assertIn('Buyruqni ayting', wake_reply)
+        self.assertEqual(wake_action['action'], 'youtube_duck')
+
+        next_reply = handle_command(user=user, message='keyingisiga o‘t')
+        next_action = get_command_action_data(user=user, message='keyingisiga o‘t')
+        self.assertIn('Keyingi qo‘shiq', next_reply)
+        self.assertEqual(next_action['control'], 'next')
+
+    @patch('apps.liza.services._youtube_search_results', return_value=[
+        {'id': 'abcdefghijk', 'title': 'Birinchi qo‘shiq'},
+        {'id': 'bcdefghijkl', 'title': 'Ikkinchi qo‘shiq'},
+    ])
+    def test_liza_prefixed_song_controls_do_not_stop_listening(self, _youtube_search_mock):
+        user = SimpleNamespace(role='patient', pk='youtube-prefixed-user')
+        handle_command(user=user, message='YouTube da Yulduz qo‘shiqlar')
+
+        next_reply = handle_command(user=user, message='Liza keyingisiga o‘t')
+        next_action = get_command_action_data(user=user, message='Liza keyingisiga o‘t')
+        self.assertIn('Ikkinchi qo‘shiq', next_reply)
+        self.assertEqual(next_action['control'], 'next')
+
+        pause_reply = handle_command(user=user, message='Liza qo‘shiqni to‘xtat')
+        pause_action = get_command_action_data(user=user, message='Liza qo‘shiqni to‘xtat')
+        self.assertIn('to‘xtatdim', pause_reply)
+        self.assertEqual(pause_action['control'], 'pause')
+
+        stop_reply = handle_command(user=user, message='Liza to‘xta')
+        self.assertIn('suhbatni to‘xtatdi', stop_reply)
+
+    @patch('apps.liza.services._youtube_search_results', return_value=[
+        {'id': 'abcdefghijk', 'title': 'Yulduz Usmonova'},
+    ])
+    def test_youtube_command_without_title_then_searches_followup_title(self, youtube_search_mock):
+        user = SimpleNamespace(role='patient', pk='youtube-user')
+
+        for message in (
+            "Menga yutubda muzika qo'yib ber",
+            "yutobedan qo'shiq qo'y",
+            "YouTube dan qo'shiq qo'y",
+        ):
+            with self.subTest(message=message):
+                reply = handle_command(user=user, message=message)
+                self.assertIn('qo‘shiq yoki video nomini ayting', reply)
+
+        youtube_search_mock.assert_not_called()
+        followup_reply = handle_command(user=user, message='Yulduz Usmonova')
+        action = get_command_action_data(user=user, message='Yulduz Usmonova')
+        self.assertIn('Yulduz Usmonova', followup_reply)
+        self.assertEqual(action['action'], 'play_youtube')
+        self.assertEqual(action['video_id'], 'abcdefghijk')
+        youtube_search_mock.assert_called_once_with('yulduz usmonova')
+
+    @patch('apps.liza.services.requests.get')
+    def test_internet_search_returns_external_summary(self, get_mock):
+        response = Mock()
+        response.json.return_value = {
+            'AbstractText': 'Toshkent O‘zbekiston poytaxti.',
+            'AbstractURL': 'https://example.com/tashkent',
+        }
+        get_mock.return_value = response
+
+        user = SimpleNamespace(role='patient', pk='search-user')
+        reply = handle_command(user=user, message='Internetda Toshkent haqida qidir')
+
+        self.assertIn('Toshkent O‘zbekiston poytaxti', reply)
+        self.assertIn('https://example.com/tashkent', reply)
+
 
 class LizaPatientFunctionsTests(TestCase):
     def setUp(self):
@@ -307,6 +454,44 @@ class LizaPatientFunctionsTests(TestCase):
         self.assertEqual(action['booking']['clinic_id'], str(self.clinic.id))
         self.assertEqual(action['booking']['specialty_price_ids'], [str(price.id)])
         self.assertNotIn('booking', get_command_action_data(user=self.other_user, message='ha'))
+
+    def test_speakable_text_reads_zero_and_phone_digits(self):
+        from .services import speakable_text
+
+        self.assertEqual(speakable_text('+998 90 111 22 33'), 'to\'qqiz to\'qqiz sakkiz to\'qqiz nol bir bir bir ikki ikki uch uch')
+        self.assertEqual(speakable_text('09:00–18:00'), "soat to'qqiz dan soat o'n sakkiz gacha")
+        self.assertEqual(speakable_text('150000 so\'m'), "bir yuz ellik ming so'm")
+        self.assertNotIn('0', speakable_text('Telefon 0 va 100'))
+
+    def test_specialty_request_lists_every_matching_doctor_and_selects_by_ordinal(self):
+        specialization = Specialization.objects.get(name='Stomatologiya')
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor, specialization=specialization, consultation_fee=Decimal('150000'),
+        )
+        second_user = CustomUser.objects.create_user(
+            username='liza_second_dentist', password='pass12345', role='doctor',
+            first_name='Qodir', last_name='Tishchi',
+        )
+        second_doctor = Doctor.objects.create(
+            user=second_user, clinic=self.clinic, consultation_fee=Decimal('90000'),
+            available_from=self.doctor.available_from, available_until=self.doctor.available_until,
+        )
+        DoctorSpecialization.objects.create(
+            doctor=second_doctor, specialization=specialization, consultation_fee=Decimal('90000'),
+        )
+
+        reply = handle_command(user=self.patient_user, message="Tishim og'riyapti, stomatologiya topib ber")
+
+        self.assertIn(self.doctor_user.get_full_name(), reply)
+        self.assertIn('Qodir Tishchi', reply)
+        self.assertIn('Qaysi doktorga', reply)
+        self.assertEqual(
+            get_command_action_data(user=self.patient_user, message='ha')['action'],
+            'await_booking_confirmation',
+        )
+        action = get_command_action_data(user=self.patient_user, message='ikkinchisi')
+        self.assertEqual(action['action'], 'open_booking')
+        self.assertIn(action['booking']['doctor_id'], {str(self.doctor.id), str(second_doctor.id)})
 
     def test_ear_pain_finds_lor_specialist_across_clinic_specialties(self):
         specialization = Specialization.objects.get(name='Otorinolaringologiya (LOR)')

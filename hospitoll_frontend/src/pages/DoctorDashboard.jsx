@@ -1329,7 +1329,10 @@ const DoctorDashboard = () => {
                       const timeLabel = scheduled.toLocaleTimeString('uz-UZ', { hour: '2-digit', minute: '2-digit' })
                       const dateLabel = scheduled.toLocaleDateString('uz-UZ')
                       const isQueueLeader = index === 0
-                      const queuePosition = Number(appointment?.queue_position)
+                      const visibleQueueNumber = doctor?.clinicReceptionRoomEnabled
+                        ? appointment?.ticket_number || appointment?.queue_position
+                        : appointment?.queue_position
+                      const queuePosition = Number(visibleQueueNumber)
                       const queueLabel = Number.isFinite(queuePosition) && queuePosition > 0 ? queuePosition : index + 1
                       const queueLocked = !isQueueLeader
                       return (

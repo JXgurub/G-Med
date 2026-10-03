@@ -8,11 +8,12 @@ from decimal import Decimal
 
 from django.db import transaction
 from django.db import IntegrityError
-from django.db.models import Count, Sum, Q, Value, DecimalField
+from django.db.models import Count, Max, Sum, Q, Value, DecimalField
 from django.db.models.functions import TruncMonth, Coalesce
 from django.utils import timezone
 from django.conf import settings
 from django.core.cache import cache
+from django.core import signing
 import django_filters
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -68,6 +69,30 @@ def _resolve_default_consultation_fee_for_doctor(doctor: Doctor | None) -> Decim
     return doctor_default_fee
 
 
+def _next_daily_reception_ticket_number(doctor_id, booking_date):
+    Doctor.objects.select_for_update().only('id').get(id=doctor_id)
+    day_appointments = Appointment.objects.filter(
+        doctor_id=doctor_id,
+        scheduled_date__date=booking_date,
+    )
+    current = day_appointments.aggregate(
+        max_ticket=Max('ticket_number'),
+        max_position=Max('queue_position'),
+        count=Count('id'),
+    )
+    return max(
+        int(current['max_ticket'] or 0),
+        int(current['max_position'] or 0),
+        int(current['count'] or 0),
+    ) + 1
+
+
+def _appointment_queue_ordering(reception_enabled):
+    if reception_enabled:
+        return ('ticket_number', 'scheduled_date', 'created_at', 'queue_position')
+    return ('scheduled_date', 'created_at', 'queue_position')
+
+
 class AppointmentViewSet(viewsets.ModelViewSet):
     queryset = Appointment.objects.select_related('patient', 'doctor', 'clinic').all()
     serializer_class = AppointmentSerializer
@@ -106,6 +131,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 if patient_user else ''
             ) or 'Bemor'
             patient_number = str(getattr(patient, 'patient_number', '') or '').strip() or '-'
+            ticket_number = int(getattr(appointment, 'ticket_number', 0) or appointment.queue_position or 0)
 
             selected_specialties = list(getattr(appointment, 'selected_specialties', []) or [])
             specialty_names = [
@@ -132,7 +158,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             doctor_name = doctor_name or 'Doktor'
 
             payload = {
-                'queue_number': str(appointment.queue_position or 0),
+                'queue_number': str(ticket_number),
                 'queue_number_size': str(getattr(clinic, 'queue_ticket_number_size', 'large') or 'large'),
                 'lines': [
                     '================================',
@@ -144,7 +170,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     f"Davolash yo\'nalishlari: {directions_text}",
                     f'Doktor: {doctor_name}',
                     'NAVBAT RAQAMI',
-                    str(appointment.queue_position or 0),
+                    str(ticket_number),
                     f"Jami to\'lov: {fee_text} so\'m",
                     f'Sana: {timezone.localtime(appointment.scheduled_date).strftime("%d.%m.%Y")}',
                     f'Vaqt: {timezone.localtime(appointment.scheduled_date).strftime("%H:%M")}',
@@ -157,6 +183,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             }
 
             PrintJob.objects.create(
+                clinic=clinic,
                 reception_room=reception_room,
                 printer_device=printer_device,
                 appointment=appointment,
@@ -361,6 +388,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         selected_new_local = None
         now_local = timezone.localtime().replace(second=0, microsecond=0)
         appointment_date = timezone.localtime(appointment.scheduled_date).date()
+        queue_ordering = _appointment_queue_ordering(bool(doctor.clinic and doctor.clinic.reception_room_enabled))
         queue_step_minutes = int(getattr(doctor, 'slot_minutes', 30) or 30)
         if queue_step_minutes not in _allowed_slot_minutes():
             queue_step_minutes = 30
@@ -374,7 +402,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                         scheduled_date__date=appointment_date,
                         status__in=status_filter,
                     )
-                    .order_by('scheduled_date', 'created_at', 'queue_position')
+                    .order_by(*queue_ordering)
                 )
 
                 target = next((item for item in queue_items if item.id == appointment.id), None)
@@ -443,7 +471,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                         scheduled_date__date=appointment_date,
                         status__in=status_filter,
                     )
-                    .order_by('scheduled_date', 'created_at', 'queue_position')
+                    .order_by(*queue_ordering)
                 )
 
                 if not any(item.id == appointment.id for item in queue_items):
@@ -939,6 +967,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         reason = str(validated.get('reason', '') or '').strip()
         source = validated.get('source', 'online')
         reception_staff_id = validated.get('reception_staff_id')
+        payment_method = validated.get('payment_method') or 'cash'
         phone_norm = self._normalize_phone(phone_number)
 
         if doctor.clinic_id != clinic.id:
@@ -1100,6 +1129,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 )
                 queue_base_qs = queue_base_qs.filter(scheduled_date__gte=session_start)
             queue_position = queue_base_qs.count() + 1
+            ticket_number = (
+                _next_daily_reception_ticket_number(doctor.id, booking_date)
+                if clinic.reception_room_enabled
+                else 0
+            )
 
             appointment = Appointment.objects.create(
                 patient=patient,
@@ -1111,6 +1145,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 duration_minutes=slot_duration,
                 reason=reason,
                 consultation_fee=booking_fee,
+                payment_method=payment_method,
+                ticket_number=ticket_number,
                 selected_specialties=[
                     {'id': str(item['id']), 'name': item['custom_name'] or item['specialization__name'], 'price': float(item['consultation_fee'])}
                     for item in selected_specialties
@@ -1154,7 +1190,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             'appointment': AppointmentSerializer(appointment).data,
             'patient_number': appointment.patient.patient_number,
             'queue_position': appointment.queue_position,
-            'queue_number': queue_number,
+            'ticket_number': ticket_number or appointment.queue_position,
+            'queue_number': ticket_number or queue_number,
             'telegram_bot_link': bot_link,
         }, status=status.HTTP_201_CREATED)
 
@@ -1191,7 +1228,9 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     scheduled_date__date=timezone.localtime(appointment.scheduled_date).date(),
                     status__in=self._queue_active_statuses(),
                 )
-                .order_by('scheduled_date', 'created_at', 'queue_position')
+                .order_by(*_appointment_queue_ordering(
+                    bool(appointment.clinic and appointment.clinic.reception_room_enabled)
+                ))
             )
             for idx, item in enumerate(active_items, start=1):
                 if item.queue_position != idx:
@@ -1214,9 +1253,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         except Exception:
             return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        requested_ids = {str(value) for value in (request.data.get('specialty_price_ids') or [])}
-        if not requested_ids:
-            return Response({'detail': "Kamida bitta xizmatni tanlang."}, status=status.HTTP_400_BAD_REQUEST)
+        raw_requested_ids = request.data.get('specialty_price_ids', [])
+        if not isinstance(raw_requested_ids, list):
+            return Response({'detail': "Xizmatlar ro‘yxati noto‘g‘ri."}, status=status.HTTP_400_BAD_REQUEST)
+        requested_ids = list(dict.fromkeys(str(value) for value in raw_requested_ids if value))
+        requested_id_set = set(requested_ids)
 
         with transaction.atomic():
             appointment = Appointment.objects.select_for_update().select_related('doctor', 'clinic').get(id=pk)
@@ -1225,32 +1266,47 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             if appointment.status in [Appointment.Status.CANCELLED, Appointment.Status.NO_SHOW, Appointment.Status.COMPLETED]:
                 return Response({'detail': 'Yakunlangan yoki bekor qilingan qabulga xizmat qo‘shib bo‘lmaydi.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            current_ids = {str(item.get('id')) for item in (appointment.selected_specialties or []) if item.get('id')}
+            current_specialties = [item for item in (appointment.selected_specialties or []) if item.get('id')]
+            current_by_id = {str(item['id']): item for item in current_specialties}
+            added_ids = requested_id_set - set(current_by_id)
             additions = DoctorSpecialization.objects.filter(
-                id__in=requested_ids - current_ids,
+                id__in=added_ids,
                 doctor_id=appointment.doctor_id,
                 is_active=True,
             ).select_related('specialization')
-            if additions.count() != len(requested_ids - current_ids):
+            if additions.count() != len(added_ids):
                 return Response({'detail': "Tanlangan xizmat doktorga tegishli emas yoki faol emas."}, status=status.HTTP_400_BAD_REQUEST)
 
-            added_total = Decimal('0')
-            selected = list(appointment.selected_specialties or [])
+            additions_by_id = {}
             for item in additions:
                 price = Decimal(item.consultation_fee or 0)
-                added_total += price
-                selected.append({
+                additions_by_id[str(item.id)] = {
                     'id': str(item.id),
                     'name': item.custom_name or item.specialization.name,
                     'price': float(price),
-                })
+                }
 
+            selected = [
+                current_by_id.get(item_id) or additions_by_id[item_id]
+                for item_id in requested_ids
+            ]
+            selected_total = sum(
+                (Decimal(str(item.get('price') or 0)) for item in selected),
+                Decimal('0'),
+            )
             appointment.selected_specialties = selected
-            appointment.consultation_fee = Decimal(appointment.consultation_fee or 0) + added_total
+            appointment.consultation_fee = selected_total
             appointment.save(update_fields=['selected_specialties', 'consultation_fee', 'updated_at'])
 
+        if added_ids:
+            self._enqueue_reception_print_job(
+                appointment=appointment,
+                clinic=appointment.clinic,
+                doctor=appointment.doctor,
+            )
+
         return Response({
-            'detail': 'Xizmatlar saqlandi.',
+            'detail': 'Xizmatlar yangilandi.',
             'consultation_fee': float(appointment.consultation_fee),
             'selected_specialties': appointment.selected_specialties,
         }, status=status.HTTP_200_OK)
@@ -1375,6 +1431,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             booking_fee, fee_error = self._resolve_booking_fee(doctor, str(specialty_price_id) if specialty_price_id else None)
             if fee_error:
                 return Response({'detail': fee_error}, status=status.HTTP_400_BAD_REQUEST)
+            ticket_number = (
+                _next_daily_reception_ticket_number(doctor.id, target_date)
+                if clinic.reception_room_enabled
+                else 0
+            )
             appointment = Appointment.objects.create(
                 patient=patient,
                 doctor=doctor,
@@ -1385,6 +1446,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 duration_minutes=duration_minutes,
                 reason=reason,
                 consultation_fee=booking_fee,
+                ticket_number=ticket_number,
                 queue_position=(
                     Appointment.objects.filter(
                         doctor=doctor,
@@ -1420,7 +1482,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return Response({
             'appointment': AppointmentSerializer(appointment).data,
             'patient_number': appointment.patient.patient_number,
-            'queue_number': appointment.queue_position,
+            'queue_number': ticket_number or appointment.queue_position,
+            'ticket_number': ticket_number or appointment.queue_position,
             'telegram_bot_link': bot_link,
         }, status=status.HTTP_201_CREATED)
 
@@ -1449,7 +1512,9 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             doctor=doctor,
             scheduled_date__date=today,
             status__in=queue_statuses,
-        ).select_related('patient', 'clinic', 'slot').order_by('scheduled_date', 'created_at', 'queue_position')
+        ).select_related('patient', 'clinic', 'slot').order_by(*_appointment_queue_ordering(
+            bool(doctor.clinic and doctor.clinic.reception_room_enabled)
+        ))
         return Response(AppointmentSerializer(qs, many=True).data)
 
     @action(detail=False, methods=['get'], permission_classes=[IsDoctor])
@@ -1990,7 +2055,9 @@ class MedicalRecordViewSet(viewsets.ModelViewSet):
                     status__in=active_statuses,
                 )
                 .exclude(id=completed_appointment.id)
-                .order_by('scheduled_date', 'created_at', 'queue_position')
+                .order_by(*_appointment_queue_ordering(
+                    bool(completed_appointment.clinic and completed_appointment.clinic.reception_room_enabled)
+                ))
             )
             if not queue_items:
                 return None

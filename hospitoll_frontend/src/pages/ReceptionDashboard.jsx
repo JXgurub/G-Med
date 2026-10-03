@@ -39,6 +39,7 @@ const ReceptionDashboard = () => {
     date_of_birth: '',
     doctor: '',
     specialty_price_ids: [],
+    payment_method: 'cash',
     date: getLocalDateValue(),
     slot_id: '',
   })
@@ -204,6 +205,7 @@ const ReceptionDashboard = () => {
     'F.I.O': item.patient_name,
     "Tug'ilgan yil": item.birth_year || '-',
     "To'lov summasi": Number(item.amount || 0),
+    "To'lov turi": item.payment_method || 'Naqd',
   }))
 
   const downloadReport = async () => {
@@ -227,8 +229,8 @@ const ReceptionDashboard = () => {
         XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(reportRows), 'Bemorlar')
         XLSX.writeFile(workbook, `qabulxona-bemorlar-${fileDate}.xlsx`)
       } else {
-        const rows = reportRows.map((row) => `<tr><td>${row['F.I.O']}</td><td>${row["Tug'ilgan yil"]}</td><td>${Number(row["To'lov summasi"]).toLocaleString()} so'm</td></tr>`).join('')
-        const html = `<html><meta charset="utf-8"><body><h1>Qabulxona xodimi bemorlar ro'yxati</h1><p>Sana: ${fileDate}</p><table border="1" cellspacing="0" cellpadding="6"><tr><th>F.I.O</th><th>Tug'ilgan yil</th><th>To'lov summasi</th></tr>${rows}</table></body></html>`
+        const rows = reportRows.map((row) => `<tr><td>${row['F.I.O']}</td><td>${row["Tug'ilgan yil"]}</td><td>${Number(row["To'lov summasi"]).toLocaleString()} so'm</td><td>${row["To'lov turi"]}</td></tr>`).join('')
+        const html = `<html><meta charset="utf-8"><body><h1>Qabulxona xodimi bemorlar ro'yxati</h1><p>Sana: ${fileDate}</p><table border="1" cellspacing="0" cellpadding="6"><tr><th>F.I.O</th><th>Tug'ilgan yil</th><th>To'lov summasi</th><th>To'lov turi</th></tr>${rows}</table></body></html>`
 
         if (reportFormat === 'doc') {
           const link = document.createElement('a')
@@ -269,11 +271,11 @@ const ReceptionDashboard = () => {
     const [first_name, ...lastParts] = form.full_name.trim().split(/\s+/)
     try {
       if (onlineAppointmentId) {
-        const response = await receptionStaffApi.confirmOnlineAppointment(onlineAppointmentId)
+        const response = await receptionStaffApi.confirmOnlineAppointment(onlineAppointmentId, form.specialty_price_ids, form.payment_method)
         setMessage(response?.detail || 'Onlayn navbat tasdiqlandi va printerga yuborildi.')
         setOnlineAppointmentId('')
         setOnlineAppointments((items) => items.filter((item) => item.id !== onlineAppointmentId))
-        setForm((prev) => ({ ...prev, full_name: '', phone_number: '', date_of_birth: '', specialty_price_ids: [], slot_id: '' }))
+        setForm((prev) => ({ ...prev, full_name: '', phone_number: '', date_of_birth: '', specialty_price_ids: [], payment_method: 'cash', slot_id: '' }))
         setGeneratedPatientNumber(buildTempPatientNumber())
         loadTodayStats()
         return
@@ -289,12 +291,13 @@ const ReceptionDashboard = () => {
         source: 'reception',
         reception_staff_id: staff.id,
         patient_number: generatedPatientNumber,
+        payment_method: form.payment_method,
       })
       const patientNumber = bookingResponse?.patient_number || bookingResponse?.appointment?.patient_number
       const queueNumber = Number(bookingResponse?.queue_position || bookingResponse?.queue_number || 0)
       if (queueNumber > 0) setLastQueueNumber(queueNumber)
       setMessage(patientNumber ? `Bemor navbatga muvaffaqiyatli yozildi. Raqami: ${patientNumber}` : 'Bemor navbatga muvaffaqiyatli yozildi')
-      setForm((prev) => ({ ...prev, full_name: '', phone_number: '', date_of_birth: '', specialty_price_ids: [], slot_id: '' }))
+      setForm((prev) => ({ ...prev, full_name: '', phone_number: '', date_of_birth: '', specialty_price_ids: [], payment_method: 'cash', slot_id: '' }))
       setGeneratedPatientNumber(buildTempPatientNumber())
       loadTodayStats()
       loadAttendance()
@@ -411,7 +414,7 @@ const ReceptionDashboard = () => {
 
   const openServiceModal = (patient) => {
     setServicePatient(patient)
-    setServiceSelection([])
+    setServiceSelection((patient.selected_specialties || []).map((item) => String(item.id)))
   }
 
   const selectOnlineAppointment = (appointment) => {
@@ -423,6 +426,7 @@ const ReceptionDashboard = () => {
       date_of_birth: appointment.date_of_birth || '',
       doctor: appointment.doctor_id || '',
       specialty_price_ids: (appointment.selected_specialties || []).map((item) => String(item.id)),
+      payment_method: 'cash',
       slot_id: '',
     }))
     setGeneratedPatientNumber(appointment.patient_number || buildTempPatientNumber())
@@ -442,7 +446,7 @@ const ReceptionDashboard = () => {
   }
 
   const handleAddServices = async () => {
-    if (!servicePatient || serviceSelection.length === 0) return
+    if (!servicePatient) return
     setServiceSaving(true)
     try {
       const response = await medicalApi.receptionAddServices(servicePatient.id, serviceSelection)
@@ -572,7 +576,7 @@ const ReceptionDashboard = () => {
           <div className="reception-patients-heading"><h2>Onlayn navbatlar</h2><span>{onlineAppointments.length} ta</span></div>
           {onlineAppointments.map((appointment) => (
             <div className="reception-online-row" key={appointment.id}>
-              <div><strong>{appointment.patient_name}</strong><span>{appointment.patient_number} • {appointment.phone} • Tug‘ilgan sana: {appointment.date_of_birth || '-'}</span><span>{appointment.doctor_name} • Navbat #{appointment.queue_position} • {Number(appointment.amount || 0).toLocaleString()} so‘m</span></div>
+              <div><strong>{appointment.patient_name}</strong><span>{appointment.patient_number} • {appointment.phone} • Tug‘ilgan sana: {appointment.date_of_birth || '-'}</span><span>{appointment.doctor_name} • Navbat #{appointment.ticket_number || appointment.queue_position} • {Number(appointment.amount || 0).toLocaleString()} so‘m</span></div>
               <div className="reception-row-actions"><button type="button" className="reception-service-btn" onClick={() => selectOnlineAppointment(appointment)}>Tasdiqlash</button><button type="button" className="reception-cancel-btn" onClick={() => cancelOnlineAppointment(appointment)}>Bekor qilish</button></div>
             </div>
           ))}
@@ -629,6 +633,26 @@ const ReceptionDashboard = () => {
             </select>
           </label>
 
+          <fieldset className="reception-payment-picker">
+            <legend>To‘lov usuli</legend>
+            {[
+              ['card', 'Plastik'],
+              ['click', 'Click'],
+              ['cash', 'Naqd'],
+            ].map(([value, label]) => (
+              <label className={form.payment_method === value ? 'selected' : ''} key={value}>
+                <input
+                  type="radio"
+                  name="payment_method"
+                  value={value}
+                  checked={form.payment_method === value}
+                  onChange={() => setForm((prev) => ({ ...prev, payment_method: value }))}
+                />
+                <span>{label}</span>
+              </label>
+            ))}
+          </fieldset>
+
           <div className="reception-specialty-picker">
             <span>Davolash yo'nalishlari</span>
             {specialtyPrices.length === 0 ? (
@@ -673,8 +697,9 @@ const ReceptionDashboard = () => {
           <h2>Bugungi bemorlar</h2>
           {(stats?.queue_patients || stats?.accepted_patients || []).map((item) => (
             <div className="reception-patient-row" key={item.id}>
-              <strong>#{Number(item.queue_position || 0)} • {item.patient_name}</strong>
+              <strong>#{Number(item.ticket_number || item.queue_position || 0)} • {item.patient_name}</strong>
               <span>{item.time} • {item.doctor_name}</span>
+              {item.selected_specialties?.length ? <span>Xizmatlar: {item.selected_specialties.map((service) => service.name).join(', ')}</span> : null}
               <div className="reception-row-actions"><b>{Number(item.amount).toLocaleString()} so'm</b><button type="button" className="reception-service-btn" onClick={() => openServiceModal(item)}>Xizmat qo‘shish</button><button type="button" className="reception-cancel-btn" onClick={() => openCancelConfirm(item)} disabled={cancelLoadingId === String(item.id)}>{cancelLoadingId === String(item.id) ? 'Bekor...' : 'Bekor qilish'}</button></div>
             </div>
           ))}
@@ -729,23 +754,29 @@ const ReceptionDashboard = () => {
       {servicePatient && (
         <div className="reception-modal-overlay" onClick={() => setServicePatient(null)}>
           <div className="reception-modal" onClick={(event) => event.stopPropagation()}>
-            <h3>Xizmat qo‘shish</h3>
+            <h3>Xizmatlarni boshqarish</h3>
             <p className="reception-modal-subtitle">{servicePatient.patient_name} • Hozirgi jami: {Number(servicePatient.amount || 0).toLocaleString()} so‘m</p>
             <div className="reception-service-options">
-              {(doctors.find((doctor) => String(doctor.id) === String(servicePatient.doctor_id))?.specialty_prices || []).map((item) => {
+              {(() => {
+                const doctorPrices = doctors.find((doctor) => String(doctor.id) === String(servicePatient.doctor_id))?.specialty_prices || []
+                const existingPrices = (servicePatient.selected_specialties || [])
+                  .filter((specialty) => !doctorPrices.some((item) => String(item.id) === String(specialty.id)))
+                  .map((specialty) => ({ id: specialty.id, custom_name: specialty.name, consultation_fee: specialty.price, inactive: true }))
+                return [...doctorPrices, ...existingPrices].map((item) => {
                 const selected = serviceSelection.includes(String(item.id))
-                const alreadySelected = (servicePatient.selected_specialties || []).some((specialty) => String(specialty.id) === String(item.id))
                 return (
-                  <label key={item.id} className={alreadySelected ? 'disabled' : ''}>
-                    <input type="checkbox" checked={selected || alreadySelected} disabled={alreadySelected || serviceSaving} onChange={() => setServiceSelection((previous) => selected ? previous.filter((id) => id !== String(item.id)) : [...previous, String(item.id)])} />
+                  <label key={item.id} className={selected ? 'selected' : ''}>
+                    <input type="checkbox" checked={selected} disabled={serviceSaving} onChange={() => setServiceSelection((previous) => selected ? previous.filter((id) => id !== String(item.id)) : [...previous, String(item.id)])} />
                     <span>{item.custom_name || item.specialization?.name}</span>
-                    <b>{Number(item.consultation_fee || 0).toLocaleString()} so‘m</b>
+                    <b>{Number(item.consultation_fee || 0).toLocaleString()} so‘m{item.inactive ? ' • nofaol' : ''}</b>
                   </label>
                 )
-              })}
+                })
+              })()}
+              {serviceSelection.length === 0 ? <small>Barcha xizmatlar olib tashlanadi.</small> : null}
             </div>
             <div className="reception-modal-actions">
-              <button type="button" className="reception-modal-primary" onClick={handleAddServices} disabled={serviceSaving || serviceSelection.length === 0}>{serviceSaving ? 'Saqlanmoqda...' : 'Saqlash'}</button>
+              <button type="button" className="reception-modal-primary" onClick={handleAddServices} disabled={serviceSaving}>{serviceSaving ? 'Saqlanmoqda...' : 'Saqlash'}</button>
               <button type="button" className="reception-modal-secondary" onClick={() => setServicePatient(null)} disabled={serviceSaving}>Bekor qilish</button>
             </div>
           </div>

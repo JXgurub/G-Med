@@ -1,6 +1,9 @@
+from decimal import Decimal
+
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
+from django.db import transaction
 from django.utils import timezone
 from django.core import signing
 
@@ -370,10 +373,15 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         if not staff:
             return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
         from apps.medical.models import Appointment
+        queue_ordering = (
+            ('ticket_number', 'scheduled_date', 'created_at', 'queue_position')
+            if staff.clinic.reception_room_enabled
+            else ('scheduled_date', 'created_at', 'queue_position')
+        )
         appointments = Appointment.objects.filter(
             clinic=staff.clinic,
             status=Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
-        ).select_related('patient__user', 'doctor__user').order_by('scheduled_date', 'created_at')
+        ).select_related('patient__user', 'doctor__user').order_by(*queue_ordering)
         return Response([{
             'id': str(item.id),
             'patient_name': item.patient.user.get_full_name() if item.patient and item.patient.user else 'Bemor',
@@ -385,6 +393,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             'selected_specialties': item.selected_specialties or [],
             'amount': float(item.consultation_fee or 0),
             'queue_position': item.queue_position,
+            'ticket_number': item.ticket_number or item.queue_position,
             'scheduled_date': item.scheduled_date.isoformat(),
         } for item in appointments[:100]])
 
@@ -407,14 +416,90 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             return error
         staff, appointment = resolved
         from apps.medical.models import Appointment
-        appointment.status = Appointment.Status.SCHEDULED
-        appointment.reception_staff = staff
-        appointment.telegram_token = None
-        appointment.telegram_token_expires_at = None
-        appointment.save(update_fields=['status', 'reception_staff', 'telegram_token', 'telegram_token_expires_at', 'updated_at'])
+        from apps.doctors.models import DoctorSpecialization
+
+        payment_method = str(request.data.get('payment_method') or 'cash').strip().lower()
+        allowed_payment_methods = {value for value, _ in Appointment.PAYMENT_METHOD_CHOICES if value}
+        if payment_method not in allowed_payment_methods:
+            return Response({'detail': 'To‘lov turi noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        update_services = 'specialty_price_ids' in request.data
+        if update_services:
+            raw_ids = request.data.get('specialty_price_ids')
+            if not isinstance(raw_ids, list):
+                getlist = getattr(request.data, 'getlist', None)
+                raw_ids = getlist('specialty_price_ids') if callable(getlist) else None
+            if not isinstance(raw_ids, list):
+                return Response({'detail': "Xizmatlar ro‘yxati noto‘g‘ri."}, status=status.HTTP_400_BAD_REQUEST)
+            requested_ids = list(dict.fromkeys(str(value) for value in raw_ids if value))
+        else:
+            requested_ids = []
+
+        with transaction.atomic():
+            appointment = Appointment.objects.select_for_update().select_related('clinic', 'doctor', 'patient').filter(
+                id=appointment.id,
+                clinic=staff.clinic,
+                status=Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
+            ).first()
+            if not appointment:
+                return Response({'detail': 'Onlayn navbat topilmadi yoki allaqachon ko‘rib chiqilgan.'}, status=status.HTTP_404_NOT_FOUND)
+
+            update_fields = ['status', 'reception_staff', 'telegram_token', 'telegram_token_expires_at', 'payment_method', 'updated_at']
+            if appointment.clinic.reception_room_enabled and not appointment.ticket_number:
+                from apps.medical.views import _next_daily_reception_ticket_number
+                appointment.ticket_number = _next_daily_reception_ticket_number(
+                    appointment.doctor_id,
+                    timezone.localtime(appointment.scheduled_date).date(),
+                )
+                update_fields.append('ticket_number')
+            if update_services:
+                existing = {
+                    str(item['id']): item
+                    for item in (appointment.selected_specialties or [])
+                    if item.get('id')
+                }
+                additions = DoctorSpecialization.objects.filter(
+                    id__in=set(requested_ids) - set(existing),
+                    doctor_id=appointment.doctor_id,
+                    is_active=True,
+                ).select_related('specialization')
+                additions_by_id = {
+                    str(item.id): {
+                        'id': str(item.id),
+                        'name': item.custom_name or item.specialization.name,
+                        'price': float(item.consultation_fee or 0),
+                    }
+                    for item in additions
+                }
+                if len(additions_by_id) != len(set(requested_ids) - set(existing)):
+                    return Response({'detail': "Tanlangan xizmat doktorga tegishli emas yoki faol emas."}, status=status.HTTP_400_BAD_REQUEST)
+
+                appointment.selected_specialties = [
+                    existing.get(item_id) or additions_by_id[item_id]
+                    for item_id in requested_ids
+                ]
+                appointment.consultation_fee = sum(
+                    (Decimal(str(item.get('price') or 0)) for item in appointment.selected_specialties),
+                    Decimal('0'),
+                )
+                update_fields.extend(['selected_specialties', 'consultation_fee'])
+
+            appointment.status = Appointment.Status.SCHEDULED
+            appointment.reception_staff = staff
+            appointment.payment_method = payment_method
+            appointment.telegram_token = None
+            appointment.telegram_token_expires_at = None
+            appointment.save(update_fields=update_fields)
+
         from apps.medical.views import AppointmentViewSet
         AppointmentViewSet()._enqueue_reception_print_job(appointment, appointment.clinic, appointment.doctor)
-        return Response({'detail': 'Onlayn navbat tasdiqlandi va printerga yuborildi.', 'queue_position': appointment.queue_position})
+        return Response({
+            'detail': 'Onlayn navbat tasdiqlandi va printerga yuborildi.',
+            'queue_position': appointment.queue_position,
+            'ticket_number': appointment.ticket_number or appointment.queue_position,
+            'consultation_fee': float(appointment.consultation_fee or 0),
+            'selected_specialties': appointment.selected_specialties or [],
+        })
 
     @action(detail=False, methods=['post'], url_path=r'online-appointments/(?P<pk>[^/.]+)/cancel', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def cancel_online_appointment(self, request, pk=None):
@@ -443,12 +528,19 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             report_date = date.fromisoformat(selected_date)
         except ValueError:
             report_date = timezone.localdate()
-        appointments = Appointment.objects.filter(clinic_id=staff.clinic_id, scheduled_date__date=report_date).select_related('patient__user', 'doctor__user').order_by('scheduled_date')
+        queue_ordering = (
+            ('ticket_number', 'scheduled_date', 'created_at', 'queue_position')
+            if staff.clinic.reception_room_enabled
+            else ('scheduled_date', 'created_at', 'queue_position')
+        )
+        appointments = Appointment.objects.filter(clinic_id=staff.clinic_id, scheduled_date__date=report_date).select_related('patient__user', 'doctor__user').order_by(*queue_ordering)
         queue_statuses = [
             Appointment.Status.SCHEDULED,
             Appointment.Status.CONFIRMED,
             Appointment.Status.WAITING,
         ]
+        if staff.clinic.reception_room_enabled:
+            queue_statuses.append(Appointment.Status.IN_PROGRESS)
         doctor_accepted_statuses = [
             Appointment.Status.IN_PROGRESS,
             Appointment.Status.COMPLETED,
@@ -477,8 +569,11 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
         map_item = lambda item: {
             'id': str(item.id),
             'queue_position': int(item.queue_position or 0),
+            'ticket_number': int(item.ticket_number or item.queue_position or 0),
             'patient_name': item.patient.user.get_full_name() if item.patient and item.patient.user else 'Bemor',
             'phone': item.patient.phone_number if item.patient else '',
+            'doctor_id': str(item.doctor_id) if item.doctor_id else None,
+            'date_of_birth': item.patient.date_of_birth.isoformat() if item.patient and item.patient.date_of_birth else None,
             'birth_year': (
                 item.patient.birth_year
                 if item.patient and item.patient.birth_year
@@ -487,6 +582,7 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
             'doctor_name': item.doctor.user.get_full_name() if item.doctor and item.doctor.user else 'Doktor',
             'selected_specialties': item.selected_specialties or [],
             'amount': float(item.consultation_fee or 0),
+            'payment_method': item.get_payment_method_display() or 'Naqd',
             'time': timezone.localtime(item.scheduled_date).strftime('%H:%M')
         }
         return Response({'date': str(report_date), 'accepted_count': accepted.count(), 'cancelled_count': cancelled.count(), 'daily_revenue': float(accepted.aggregate(total=Sum('consultation_fee'))['total'] or 0), 'monthly_revenue': float(monthly.aggregate(total=Sum('consultation_fee'))['total'] or 0), 'salary_type': staff.compensation_type, 'salary_value': float(staff.compensation_value or 0), 'accepted_patients': [map_item(item) for item in accepted], 'queue_patients': [map_item(item) for item in queue_patients], 'doctor_accepted_patients': [map_item(item) for item in doctor_accepted_patients], 'cancelled_patients': [map_item(item) for item in cancelled]})

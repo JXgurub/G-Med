@@ -10,7 +10,7 @@ from django.utils import timezone
 
 from apps.clinics.models import Clinic, ReceptionStaff
 from apps.clinics.views import ClinicViewSet
-from apps.doctors.models import Doctor
+from apps.doctors.models import Doctor, DoctorSpecialization, Specialization
 from apps.medical.models import Appointment
 from apps.patients.models import Patient
 from apps.pharmacies.views import PharmacyViewSet
@@ -162,7 +162,9 @@ class ReceptionStatsAndThrottleTests(TestCase):
         self.assertEqual(float(payload['daily_revenue']), 30000.0)
         self.assertEqual(float(payload['monthly_revenue']), 180000.0)
 
-    def test_stats_moves_patient_from_today_queue_to_accepted_after_doctor_accepts(self):
+    def test_stats_keeps_in_progress_patient_visible_until_visit_is_completed(self):
+        self.patient.date_of_birth = date(2000, 5, 17)
+        self.patient.save(update_fields=['date_of_birth'])
         self._create_appointment(
             timezone.make_aware(datetime(2026, 8, 24, 9, 0)),
             30000,
@@ -173,6 +175,9 @@ class ReceptionStatsAndThrottleTests(TestCase):
             40000,
             Appointment.Status.IN_PROGRESS,
         )
+        accepted.payment_method = 'card'
+        accepted.ticket_number = 7
+        accepted.save(update_fields=['payment_method', 'ticket_number'])
         completed = self._create_appointment(
             timezone.make_aware(datetime(2026, 8, 24, 11, 0)),
             50000,
@@ -189,10 +194,37 @@ class ReceptionStatsAndThrottleTests(TestCase):
         payload = response.json()
         queue_ids = {item['id'] for item in payload['queue_patients']}
         accepted_ids = {item['id'] for item in payload['doctor_accepted_patients']}
-        self.assertNotIn(str(accepted.id), queue_ids)
+        self.assertIn(str(accepted.id), queue_ids)
         self.assertNotIn(str(completed.id), queue_ids)
         self.assertIn(str(accepted.id), accepted_ids)
         self.assertIn(str(completed.id), accepted_ids)
+        accepted_item = next(item for item in payload['doctor_accepted_patients'] if item['id'] == str(accepted.id))
+        self.assertEqual(accepted_item['payment_method'], 'Plastik')
+        self.assertEqual(accepted_item['doctor_id'], str(self.doctor.id))
+        self.assertEqual(accepted_item['date_of_birth'], '2000-05-17')
+        self.assertEqual(accepted_item['ticket_number'], 7)
+
+    def test_stats_keeps_auto_queue_behavior_when_reception_feature_is_disabled(self):
+        self.clinic.reception_room_enabled = False
+        self.clinic.save(update_fields=['reception_room_enabled'])
+        in_progress = self._create_appointment(
+            timezone.make_aware(datetime(2026, 8, 24, 10, 0)),
+            40000,
+            Appointment.Status.IN_PROGRESS,
+        )
+
+        response = self.client.get(
+            reverse('reception-staff-stats'),
+            {'date': '2026-08-24'},
+            **self._reception_headers(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        queue_ids = {item['id'] for item in payload['queue_patients']}
+        accepted_ids = {item['id'] for item in payload['doctor_accepted_patients']}
+        self.assertNotIn(str(in_progress.id), queue_ids)
+        self.assertIn(str(in_progress.id), accepted_ids)
 
     @override_settings(REST_FRAMEWORK=LOGIN_THROTTLE_TEST_SETTINGS)
     def test_reception_login_not_blocked_by_global_anon_throttle(self):
@@ -240,6 +272,26 @@ class ReceptionStatsAndThrottleTests(TestCase):
             25000,
             Appointment.Status.PENDING_TELEGRAM_CONFIRMATION,
         )
+        original_specialty = Specialization.objects.create(name='Onlayn xizmat', code='ONLINE-ORIGINAL')
+        added_specialty = Specialization.objects.create(name='Qabulxona xizmati', code='RECEPTION-ADDED')
+        original_price = DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=original_specialty,
+            consultation_fee=25000,
+            is_active=True,
+        )
+        added_price = DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=added_specialty,
+            consultation_fee=35000,
+            is_active=True,
+        )
+        first.selected_specialties = [{
+            'id': str(original_price.id),
+            'name': original_specialty.name,
+            'price': 25000.0,
+        }]
+        first.save(update_fields=['selected_specialties'])
         pending_response = self.client.get(
             '/api/v1/clinics/reception-staff/online-appointments/',
             **self._reception_headers(),
@@ -249,14 +301,20 @@ class ReceptionStatsAndThrottleTests(TestCase):
 
         confirm_response = self.client.post(
             f'/api/v1/clinics/reception-staff/online-appointments/{first.id}/confirm/',
-            {},
+            {'specialty_price_ids': [str(original_price.id), str(added_price.id)]},
             format='json',
             **self._reception_headers(),
         )
-        self.assertEqual(confirm_response.status_code, 200)
+        self.assertEqual(confirm_response.status_code, 200, confirm_response.data)
         first.refresh_from_db()
         self.assertEqual(first.status, Appointment.Status.SCHEDULED)
+        self.assertEqual(first.payment_method, 'cash')
+        self.assertEqual(float(first.consultation_fee), 60000.0)
+        self.assertEqual({item['id'] for item in first.selected_specialties}, {str(original_price.id), str(added_price.id)})
         enqueue_print.assert_called_once()
+        printed_appointment = enqueue_print.call_args.args[0]
+        self.assertEqual(float(printed_appointment.consultation_fee), 60000.0)
+        self.assertEqual({item['id'] for item in printed_appointment.selected_specialties}, {str(original_price.id), str(added_price.id)})
 
         second = self._create_appointment(
             timezone.make_aware(datetime(2026, 9, 28, 11, 0)),

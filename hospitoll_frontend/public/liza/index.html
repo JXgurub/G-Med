@@ -20,7 +20,7 @@
     <!-- Bootsrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
 
-    <link rel="stylesheet" href="style.css?v=20261001">
+    <link rel="stylesheet" href="style.css?v=20261002-desktop-stability-v2">
 
 </head>
     <div class="liza-app">
@@ -52,6 +52,11 @@
                         </div>
                     </div>
                 </div>
+                <section id="SiriWave" class="voice-view" hidden aria-live="polite">
+                    <div class="voice-state"><span class="voice-state-dot"></span> LIZA TINGLAYAPTI</div>
+                    <p class="siri-message">Gapiring, Liza tinglayapti.</p>
+                    <div id="siri-container" class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+                </section>
             </div>
 
             <section class="welcome-copy">
@@ -59,12 +64,6 @@
                 <p class="welcome-description">Sog'lig'ingiz bo'yicha yordamchingiz.</p>
             </section>
         </main>
-
-        <section id="SiriWave" class="voice-view" hidden>
-            <div class="voice-state"><span class="voice-state-dot"></span> LIZA TINGLAYAPTI</div>
-            <p class="siri-message">Assalomu alaykum, mening ismim Liza</p>
-            <div id="siri-container" class="voice-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
-        </section>
 
         <footer class="control-deck">
             <div id="TextInput" class="message-composer">
@@ -107,7 +106,7 @@
     </script>
     <script src="controller.js"></script>
     <script src="orb-particles.js"></script>
-    <script src="assistant-client.js"></script>
+    <script src="assistant-client.js?v=20261003-audio-pipeline-v1"></script>
 
 
 </body>

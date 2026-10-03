@@ -28,6 +28,7 @@ class DoctorDetailsSerializer(serializers.Serializer):
 class AppointmentSerializer(serializers.ModelSerializer):
     patient_name = serializers.SerializerMethodField()
     selected_specialties_total = serializers.SerializerMethodField()
+    ticket_number = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = Appointment
@@ -42,6 +43,7 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'scheduled_date',
             'duration_minutes',
             'queue_position',
+            'ticket_number',
             'telegram_user_id',
             'telegram_confirmed_at',
             'telegram_reminder_sent_at',
@@ -78,6 +80,11 @@ class OnlineAppointmentSerializer(serializers.Serializer):
     reason = serializers.CharField(required=False, allow_blank=True)
     source = serializers.ChoiceField(choices=['online', 'reception'], default='online', required=False)
     reception_staff_id = serializers.UUIDField(required=False, allow_null=True)
+    payment_method = serializers.ChoiceField(
+        choices=Appointment.PAYMENT_METHOD_CHOICES,
+        required=False,
+        allow_blank=True,
+    )
 
     def validate(self, attrs):
         full_name = str(attrs.get('full_name') or '').strip()

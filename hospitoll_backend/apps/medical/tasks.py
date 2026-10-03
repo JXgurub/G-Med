@@ -57,13 +57,15 @@ def _queue_active_statuses() -> tuple[str, ...]:
     )
 
 
-def _queue_ordering() -> tuple[str, ...]:
-    """Canonical queue ordering shared across queue flows.
+def _queue_ordering(doctor=None) -> tuple[str, ...]:
+    """Use reception ticket order when enabled, otherwise appointment time.
 
     `queue_position` can become stale during partial updates, so scheduled time
-    is the primary source of truth for who is next.
+    remains the fallback source outside reception mode.
     """
 
+    if getattr(getattr(doctor, 'clinic', None), 'reception_room_enabled', False):
+        return ('ticket_number', 'scheduled_date', 'created_at', 'queue_position')
     return ('scheduled_date', 'created_at', 'queue_position')
 
 
@@ -188,7 +190,7 @@ def _run_auto_queue_tick_once() -> dict:
                     scheduled_date__date=today,
                     status__in=_queue_active_statuses(),
                 )
-                .order_by(*_queue_ordering())
+                .order_by(*_queue_ordering(doctor))
             )
             if not queue_items:
                 continue
@@ -857,7 +859,7 @@ def send_today_first_queue_reminders() -> dict:
                 scheduled_date__date=today,
                 status__in=_queue_active_statuses(),
             )
-            .order_by(*_queue_ordering())
+            .order_by(*_queue_ordering(doctor))
             .first()
         )
 

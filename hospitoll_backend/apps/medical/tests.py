@@ -5,6 +5,7 @@ from typing import Any, cast
 from unittest.mock import patch
 from uuid import uuid4
 
+from django.db import transaction
 from django.urls import reverse
 from django.test import override_settings
 from django.utils import timezone
@@ -233,6 +234,37 @@ class NotifyReadyDoctorRatingTests(MedicalApiTestCase):
         returned_ids = [item['id'] for item in self.body(response)]
         self.assertNotIn(str(self.appointment.id), returned_ids)
         self.assertIn(str(waiting_appointment.id), returned_ids)
+
+    def test_today_endpoint_uses_daily_ticket_order_only_when_reception_is_enabled(self):
+        self.clinic.reception_room_enabled = True
+        self.clinic.save(update_fields=['reception_room_enabled'])
+        self.appointment.ticket_number = 2
+        self.appointment.scheduled_date = safe_queue_base_now() + timedelta(minutes=5)
+        self.appointment.save(update_fields=['ticket_number', 'scheduled_date'])
+        first_ticket = Appointment.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            status=Appointment.Status.SCHEDULED,
+            queue_position=2,
+            ticket_number=1,
+            scheduled_date=safe_queue_base_now() + timedelta(minutes=45),
+            duration_minutes=30,
+        )
+
+        self.auth_as(self.doctor_user)
+        response = self.client.get(reverse('appointment-today'))
+        self.assertEqual(response.status_code, 200)
+        reception_rows = self.body(response)
+        self.assertEqual([row['ticket_number'] for row in reception_rows], [1, 2])
+        self.assertEqual([row['id'] for row in reception_rows], [str(first_ticket.id), str(self.appointment.id)])
+
+        self.clinic.reception_room_enabled = False
+        self.clinic.save(update_fields=['reception_room_enabled'])
+        response = self.client.get(reverse('appointment-today'))
+        self.assertEqual(response.status_code, 200)
+        automatic_rows = self.body(response)
+        self.assertEqual([row['id'] for row in automatic_rows], [str(self.appointment.id), str(first_ticket.id)])
 
 
 class DoctorDashboardStatsTests(MedicalApiTestCase):
@@ -1501,6 +1533,82 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         ).values_list('patient_id', flat=True))
         self.assertEqual(len(patient_ids), 1)
 
+    @patch('apps.medical.views.AppointmentViewSet._enqueue_reception_print_job')
+    def test_reception_booking_saves_payment_method_and_defaults_to_cash(self, _mock_print_job):
+        self.clinic.reception_room_enabled = True
+        self.clinic.save(update_fields=['reception_room_enabled'])
+        payload = {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Ali',
+            'last_name': 'Valiyev',
+            'phone_number': '+998901111766',
+            'source': 'reception',
+        }
+        url = reverse('appointment-online-booking')
+
+        default_response = self.client.post(url, payload, format='json')
+        self.assertEqual(default_response.status_code, 201)
+        default_appointment = Appointment.objects.get(id=default_response.json()['appointment']['id'])
+        self.assertEqual(default_appointment.payment_method, 'cash')
+        self.assertEqual(default_appointment.ticket_number, default_appointment.queue_position)
+
+        payload['phone_number'] = '+998901111767'
+        payload['payment_method'] = 'click'
+        click_response = self.client.post(url, payload, format='json')
+        self.assertEqual(click_response.status_code, 201)
+        click_appointment = Appointment.objects.get(id=click_response.json()['appointment']['id'])
+        self.assertEqual(click_appointment.payment_method, 'click')
+        self.assertEqual(click_appointment.ticket_number, 2)
+
+    @patch('apps.medical.views.AppointmentViewSet._enqueue_reception_print_job')
+    def test_reception_ticket_numbers_are_daily_and_not_reused_after_cancellation(self, _mock_print_job):
+        self.clinic.reception_room_enabled = True
+        self.clinic.save(update_fields=['reception_room_enabled'])
+        url = reverse('appointment-online-booking')
+        payload = {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Queue',
+            'last_name': 'Patient',
+            'phone_number': '+998901111769',
+            'source': 'reception',
+        }
+
+        first_response = self.client.post(url, payload, format='json')
+        self.assertEqual(first_response.status_code, 201)
+        first = Appointment.objects.get(id=first_response.json()['appointment']['id'])
+        self.assertEqual(first.ticket_number, 1)
+        first.status = Appointment.Status.CANCELLED
+        first.save(update_fields=['status'])
+
+        payload['phone_number'] = '+998901111770'
+        second_response = self.client.post(url, payload, format='json')
+        self.assertEqual(second_response.status_code, 201)
+        second = Appointment.objects.get(id=second_response.json()['appointment']['id'])
+        self.assertEqual(second.ticket_number, 2)
+
+        tomorrow = timezone.localdate() + timedelta(days=1)
+        from apps.medical.views import _next_daily_reception_ticket_number
+        with transaction.atomic():
+            self.assertEqual(_next_daily_reception_ticket_number(self.doctor.id, tomorrow), 1)
+
+    @patch('apps.medical.views.AppointmentViewSet._enqueue_reception_print_job')
+    def test_reception_ticket_numbering_is_not_used_when_feature_is_disabled(self, _mock_print_job):
+        self.assertFalse(self.clinic.reception_room_enabled)
+        response = self.client.post(reverse('appointment-online-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Auto',
+            'last_name': 'Queue',
+            'phone_number': '+998901111771',
+            'source': 'reception',
+        }, format='json')
+        self.assertEqual(response.status_code, 201)
+        appointment = Appointment.objects.get(id=response.json()['appointment']['id'])
+        self.assertEqual(appointment.ticket_number, 0)
+        self.assertEqual(appointment.queue_position, 1)
+
     def test_online_booking_source_reception_creates_pending_print_job(self):
         self.clinic.queue_ticket_clinic_name = 'Test Premium Clinic'
         self.clinic.queue_ticket_clinic_address = 'Toshkent, Chilonzor 12'
@@ -1556,6 +1664,7 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         self.assertEqual(job.status, 'pending')
         self.assertEqual(job.printer_device_id, device.id)
         appointment = Appointment.objects.get(id=appointment_id)
+        self.assertEqual(appointment.payment_method, 'cash')
         ticket_text = '\n'.join(job.payload.get('lines', []))
         self.assertIn('NAVBAT TALONI', ticket_text)
         self.assertIn('Davolash yo\'nalish', ticket_text)
@@ -1569,6 +1678,100 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         self.assertIn(str(appointment.queue_position), ticket_text)
         self.assertEqual(job.payload['queue_number'], str(appointment.queue_position))
         self.assertEqual(job.payload['queue_number_size'], 'large')
+
+    def test_reception_service_update_removes_and_adds_services_then_reprints_same_queue(self):
+        staff = ReceptionStaff.objects.create(
+            clinic=self.clinic,
+            pinfl='12345678901234',
+            passport_id='AB1234567',
+            date_of_birth='1990-01-01',
+            first_name='Reception',
+            last_name='Staff',
+            phone_number='+998901234567',
+            email='reception.services@example.com',
+            password_hash='pbkdf2_sha256$dummy$dummy',
+            is_active=True,
+        )
+        device = PrinterDevice.objects.create(
+            clinic=self.clinic,
+            device_name='Reception Services Printer',
+            device_token='reception-services-print-token',
+            status='ready',
+        )
+        current_specialty = Specialization.objects.create(name='Xizmat Oldingi', code='SVC-OLD')
+        added_specialty = Specialization.objects.create(name='Xizmat Yangi', code='SVC-NEW')
+        current_price = DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=current_specialty,
+            consultation_fee=40000,
+            is_active=True,
+        )
+        added_price = DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=added_specialty,
+            consultation_fee=25000,
+            is_active=True,
+        )
+        booking_response = self.client.post(reverse('appointment-online-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Service',
+            'last_name': 'Patient',
+            'phone_number': '+998901111768',
+            'source': 'reception',
+            'reception_staff_id': str(staff.id),
+            'specialty_price_ids': [str(current_price.id)],
+        }, format='json')
+        self.assertEqual(booking_response.status_code, 201)
+        appointment_id = booking_response.json()['appointment']['id']
+        appointment = Appointment.objects.get(id=appointment_id)
+        original_queue_number = appointment.queue_position
+        original_job = PrintJob.objects.get(appointment_id=appointment_id)
+        self.assertEqual(original_job.clinic_id, self.clinic.id)
+
+        session_token = signing.dumps(
+            {'staff_id': str(staff.id), 'clinic_id': str(self.clinic.id)},
+            salt='reception-staff-session',
+        )
+        session_payload = signing.loads(session_token, salt='reception-staff-session', max_age=60 * 60 * 12)
+        self.assertTrue(ReceptionStaff.objects.filter(
+            id=session_payload['staff_id'],
+            clinic_id=session_payload['clinic_id'],
+            is_active=True,
+        ).exists())
+        services_url = f'/api/v1/medical/appointments/{appointment_id}/reception-add-services/'
+        add_response = self.client.post(
+            services_url,
+            {'specialty_price_ids': [str(current_price.id), str(added_price.id)]},
+            format='json',
+            HTTP_X_RECEPTION_SESSION=session_token,
+        )
+        self.assertEqual(add_response.status_code, 200, add_response.data)
+        appointment.refresh_from_db()
+        self.assertEqual(appointment.queue_position, original_queue_number)
+        self.assertEqual(float(appointment.consultation_fee), 65000.0)
+        self.assertEqual(len(appointment.selected_specialties), 2)
+        self.assertEqual(PrintJob.objects.filter(appointment_id=appointment_id).count(), 2)
+        reprint_job = PrintJob.objects.filter(appointment_id=appointment_id).exclude(id=original_job.id).get()
+        self.assertEqual(reprint_job.clinic_id, self.clinic.id)
+        self.assertEqual(reprint_job.printer_device_id, device.id)
+        self.assertEqual(reprint_job.payload['queue_number'], str(original_queue_number))
+        reprint_text = '\n'.join(reprint_job.payload['lines'])
+        self.assertIn('Xizmat Oldingi', reprint_text)
+        self.assertIn('Xizmat Yangi', reprint_text)
+        self.assertIn('Jami to\'lov: 65 000 so\'m', reprint_text)
+
+        remove_response = self.client.post(
+            services_url,
+            {'specialty_price_ids': [str(added_price.id)]},
+            format='json',
+            HTTP_X_RECEPTION_SESSION=session_token,
+        )
+        self.assertEqual(remove_response.status_code, 200)
+        appointment.refresh_from_db()
+        self.assertEqual(float(appointment.consultation_fee), 25000.0)
+        self.assertEqual([item['id'] for item in appointment.selected_specialties], [str(added_price.id)])
+        self.assertEqual(PrintJob.objects.filter(appointment_id=appointment_id).count(), 2)
 
     def test_online_booking_accepts_single_full_name_form_when_features_disabled(self):
         target_date = timezone.localdate() + timedelta(days=1)
@@ -1647,6 +1850,33 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         appointment = Appointment.objects.get(id=response.json()['appointment']['id'])
         self.assertEqual(appointment.status, Appointment.Status.PENDING_TELEGRAM_CONFIRMATION)
         self.assertEqual(appointment.patient.date_of_birth.isoformat(), '1995-04-12')
+
+    def test_public_booking_uses_daily_ticket_numbers_when_reception_is_enabled(self):
+        self.clinic.reception_room_enabled = True
+        self.clinic.save(update_fields=['reception_room_enabled'])
+        target_date = timezone.localdate() + timedelta(days=1)
+        payload = {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'first_name': 'Public',
+            'last_name': 'Ticket',
+            'phone_number': '+998901111783',
+            'date': target_date.isoformat(),
+            'time': '14:00',
+        }
+
+        first_response = self.client.post(reverse('appointment-public-booking'), payload, format='json')
+        self.assertEqual(first_response.status_code, 201)
+        first = Appointment.objects.get(id=first_response.json()['appointment']['id'])
+        self.assertEqual(first.ticket_number, 1)
+        self.assertEqual(first_response.json()['ticket_number'], 1)
+
+        payload['phone_number'] = '+998901111784'
+        payload['time'] = '14:30'
+        second_response = self.client.post(reverse('appointment-public-booking'), payload, format='json')
+        self.assertEqual(second_response.status_code, 201)
+        second = Appointment.objects.get(id=second_response.json()['appointment']['id'])
+        self.assertEqual(second.ticket_number, 2)
 
     def test_public_booking_allows_no_specialty_selection_with_single_fee(self):
         self.doctor.consultation_fee = 0

@@ -14,7 +14,7 @@ body{
   align-items: center;
 }
 
-.square span:nth-child(1){
+.legacy-liza .square span:nth-child(1){
   position: absolute;
   top: 0;
   left: 0;
@@ -27,7 +27,7 @@ body{
   animation: animate1 6s linear infinite;
 }
 
-.square span:nth-child(2){
+.legacy-liza .square span:nth-child(2){
   position: absolute;
   top: 0;
   left: 0;
@@ -40,7 +40,7 @@ body{
   animation: animate2 4s linear infinite;
 }
 
-.square span:nth-child(3){
+.legacy-liza .square span:nth-child(3){
   position: absolute;
   top: 0;
   left: 0;
@@ -201,6 +201,20 @@ background-color: #0045ff;
 .width-size{
 max-width: 80%;
 width: auto;
+}
+.youtube-player{
+display: block;
+width: min(100%, 480px);
+aspect-ratio: 16 / 9;
+margin-top: 10px;
+border: 0;
+border-radius: 8px;
+}
+.youtube-fallback-link{
+display: inline-block;
+margin-top: 8px;
+color: #8be9fd;
+font-size: 14px;
 }
 /* Chat Box Start End*/
 
@@ -419,6 +433,10 @@ body::before {
   align-items: center;
   min-height: 0;
   padding: 6px 0 12px;
+}
+
+#Oval[hidden] {
+  display: grid !important;
 }
 
 .assistant-kicker {
@@ -781,15 +799,28 @@ body::before {
 }
 
 .voice-view:not([hidden]) {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
   display: grid;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  grid-template-columns: minmax(0, 1fr);
   align-content: center;
   justify-items: center;
-  min-height: 0;
+  overflow: hidden;
+  padding: 24px;
   text-align: center;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(7, 13, 20, 0.7), rgba(7, 13, 20, 0.16) 72%, transparent);
+  backdrop-filter: blur(2px);
 }
 
 .voice-state {
   display: inline-flex;
+  max-width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 9px;
   color: var(--mint);
@@ -807,15 +838,20 @@ body::before {
 }
 
 .siri-message {
-  max-width: 680px;
-  margin: 20px auto;
+  width: min(100%, 450px);
+  min-width: 0;
+  max-width: 100%;
+  margin: 16px auto;
   color: var(--white);
-  font-size: clamp(21px, 5vw, 34px);
+  font-size: 22px;
   line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .voice-wave {
   display: flex;
+  width: min(100%, 420px);
+  min-width: 0;
   height: 84px;
   align-items: center;
   justify-content: center;
@@ -952,7 +988,7 @@ body::before {
   .liza-app {
     padding-right: 18px;
     padding-left: 18px;
-    padding-bottom: max(56px, calc(env(safe-area-inset-bottom) + 32px));
+    padding-bottom: max(150px, calc(env(safe-area-inset-bottom) + 120px));
   }
 
   .liza-header {
@@ -975,10 +1011,26 @@ body::before {
   .orb-stage {
     width: 100%;
     height: clamp(300px, 39svh, 460px);
+    min-height: 0;
   }
 
   .liza-app .square {
     width: min(94vw, 440px);
+  }
+
+  .voice-view:not([hidden]) {
+    padding: 8%;
+  }
+
+  .voice-wave {
+    width: min(100%, 320px);
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .siri-message {
+    width: 100%;
+    font-size: clamp(16px, 4.5vw, 20px);
   }
 
   .liza-app .square::before {
@@ -1025,7 +1077,14 @@ body::before {
   }
 
   .control-deck {
+    position: fixed;
+    z-index: 20;
+    right: 18px;
+    bottom: max(72px, calc(env(safe-area-inset-bottom) + 16px));
+    left: 18px;
+    width: auto;
     padding-top: 12px;
+    background: linear-gradient(to bottom, transparent, rgba(8, 13, 20, 0.92) 18%);
   }
 
   .control-title {
@@ -1055,11 +1114,11 @@ body::before {
 @media (max-height: 740px) and (max-width: 600px) {
   .orb-stage {
     height: min(36svh, 300px);
-    min-height: 260px;
+    min-height: 220px;
   }
 
   .liza-app .square {
-    width: min(72vw, 270px);
+    width: min(64vw, 240px);
   }
 
   .welcome-copy {

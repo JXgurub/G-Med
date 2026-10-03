@@ -6,8 +6,21 @@ $(document).ready(function () {
     var audioSource = null;
     var audioProcessor = null;
     var recordingSampleRate = 16000;
-    var recordingTimer = null;
     var audioFrames = [];
+    var utteranceSamples = 0;
+    var voicedSamples = 0;
+    var lastVoiceAt = 0;
+    var isProcessingVoice = false;
+    var isSpeaking = false;
+    var speakingToken = 0;
+    var stopAfterCurrentReply = false;
+    var youtubePlayer = null;
+    var youtubeApiPromise = null;
+    var youtubeFrameId = 0;
+    var activeYoutubeBubble = null;
+    var youtubeVolumeBeforeListening = null;
+    var youtubeDuckTimeout = null;
+    var youtubeDuckPending = false;
     var apiUrlMeta = document.querySelector('meta[name="liza-api-url"]');
     var commandUrl = apiUrlMeta ? apiUrlMeta.content : "/api/liza/command/";
     var apiBaseUrl = commandUrl.replace(/command\/?$/, "");
@@ -25,17 +38,85 @@ $(document).ready(function () {
     }
 
     function showAssistant() {
-        $("#Oval").attr("hidden", true);
+        $("#Oval").prop("hidden", false);
         $("#SiriWave").attr("hidden", false);
+        document.body.classList.add("liza-listening");
     }
 
     function setStatus(message) {
         $(".siri-message").text(message);
     }
 
-    function appendMessage(message, role) {
+    function loadYoutubeApi() {
+        if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
+        if (youtubeApiPromise) return youtubeApiPromise;
+        youtubeApiPromise = new Promise(function (resolve) {
+            window.onYouTubeIframeAPIReady = function () { resolve(window.YT); };
+            var script = document.createElement("script");
+            script.src = "https://www.youtube.com/iframe_api";
+            document.head.appendChild(script);
+        });
+        return youtubeApiPromise;
+    }
+
+    function mountYoutubePlayer(iframe) {
+        loadYoutubeApi().then(function (api) {
+            if (!iframe.isConnected) return;
+            youtubePlayer = new api.Player(iframe.id, {
+                events: {
+                    onReady: function (event) {
+                        event.target.playVideo();
+                        if (youtubeDuckPending || youtubeVolumeBeforeListening !== null) duckYoutubeVolume();
+                    },
+                    onError: function () { setStatus("Bu videoni pleyerda ijro qilib bo‘lmadi. YouTube’da ochish havolasini bosing."); }
+                }
+            });
+        });
+    }
+
+    function duckYoutubeVolume() {
+        if (!youtubePlayer || typeof youtubePlayer.getVolume !== "function" || typeof youtubePlayer.setVolume !== "function") {
+            youtubeDuckPending = true;
+            return;
+        }
+        youtubeDuckPending = false;
+        if (youtubeVolumeBeforeListening === null) youtubeVolumeBeforeListening = youtubePlayer.getVolume();
+        youtubePlayer.setVolume(Math.min(youtubeVolumeBeforeListening, 15));
+        window.clearTimeout(youtubeDuckTimeout);
+        youtubeDuckTimeout = window.setTimeout(restoreYoutubeVolume, 8000);
+    }
+
+    function restoreYoutubeVolume() {
+        window.clearTimeout(youtubeDuckTimeout);
+        youtubeDuckTimeout = null;
+        youtubeDuckPending = false;
+        if (youtubeVolumeBeforeListening === null) return;
+        if (youtubePlayer && typeof youtubePlayer.setVolume === "function") youtubePlayer.setVolume(youtubeVolumeBeforeListening);
+        youtubeVolumeBeforeListening = null;
+    }
+
+    function stopActiveYoutubePlayer() {
+        restoreYoutubeVolume();
+        if (youtubePlayer) {
+            try {
+                youtubePlayer.stopVideo();
+                youtubePlayer.destroy();
+            } catch (error) {
+                console.warn("YouTube pleyerini to'xtatib bo'lmadi.");
+            }
+            youtubePlayer = null;
+        }
+        document.querySelectorAll("iframe.youtube-player").forEach(function (iframe) {
+            iframe.remove();
+        });
+        activeYoutubeBubble = null;
+    }
+
+    function appendMessage(message, role, videoId) {
         var chatBox = document.getElementById("chat-canvas-body");
         if (!chatBox || !message) return;
+
+        if (videoId && /^[\w-]{11}$/.test(videoId)) stopActiveYoutubePlayer();
 
         var row = document.createElement("div");
         var width = document.createElement("div");
@@ -43,7 +124,34 @@ $(document).ready(function () {
         row.className = "row justify-content-" + (role === "sender" ? "end" : "start") + " mb-3";
         width.className = "width-size";
         bubble.className = role + "_message";
-        bubble.textContent = message;
+        if (videoId && /^[\w-]{11}$/.test(videoId)) {
+            var trackTitle = document.createElement("div");
+            trackTitle.className = "youtube-track-title";
+            trackTitle.textContent = message;
+            bubble.appendChild(trackTitle);
+            var player = document.createElement("iframe");
+            youtubeFrameId += 1;
+            player.id = "liza-youtube-player-" + youtubeFrameId;
+            player.className = "youtube-player";
+            player.title = "YouTube qo‘shiq ijrosi";
+            player.src = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&playsinline=1&rel=0&enablejsapi=1&origin=" + encodeURIComponent(window.location.origin);
+            player.referrerPolicy = "strict-origin-when-cross-origin";
+            player.allow = "autoplay; encrypted-media; picture-in-picture";
+            player.allowFullscreen = true;
+            bubble.appendChild(player);
+
+            var fallbackLink = document.createElement("a");
+            fallbackLink.className = "youtube-fallback-link";
+            fallbackLink.href = "https://www.youtube.com/watch?v=" + videoId;
+            fallbackLink.target = "_blank";
+            fallbackLink.rel = "noopener noreferrer";
+            fallbackLink.textContent = "Pleyer xato bersa, YouTube’da ochish";
+            bubble.appendChild(fallbackLink);
+            activeYoutubeBubble = bubble;
+            mountYoutubePlayer(player);
+        } else {
+            bubble.textContent = message;
+        }
         width.appendChild(bubble);
         row.appendChild(width);
         chatBox.appendChild(row);
@@ -60,45 +168,95 @@ $(document).ready(function () {
     }
 
     async function speakMadina(text, onEnded) {
-        var headers = authHeaders();
-        headers["Content-Type"] = "application/json";
-        var response = await fetch(apiBaseUrl + "speech/", {
-            method: "POST",
-            credentials: "same-origin",
-            headers: headers,
-            body: JSON.stringify({ text: text })
-        });
-        var data = await response.json().catch(function () { return {}; });
-        if (!response.ok) throw new Error(data.error || "Madina ovozini yaratib bo'lmadi.");
-
-        var bytes = Uint8Array.from(atob(data.audio), function (character) { return character.charCodeAt(0); });
-        var audioUrl = URL.createObjectURL(new Blob([bytes], { type: data.content_type || "audio/mpeg" }));
-        var player = new Audio(audioUrl);
-        player.onended = function () {
-            URL.revokeObjectURL(audioUrl);
-            if (onEnded) onEnded();
-        };
-        player.onerror = function () { URL.revokeObjectURL(audioUrl); };
+        var token = ++speakingToken;
+        isSpeaking = true;
+        var audioUrl = null;
         try {
-            await player.play();
+            var headers = authHeaders();
+            headers["Content-Type"] = "application/json";
+            var response = await fetch(apiBaseUrl + "speech/", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: headers,
+                body: JSON.stringify({ text: text })
+            });
+            var data = await response.json().catch(function () { return {}; });
+            if (!response.ok) throw new Error(data.error || "Madina ovozini yaratib bo'lmadi.");
+
+            var bytes = Uint8Array.from(atob(data.audio), function (character) { return character.charCodeAt(0); });
+            audioUrl = URL.createObjectURL(new Blob([bytes], { type: data.content_type || "audio/mpeg" }));
+            var player = new Audio(audioUrl);
+            await new Promise(function (resolve, reject) {
+                player.onended = resolve;
+                player.onerror = function () { reject(new Error("Madina ovozi ijro etilmadi.")); };
+                player.play().catch(reject);
+            });
+            if (token === speakingToken && onEnded) onEnded();
         } catch (error) {
-            URL.revokeObjectURL(audioUrl);
-            throw error;
+            setStatus(error.message || "Madina ovozini ijro etib bo'lmadi.");
+            if (token === speakingToken && stopAfterCurrentReply) stopRecording(false);
+        } finally {
+            if (audioUrl) URL.revokeObjectURL(audioUrl);
+            if (token === speakingToken) {
+                isSpeaking = false;
+                if (stopAfterCurrentReply) {
+                    stopAfterCurrentReply = false;
+                    stopRecording(false);
+                }
+            }
         }
     }
 
     function showReply(data) {
         if (data.transcript) appendMessage(data.transcript, "sender");
         if (data.reply) {
-            appendMessage(data.reply, "receiver");
+            if (data.action === "youtube_duck") {
+                appendMessage(data.reply, "receiver");
+                duckYoutubeVolume();
+                setStatus("Musiqa pasaydi. Buyruqni ayting.");
+                return;
+            }
+            appendMessage(data.reply, "receiver", data.action === "play_youtube" ? data.video_id : null);
             setStatus(data.reply);
-            var openPatientProfile = data.action === "open_profile";
-            speakMadina(data.reply, openPatientProfile ? function () {
+            if (data.action === "play_youtube") {
+                var chatCanvas = document.getElementById("offcanvasScrolling");
+                if (chatCanvas && window.bootstrap && window.bootstrap.Offcanvas) {
+                    window.bootstrap.Offcanvas.getOrCreateInstance(chatCanvas).show();
+                }
+                setStatus("YouTube pleyeri tayyor. Avtoijro bloklansa, pleyerdagi ijro tugmasini bosing.");
+                return;
+            }
+            if (data.action === "youtube_control") {
+                if (data.control === "next" || data.control === "previous") {
+                    if (activeYoutubeBubble) {
+                        var trackTitle = activeYoutubeBubble.querySelector(".youtube-track-title");
+                        var fallbackLink = activeYoutubeBubble.querySelector(".youtube-fallback-link");
+                        if (trackTitle) trackTitle.textContent = "YouTube’da “" + data.video_title + "” qo‘shig‘ini ijro etyapman.";
+                        if (fallbackLink) fallbackLink.href = "https://www.youtube.com/watch?v=" + data.video_id;
+                    }
+                    if (youtubePlayer && typeof youtubePlayer.loadVideoById === "function") {
+                        youtubePlayer.loadVideoById(data.video_id);
+                    } else if (activeYoutubeBubble) {
+                        var existingPlayer = activeYoutubeBubble.querySelector("iframe.youtube-player");
+                        if (existingPlayer) existingPlayer.src = "https://www.youtube.com/embed/" + data.video_id + "?autoplay=1&playsinline=1&rel=0&enablejsapi=1&origin=" + encodeURIComponent(window.location.origin);
+                    }
+                } else if (youtubePlayer) {
+                    if (data.control === "pause") youtubePlayer.pauseVideo();
+                    if (data.control === "play") youtubePlayer.playVideo();
+                    if (data.control === "rewind") youtubePlayer.seekTo(Math.max(0, youtubePlayer.getCurrentTime() - 10), true);
+                }
+                restoreYoutubeVolume();
+                setStatus(data.reply);
+                return;
+            }
+            restoreYoutubeVolume();
+            stopAfterCurrentReply = data.action === "stop_listening";
+            var afterReply = data.action === "open_profile" ? function () {
                 window.location.assign("/patient?tab=profile");
-            } : null).catch(function () {
-                setStatus("Madina ovozi hozir ijro etilmadi. Javob matni ko'rsatildi.");
-                if (openPatientProfile) window.location.assign("/patient?tab=profile");
-            });
+            } : function () {
+                if (isListening && !stopAfterCurrentReply) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
+            };
+            speakMadina(data.reply, afterReply);
         }
     }
 
@@ -150,11 +308,37 @@ $(document).ready(function () {
         return new Blob([buffer], { type: "audio/wav" });
     }
 
-    function stopRecording() {
+    function resetUtterance() {
+        audioFrames = [];
+        utteranceSamples = 0;
+        voicedSamples = 0;
+        lastVoiceAt = 0;
+    }
+
+    function submitCurrentUtterance() {
+        if (!isListening || isSpeaking || isProcessingVoice || !utteranceSamples) return;
+        if (voicedSamples < recordingSampleRate * 0.25) {
+            resetUtterance();
+            return;
+        }
+        var blob = createWavBlob(audioFrames, recordingSampleRate);
+        resetUtterance();
+        if (!blob) return;
+
+        isProcessingVoice = true;
+        setStatus("Buyruqni tushunib, javob tayyorlayapman...");
+        sendVoiceToDjango(blob, "audio/wav")
+            .catch(function (error) { setStatus(error.message || "Ovoz serverda qayta ishlanmadi."); })
+            .finally(function () {
+                isProcessingVoice = false;
+                if (isListening && !isSpeaking) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
+            });
+    }
+
+    function stopRecording(submitPending) {
         if (!isListening) return;
         isListening = false;
-        window.clearTimeout(recordingTimer);
-        recordingTimer = null;
+        restoreYoutubeVolume();
         if (audioProcessor) {
             audioProcessor.onaudioprocess = null;
             audioProcessor.disconnect();
@@ -173,17 +357,17 @@ $(document).ready(function () {
             audioContext = null;
         }
         $("#MicBtn").attr("aria-pressed", "false");
-        var blob = createWavBlob(audioFrames, recordingSampleRate);
-        audioFrames = [];
-        if (!blob) {
-            setStatus("Ovoz yozuvi bo'sh.");
-            return;
-        }
-        setStatus("Ovoz G-MED serverida mahalliy qayta ishlanmoqda...");
-        $("#MicBtn").prop("disabled", true);
+        $("#SiriWave").attr("hidden", true);
+        document.body.classList.remove("liza-listening");
+        var blob = submitPending ? createWavBlob(audioFrames, recordingSampleRate) : null;
+        resetUtterance();
+        if (!blob || isSpeaking) return;
+
+        setStatus("Oxirgi buyruqni yakunlayapman...");
+        isProcessingVoice = true;
         sendVoiceToDjango(blob, "audio/wav")
-            .catch(function (error) { setStatus(error.message); })
-            .finally(function () { $("#MicBtn").prop("disabled", false); });
+            .catch(function (error) { setStatus(error.message || "Ovoz serverda qayta ishlanmadi."); })
+            .finally(function () { isProcessingVoice = false; });
     }
 
     async function sendToDjango(message) {
@@ -199,7 +383,7 @@ $(document).ready(function () {
         if (!response.ok) {
             throw new Error(data.error || "Yordamchi serveriga ulanib bo'lmadi.");
         }
-        showReply(data);
+            showReply(data);
     }
 
     async function sendVoiceToDjango(blob, mimeType) {
@@ -254,15 +438,22 @@ $(document).ready(function () {
             return;
         }
         if (isListening) {
-            stopRecording();
+            stopRecording(true);
             return;
         }
 
         isListening = true;
         showAssistant();
-        setStatus("Tinglayapman. Yozuvni tugatish uchun mikrofonni bosing.");
+        setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
         $("#MicBtn").attr("aria-pressed", "true");
-        navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } }).then(async function (stream) {
+        navigator.mediaDevices.getUserMedia({
+            audio: {
+                channelCount: { ideal: 1 },
+                echoCancellation: { ideal: true },
+                noiseSuppression: { ideal: true },
+                autoGainControl: { ideal: true },
+            },
+        }).then(async function (stream) {
             if (!isListening) {
                 stream.getTracks().forEach(function (track) { track.stop(); });
                 return;
@@ -275,18 +466,37 @@ $(document).ready(function () {
             audioSource = audioContext.createMediaStreamSource(stream);
             audioProcessor = audioContext.createScriptProcessor(4096, 1, 1);
             audioProcessor.onaudioprocess = function (event) {
-                audioFrames.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+                if (!isListening || isSpeaking || isProcessingVoice) return;
+                var frame = new Float32Array(event.inputBuffer.getChannelData(0));
+                var energy = 0;
+                for (var index = 0; index < frame.length; index += 1) energy += frame[index] * frame[index];
+                var hasVoice = Math.sqrt(energy / frame.length) > 0.006;
+                var now = Date.now();
+                if (hasVoice) {
+                    lastVoiceAt = now;
+                    voicedSamples += frame.length;
+                }
+                if (lastVoiceAt) {
+                    audioFrames.push(frame);
+                    utteranceSamples += frame.length;
+                    if (now - lastVoiceAt > 900 || utteranceSamples >= recordingSampleRate * 12) {
+                        submitCurrentUtterance();
+                    }
+                }
             };
             var silentOutput = audioContext.createGain();
             silentOutput.gain.value = 0;
             audioSource.connect(audioProcessor);
             audioProcessor.connect(silentOutput);
             silentOutput.connect(audioContext.destination);
-            recordingTimer = window.setTimeout(function () {
-                stopRecording();
-            }, 20000);
+            if (!youtubePlayer) {
+                speakMadina("Salom, men Lizaman. Sizga qanday yordam beray?", function () {
+                    if (isListening) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
+                });
+            }
         }).catch(function () {
             isListening = false;
+            restoreYoutubeVolume();
             if (audioProcessor) {
                 audioProcessor.onaudioprocess = null;
                 audioProcessor.disconnect();
@@ -306,6 +516,8 @@ $(document).ready(function () {
             }
             audioFrames = [];
             $("#MicBtn").attr("aria-pressed", "false");
+            $("#SiriWave").attr("hidden", true);
+            document.body.classList.remove("liza-listening");
             setStatus("Mikrofonga ruxsat berilmadi yoki HTTPS ulanishi yo'q.");
         });
     }

@@ -31,6 +31,13 @@ class Appointment(models.Model):
         ('procedure', _('Operatsiya')),
         ('test', _('Sinov')),
     )
+
+    PAYMENT_METHOD_CHOICES = (
+        ('', _('Ko‘rsatilmagan')),
+        ('card', _('Plastik')),
+        ('click', 'Click'),
+        ('cash', _('Naqd')),
+    )
     
     id = models.UUIDField(
         primary_key=True,
@@ -128,10 +135,25 @@ class Appointment(models.Model):
         default=False
     )
 
+    payment_method = models.CharField(
+        _('payment method'),
+        max_length=10,
+        choices=PAYMENT_METHOD_CHOICES,
+        blank=True,
+        default='cash',
+    )
+
     queue_position = models.PositiveIntegerField(
         _('queue position'),
         default=0,
         help_text=_('Ordering position for doctor queue on the given day')
+    )
+    ticket_number = models.PositiveIntegerField(
+        _('legacy ticket number'),
+        db_column='ticket_number',
+        null=True,
+        blank=True,
+        default=0,
     )
 
     telegram_token = models.UUIDField(

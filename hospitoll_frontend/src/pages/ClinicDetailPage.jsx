@@ -64,7 +64,7 @@ const ClinicDetailPage = () => {
   const [bookingMessage, setBookingMessage] = useState(null)
   const [telegramBotLink, setTelegramBotLink] = useState('')
   const selectedDoctorSpecialtyPrices = (selectedDoctor?.specialty_prices || [])
-    .filter((item) => item.is_active !== false)
+    .filter((item) => item.doctor_custom === true && item.is_active !== false)
   const availabilityRequestRef = useRef(0)
   const { today: minBookingDate, tomorrow: maxBookingDate } = getDateWindow()
 
@@ -191,7 +191,7 @@ const ClinicDetailPage = () => {
     setSelectedDoctor(doctorData)
     const activePriceIds = new Set(
       (doctorData.specialty_prices || [])
-        .filter((item) => item.is_active !== false)
+        .filter((item) => item.doctor_custom === true && item.is_active !== false)
         .map((item) => String(item.id))
     )
     setSelectedSpecialtyPriceIds(defaultSpecialtyPriceIds.filter((id) => activePriceIds.has(String(id))).map(String))

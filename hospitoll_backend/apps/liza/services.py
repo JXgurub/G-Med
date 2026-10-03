@@ -4,8 +4,12 @@ import os
 import re
 import wave
 import asyncio
+import hashlib
 from datetime import datetime
 from functools import lru_cache
+from urllib.parse import quote_plus
+
+import requests
 
 from django.conf import settings
 from django.core.cache import cache
@@ -81,10 +85,307 @@ WEEKDAY_NAMES = {
     'Sat': 'shanba',
     'Sun': 'yakshanba',
 }
+INTERNET_SEARCH_WORDS = frozenset((
+    'internet', 'qidir', 'qidiruv', 'izla', 'izlash', 'ma’lumot', 'malumot',
+    'yangilik', 'yangiliklar', 'google', 'web',
+))
+YOUTUBE_WORDS = frozenset(('youtube', 'youtub', 'yutub', 'qo‘shiq', 'qoshiq', 'musiqa', 'muzika'))
+YOUTUBE_TRIGGER = re.compile(r'\b(?:youtube|youtub|yutub|yutube|yutobe)(?:\s*)?(?:dan|da|ga)?\b')
+YOUTUBE_QUEUE_TTL_SECONDS = 3600
+YOUTUBE_TITLE_TTL_SECONDS = 180
+
+
+def _external_query(normalized, words):
+    query = normalized
+    for phrase in words:
+        query = re.sub(rf'\b{re.escape(phrase)}\b', ' ', query)
+    query = re.sub(r'\b(?:liza|top|ber|qidirib|qidirib ber|internetda|internetdan|youtube da|youtubeda)\b', ' ', query)
+    return ' '.join(query.split()).strip(' ,.?!')
+
+
+def _youtube_query(normalized):
+    query = YOUTUBE_TRIGGER.sub(' ', normalized)
+    query = re.sub(
+        r"\b(?:menga|iltimos|qo'shiq(?:ni|lar|larni)?|qo'shig(?:'ini|'i|'lar|'larni)?|"
+        r"qoshiq(?:ni|lar|larni)?|qoshig(?:'ini|'i|'lar|'larni)?|musiqa|muzika|"
+        r"qo'yib ber|qoyib ber|qo'y|qoy|ijro et(?:ib ber)?)\b",
+        ' ',
+        query,
+    )
+    return ' '.join(query.split()).strip(' ,.?!')
+
+
+def _youtube_search_results(query):
+    cache_key = f"liza:youtube-search:{hashlib.sha256(query.casefold().encode('utf-8')).hexdigest()}"
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+    try:
+        from yt_dlp import YoutubeDL
+
+        options = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'noplaylist': True,
+            'socket_timeout': 8,
+            'retries': 1,
+            'extractor_retries': 1,
+        }
+        with YoutubeDL(options) as youtube:
+            search = youtube.extract_info(f'ytsearch5:{query}', download=False)
+        results = [
+            {'id': item['id'], 'title': item.get('title') or query}
+            for item in (search or {}).get('entries', [])
+            if item and item.get('id')
+        ]
+        cache.set(cache_key, results, 300)
+        return results
+    except Exception:
+        logger.warning('Liza YouTube lookup failed', exc_info=True)
+        return []
+
+
+def _youtube_queue_key(user):
+    return f'liza:youtube-queue:{user.pk}'
+
+
+def _youtube_title_key(user):
+    return f'liza:youtube-await-title:{user.pk}'
+
+
+def _is_liza_wake_request(normalized):
+    tokens = re.findall(r"[a-z']+", normalized)
+    return len(tokens) == 1 and tokens[0] in {'liza', 'lisa', 'lizza', 'lizaa'}
+
+
+def _youtube_control_intent(normalized):
+    words = set(re.findall(r"[a-z']+", normalized))
+    if words.intersection({'keyingi', 'keyingisi', 'keyingisiga', 'next'}):
+        return 'next'
+    if words.intersection({'oldingi', 'avvalgi', 'previous', 'prev'}) or 'orqaga qaytar' in normalized:
+        return 'previous'
+    if words.intersection({'orqaga', 'ortga', 'rewind'}) or 'soniya orqaga' in normalized:
+        return 'rewind'
+    if words.intersection({'davom', 'play', 'boshlat'}) or any(phrase in normalized for phrase in ('davom et', 'davom ettir')):
+        return 'play'
+    if words.intersection({'pauza', 'pause', 'shitob', 'shittob', 'shitop', 'stop', 'toxta', "to'xta", 'toxtat', "to'xtat"}):
+        return 'pause'
+    return None
+
+
+def _handle_youtube_control(*, user, control):
+    queue = cache.get(_youtube_queue_key(user))
+    videos = queue.get('videos', []) if isinstance(queue, dict) else []
+    if not videos:
+        return 'Avval YouTube’da qo‘shiq nomini aytib, ijroni boshlang.'
+
+    index = min(max(int(queue.get('index', 0)), 0), len(videos) - 1)
+    if control == 'next':
+        index = (index + 1) % len(videos)
+        queue['index'] = index
+        cache.set(_youtube_queue_key(user), queue, YOUTUBE_QUEUE_TTL_SECONDS)
+        return f"Keyingi qo‘shiq: {videos[index]['title']}."
+    if control == 'previous':
+        index = (index - 1) % len(videos)
+        queue['index'] = index
+        cache.set(_youtube_queue_key(user), queue, YOUTUBE_QUEUE_TTL_SECONDS)
+        return f"Oldingi qo‘shiq: {videos[index]['title']}."
+    if control == 'pause':
+        return 'Qo‘shiqni to‘xtatdim.'
+    if control == 'play':
+        return 'Qo‘shiqni davom ettiryapman.'
+    if control == 'rewind':
+        return 'Qo‘shiqni 10 soniya orqaga qaytaryapman.'
+    return 'YouTube buyrug‘ini tushunmadim.'
+
+
+def _is_weather_request(normalized):
+    return any(term in normalized for term in ('ob-havo', 'ob havo', 'obxavo', 'pogoda', 'weather'))
+
+
+def _weather_reply(normalized):
+    location = re.sub(r'\b(?:ob[\s-]?havo|obxavo|pogoda|weather)\b', ' ', normalized)
+    location = re.sub(
+        r'\b(?:bugun|hozir|qanaqa|qanday|today|now|in|at|da|uchun|shahrida|shaharida|shaharda|shahri|shahar)\b',
+        ' ',
+        location,
+    )
+    location = ' '.join(location.split()).strip(' ,.?!')
+    if not location:
+        return 'Ob-havoni tekshirish uchun shahar nomini ham ayting. Masalan: Toshkentda ob-havo qanday?'
+    try:
+        location_candidates = [location]
+        if location.lower().endswith('da') and len(location) > 4:
+            location_candidates.append(location[:-2])
+        response = requests.get(
+            'https://geocoding-api.open-meteo.com/v1/search',
+            params={'name': location_candidates[-1], 'count': 5, 'language': 'uz', 'format': 'json'},
+            timeout=8,
+        )
+        response.raise_for_status()
+        places = response.json().get('results', [])
+        place = next((item for item in places if item.get('country_code') == 'UZ'), None) or (places[0] if places else None)
+        if not place:
+            return f'{location} nomli shahar topilmadi.'
+        response = requests.get(
+            'https://api.open-meteo.com/v1/forecast',
+            params={
+                'latitude': place['latitude'],
+                'longitude': place['longitude'],
+                'current': 'temperature_2m,apparent_temperature,weather_code,wind_speed_10m',
+                'timezone': 'auto',
+            },
+            timeout=8,
+        )
+        response.raise_for_status()
+        current = response.json()['current']
+        descriptions = {
+            0: 'ochiq', 1: 'asosan ochiq', 2: 'qisman bulutli', 3: 'bulutli',
+            45: 'tumanli', 48: 'tumanli', 51: 'mayda yomg‘irli', 53: 'yomg‘irli',
+            55: 'kuchli yomg‘irli', 61: 'yomg‘irli', 63: 'yomg‘irli', 65: 'kuchli yomg‘irli',
+            71: 'qorli', 73: 'qorli', 75: 'kuchli qorli', 80: 'yomg‘ir yog‘ishi mumkin',
+            81: 'yomg‘ir yog‘ishi mumkin', 82: 'kuchli yomg‘ir yog‘ishi mumkin', 95: 'momaqaldiroqli',
+        }
+        return (
+            f"{place['name']}da hozir {descriptions.get(current['weather_code'], 'noma’lum')}, "
+            f"harorat {current['temperature_2m']} daraja, shamol {current['wind_speed_10m']} kilometr soatiga."
+        )
+    except (requests.RequestException, KeyError, TypeError, ValueError):
+        logger.warning('Liza weather lookup failed', exc_info=True)
+        return 'Ob-havo ma’lumotini hozir olib bo‘lmadi. Birozdan keyin qayta urinib ko‘ring.'
+
+
+def _internet_reply(normalized, user=None):
+    if _is_weather_request(normalized):
+        return _weather_reply(normalized)
+
+    awaiting_title = (
+        getattr(user, 'role', '') == 'patient'
+        and getattr(user, 'pk', None) is not None
+        and cache.get(_youtube_title_key(user))
+    )
+    if YOUTUBE_TRIGGER.search(normalized) or any(word in normalized for word in YOUTUBE_WORDS) or awaiting_title:
+        query = _youtube_query(normalized)
+        if not query:
+            if user is not None:
+                cache.set(_youtube_title_key(user), True, YOUTUBE_TITLE_TTL_SECONDS)
+            return 'YouTube’da qidirish uchun qo‘shiq yoki video nomini ayting.'
+        videos = _youtube_search_results(query)
+        if not videos:
+            return 'YouTube’dan mos video topilmadi yoki xizmat hozir ishlamayapti. Birozdan keyin qayta urinib ko‘ring.'
+        if user is not None:
+            cache.delete(_youtube_title_key(user))
+            cache.set(
+                _youtube_queue_key(user),
+                {'query': query, 'videos': videos, 'index': 0},
+                YOUTUBE_QUEUE_TTL_SECONDS,
+            )
+        return f"YouTube’da “{videos[0]['title']}” qo‘shig‘ini ijro etyapman."
+
+    if _matched_specialty_rules(normalized):
+        return None
+    if not any(word in normalized for word in INTERNET_SEARCH_WORDS):
+        return None
+    query = _external_query(normalized, INTERNET_SEARCH_WORDS)
+    if not query:
+        return 'Internetda nimani qidiray? Masalan: internetda bugungi yangiliklarni qidir.'
+    try:
+        response = requests.get(
+            'https://api.duckduckgo.com/',
+            params={'q': query, 'format': 'json', 'no_html': 1, 'skip_disambig': 1},
+            timeout=8,
+            headers={'User-Agent': 'G-MED-Liza/1.0'},
+        )
+        response.raise_for_status()
+        data = response.json()
+        text = data.get('AbstractText') or data.get('Answer')
+        source = data.get('AbstractURL') or data.get('Redirect')
+        if text:
+            suffix = f' Manba: {source}' if source else ''
+            return f'{text[:900]}{suffix}'
+        related = next((item for item in data.get('RelatedTopics', []) if item.get('Text')), None)
+        if related:
+            return f"{related['Text'][:900]} Manba: {related.get('FirstURL', '')}".strip()
+        return f'Qidiruv natijasi topilmadi. To‘g‘ridan-to‘g‘ri ko‘rish: https://duckduckgo.com/?q={quote_plus(query)}'
+    except (requests.RequestException, ValueError, TypeError):
+        logger.warning('Liza internet search failed', exc_info=True)
+        return 'Internet qidiruvi hozir ishlamadi. Birozdan keyin qayta urinib ko‘ring.'
+
+
+_ONES = ('', 'bir', 'ikki', 'uch', "to'rt", 'besh', 'olti', 'yetti', 'sakkiz', "to'qqiz")
+_TENS = ('', "o'n", 'yigirma', "o'ttiz", 'qirq', 'ellik', 'oltmish', 'yetmish', 'sakson', "to'qson")
+_MONTHS = (
+    'yanvar', 'fevral', 'mart', 'aprel', 'may', 'iyun',
+    'iyul', 'avgust', 'sentabr', 'oktabr', 'noyabr', 'dekabr',
+)
+_DIGIT_WORDS = ('nol',) + _ONES[1:]
+
+
+def _number_words(value):
+    if value == 0:
+        return 'nol'
+
+    def below_thousand(number):
+        words = []
+        if number >= 100:
+            words += [_ONES[number // 100], 'yuz']
+        words += [_TENS[(number % 100) // 10], _ONES[number % 10]]
+        return [word for word in words if word]
+
+    words = []
+    for size, name in ((10**9, 'milliard'), (10**6, 'million'), (1000, 'ming')):
+        if value >= size:
+            words += below_thousand(value // size) + [name]
+            value %= size
+    words += below_thousand(value)
+    return ' '.join(words)
+
+
+def _digits_words(digits):
+    return ' '.join(_DIGIT_WORDS[int(char)] for char in digits if char.isdigit())
+
+
+def _time_words(hour, minute):
+    words = f'soat {_number_words(int(hour))}'
+    return words if int(minute) == 0 else f'{words} {_number_words(int(minute))}'
+
+
+def speakable_text(text):
+    """Replaces digits with Uzbek words so TTS never reads "0" as a letter."""
+    text = str(text or '')
+    text = re.sub(
+        r'\b(\d{1,2})\.(\d{1,2})\.(\d{4})\b',
+        lambda m: (
+            f'{_number_words(int(m[1]))} '
+            f'{_MONTHS[int(m[2]) - 1] if 1 <= int(m[2]) <= 12 else _number_words(int(m[2]))} '
+            f'{_number_words(int(m[3]))}'
+        ),
+        text,
+    )
+    text = re.sub(
+        r'\b(\d{1,2}):(\d{2})\s*[–—-]\s*(\d{1,2}):(\d{2})\b',
+        lambda m: f'{_time_words(m[1], m[2])} dan {_time_words(m[3], m[4])} gacha',
+        text,
+    )
+    text = re.sub(r'\b(\d{1,2}):(\d{2})\b', lambda m: _time_words(m[1], m[2]), text)
+
+    def phone_or_number(match):
+        raw = match[0]
+        digits = re.sub(r'\D', '', raw)
+        if raw.startswith('+') or len(digits) >= 9:
+            return _digits_words(digits)
+        return _number_words(int(digits))
+
+    text = re.sub(r'\+?\d(?:[\s\-()]?\d){6,}', lambda m: _digits_words(re.sub(r'\D', '', m[0])), text)
+    text = re.sub(r'(\d+)[.,](\d+)', lambda m: f'{_number_words(int(m[1]))} nuqta {_digits_words(m[2])}', text)
+    return re.sub(r'\+?\d+', phone_or_number, text)
 
 
 def synthesize_madina(text):
     import edge_tts
+
+    text = speakable_text(text)
 
     async def synthesize():
         communicator = edge_tts.Communicate(
@@ -288,23 +589,95 @@ def get_command_action(*, user, message):
         return 'stop_listening'
     if _is_analysis_read_request(normalized):
         return 'read_analysis'
+    pending = cache.get(_booking_cache_key(user))
+    if pending and _select_pending_candidate(pending, normalized):
+        return 'open_booking'
     if _is_specialty_booking_request(normalized):
         return 'await_booking_confirmation'
-    if cache.get(_booking_cache_key(user)) and _is_affirmative(normalized):
-        return 'open_booking'
+    if pending and _is_affirmative(normalized):
+        return 'await_booking_confirmation' if len(_pending_candidates(pending)) > 1 else 'open_booking'
     return None
 
 
 def get_command_action_data(*, user, message):
     action = get_command_action(user=user, message=message)
     result = {'action': action}
+    normalized = ' '.join(_normalize_command(message).split())
+    control = _youtube_control_intent(normalized)
+    is_patient = getattr(user, 'role', '') == 'patient' and getattr(user, 'pk', None) is not None
+    queue = cache.get(_youtube_queue_key(user)) if is_patient else None
+    if queue and queue.get('videos') and _is_liza_wake_request(normalized):
+        result.update({'action': 'youtube_duck'})
+    elif control and queue and queue.get('videos'):
+        videos = queue['videos']
+        index = min(max(int(queue.get('index', 0)), 0), len(videos) - 1)
+        result.update({
+            'action': 'youtube_control',
+            'control': control,
+            'video_id': videos[index]['id'],
+            'video_title': videos[index]['title'],
+            'queue_position': index + 1,
+            'queue_count': len(videos),
+        })
+    elif (
+        YOUTUBE_TRIGGER.search(normalized)
+        or any(word in normalized for word in YOUTUBE_WORDS)
+        or (is_patient and cache.get(_youtube_title_key(user)))
+        or (queue and queue.get('query') == _youtube_query(normalized))
+    ):
+        query = _youtube_query(normalized)
+        if queue and queue.get('query') == query and queue.get('videos'):
+            video = queue['videos'][0]
+            result.update({'action': 'play_youtube', 'video_id': video['id'], 'video_title': video['title'], 'queue_count': len(queue['videos'])})
     if action == 'open_booking':
         cache_key = _booking_cache_key(user)
         pending = cache.get(cache_key)
         if pending:
-            result['booking'] = pending
+            chosen = _select_pending_candidate(pending, normalized) or _pending_candidates(pending)[0]
+            result['booking'] = chosen
             cache.delete(cache_key)
     return result
+
+
+ORDINAL_WORDS = (
+    ('birinchi', 'birinchisi', 'birinchini', 'avvalgi'),
+    ('ikkinchi', 'ikkinchisi', 'ikkinchini'),
+    ('uchinchi', 'uchinchisi', 'uchinchini'),
+    ("to'rtinchi", "to'rtinchisi", 'tortinchi', 'tortinchisi'),
+    ('beshinchi', 'beshinchisi'),
+    ('oltinchi', 'oltinchisi'),
+    ('yettinchi', 'yettinchisi'),
+    ('sakkizinchi', 'sakkizinchisi'),
+    ("to'qqizinchi", "to'qqizinchisi", 'toqqizinchi', 'toqqizinchisi'),
+    ("o'ninchi", "o'ninchisi", 'oninchi', 'oninchisi'),
+)
+
+
+def _pending_candidates(pending):
+    candidates = pending.get('candidates')
+    if candidates:
+        return candidates
+    return [{key: value for key, value in pending.items() if key != 'candidates'}]
+
+
+def _select_pending_candidate(pending, normalized):
+    candidates = _pending_candidates(pending)
+    words = re.sub(r"[^a-z0-9']+", ' ', normalized).split()
+    for index, forms in enumerate(ORDINAL_WORDS[:len(candidates)]):
+        if any(word in forms for word in words):
+            return candidates[index]
+    if len(candidates) < 2:
+        return None
+    matches = []
+    for candidate in candidates:
+        name_tokens = [token for token in _specialty_tokens(candidate['doctor_name']) if len(token) >= 3]
+        if any(
+            word == token or (len(word) >= 4 and len(token) >= 4 and word[:4] == token[:4])
+            for word in _specialty_tokens(normalized)
+            for token in name_tokens
+        ):
+            matches.append(candidate)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _is_affirmative(normalized):
@@ -425,7 +798,11 @@ def _specialty_candidates(normalized):
     )
 
     candidates = []
+    seen_doctor_ids = set()
     for doctor in doctors:
+        if doctor.id in seen_doctor_ids:
+            continue
+        seen_doctor_ids.add(doctor.id)
         prices = [price for price in doctor.specialty_prices.all() if price.is_active]
         matching_prices = []
         matching_names = []
@@ -635,8 +1012,14 @@ def _handle_patient_command(*, user, message):
 
     pending_booking_key = _booking_cache_key(user)
     pending_booking = cache.get(pending_booking_key)
-    if pending_booking and _is_affirmative(normalized):
-        return f"{pending_booking['doctor_name']} doktor qabuli uchun yozilish oynasini ochyapman."
+    if pending_booking:
+        chosen = _select_pending_candidate(pending_booking, normalized)
+        if chosen is None and _is_affirmative(normalized):
+            if len(_pending_candidates(pending_booking)) > 1:
+                return 'Qaysi doktorni tanlaysiz? Ismini yoki birinchi, ikkinchi deb ayting.'
+            chosen = _pending_candidates(pending_booking)[0]
+        if chosen:
+            return f"{chosen['doctor_name']} doktor qabuli uchun yozilish oynasini ochyapman."
     if pending_booking and _is_negative(normalized):
         cache.delete(pending_booking_key)
         return 'Xo‘p, mutaxassis qabuliga yozilish bekor qilindi.'
@@ -652,14 +1035,34 @@ def _handle_patient_command(*, user, message):
                 f"Hozir G-MED klinikalarida {specialty_label} yo‘nalishida faol doktor topilmadi. "
                 'Boshqa yo‘nalishni ayting yoki klinikaga qo‘ng‘iroq qilib aniqlashtiring.'
             )
-        specialist = candidates[0]
-        cache.set(pending_booking_key, specialist, SPECIALTY_BOOKING_TTL_SECONDS)
-        return (
-            f"{specialist['specialty_name']} yo‘nalishida mos doktor topdim: {specialist['doctor_name']}, "
-            f"{specialist['clinic_name']} klinikasida. Manzil: {specialist['clinic_address']}. "
-            f"Telefon: {specialist['clinic_phone']}. Ish vaqti: {specialist['doctor_hours']}. "
-            'Shu doktorga qabulga yozilish oynasini ochaymi? Ha yoki yo‘q deb javob bering.'
+        clinic_order = list(dict.fromkeys(item['clinic_id'] for item in candidates))
+        candidates = sorted(candidates, key=lambda item: clinic_order.index(item['clinic_id']))
+        cache.set(
+            pending_booking_key,
+            {**candidates[0], 'candidates': candidates},
+            SPECIALTY_BOOKING_TTL_SECONDS,
         )
+        if len(candidates) == 1:
+            specialist = candidates[0]
+            return (
+                f"{specialist['specialty_name']} yo‘nalishida mos doktor topdim: {specialist['doctor_name']}, "
+                f"{specialist['clinic_name']} klinikasida. Manzil: {specialist['clinic_address']}. "
+                f"Telefon: {specialist['clinic_phone']}. Ish vaqti: {specialist['doctor_hours']}. "
+                'Shu doktorga qabulga yozilish oynasini ochaymi? Ha yoki yo‘q deb javob bering.'
+            )
+        specialty_label = _requested_specialty_label(normalized)
+        parts = [f'{specialty_label} yo‘nalishida {len(candidates)} ta doktor topdim.']
+        for clinic_id in clinic_order:
+            group = [
+                (index, item) for index, item in enumerate(candidates) if item['clinic_id'] == clinic_id
+            ]
+            doctors_text = '; '.join(
+                f"{ORDINAL_WORDS[index][0]}: {item['doctor_name']}, ish vaqti {item['doctor_hours']}"
+                for index, item in group
+            )
+            parts.append(f"{group[0][1]['clinic_name']} klinikasida: {doctors_text}.")
+        parts.append('Qaysi doktorga yozilay? Ismini yoki birinchi, ikkinchi deb ayting.')
+        return ' '.join(parts)
 
     now = timezone.localtime()
     appointments = _patient_appointments(patient, now)
@@ -694,16 +1097,34 @@ def _handle_patient_command(*, user, message):
 
 def handle_command(*, user, message):
     normalized = ' '.join(_normalize_command(message).split())
+    youtube_queue = (
+        cache.get(_youtube_queue_key(user))
+        if getattr(user, 'role', '') == 'patient' and getattr(user, 'pk', None) is not None
+        else None
+    )
+    if youtube_queue and youtube_queue.get('videos') and _is_liza_wake_request(normalized):
+        return 'Ha, eshitaman. Buyruqni ayting.'
     if normalized in {'salom', 'assalomu alaykum', 'liza', 'yordam'} or 'nima qila olasan' in normalized:
         return (
             "Men G-MED yordamchisiman. Qabulingiz, navbat raqamingiz, klinika va doktor ish vaqti "
-            "hamda profilingiz bo‘yicha yordam beraman."
+            "hamda profilingiz bo‘yicha yordam beraman. Internetdan qidirish, ob-havo va YouTube bo‘yicha ham yordam beraman."
         )
 
-    if get_command_action(user=user, message=message) == 'open_profile':
-        return 'Profilim bo‘limini ochyapman.'
-    if get_command_action(user=user, message=message) == 'stop_listening':
+    youtube_control = _youtube_control_intent(normalized)
+    music_target = any(term in normalized for term in ('qo\'shiq', 'qoshiq', 'musiqa', 'muzika', 'youtube', 'yutub', 'yutob'))
+    is_patient = getattr(user, 'role', '') == 'patient'
+    if is_patient and _is_stop_listening_request(normalized) and not music_target:
         return 'Liza suhbatni to‘xtatdi. Qayta ishlatish uchun Liza tugmasini bosing.'
+    if youtube_control:
+        return _handle_youtube_control(user=user, control=youtube_control)
+
+    external_reply = _internet_reply(normalized, user=user)
+    if external_reply is not None:
+        return external_reply
+
+    command_action = get_command_action(user=user, message=message)
+    if command_action == 'open_profile':
+        return 'Profilim bo‘limini ochyapman.'
 
     if user.role == 'patient':
         return _handle_patient_command(user=user, message=message)
