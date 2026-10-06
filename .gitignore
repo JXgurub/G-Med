@@ -16,6 +16,9 @@ htmlcov/
 **/node_modules/
 **/dist/
 **/dist-ssr/
+**/.gradle/
+**/build/
+android/liza/local.properties
 
 # Environments / secrets
 .env

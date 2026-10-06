@@ -5,18 +5,10 @@ import ErrorBoundary from './components/ErrorBoundary.jsx'
 import { api } from './services/api'
 import './index.css'
 
-if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then((registrations) => {
-    registrations.forEach((registration) => {
-      registration.unregister()
-    })
-  })
-}
-
 if (typeof window !== 'undefined' && 'caches' in window) {
   caches.keys().then((keys) => {
     keys
-      .filter((key) => key.includes('api-cache') || key.includes('pages-cache') || key.includes('assets-cache') || key.includes('workbox'))
+      .filter((key) => key.includes('api-cache') || key.includes('pages-cache') || key.includes('assets-cache'))
       .forEach((key) => caches.delete(key))
   })
 }

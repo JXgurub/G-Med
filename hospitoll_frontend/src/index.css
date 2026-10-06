@@ -36,6 +36,15 @@
   cursor: pointer;
 }
 
+.admin-broadcast-toast .admin-broadcast-ack {
+  margin-top: 0.75rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 5px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
 .push-permission-prompt {
   position: fixed;
   z-index: 1999;

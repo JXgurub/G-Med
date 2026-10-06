@@ -1,10 +1,20 @@
+import uuid
+
+from django.db import transaction
+from django.utils import timezone
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 
-from .models import Patient
+from .models import Patient, PatientMedicationReminder
+from .reminder_serializers import PatientMedicationReminderSerializer
 from .serializers import PatientSerializer, PatientCreateSerializer
+from apps.site_settings.models import BroadcastNotification
 
 
 class PatientViewSet(viewsets.ModelViewSet):
@@ -65,3 +75,68 @@ class PatientViewSet(viewsets.ModelViewSet):
         patient.user.set_password(password)
         patient.user.save(update_fields=['password'])
         return Response({'detail': 'Parol muvaffaqiyatli o‘rnatildi.'}, status=status.HTTP_200_OK)
+
+
+class PatientMedicationReminderViewSet(viewsets.ModelViewSet):
+    serializer_class = PatientMedicationReminderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        if not getattr(self.request.user, 'is_patient', False):
+            return PatientMedicationReminder.objects.none()
+        return PatientMedicationReminder.objects.filter(
+            patient__user=self.request.user,
+        )
+
+    def perform_create(self, serializer):
+        if not getattr(self.request.user, 'is_patient', False):
+            raise PermissionDenied('Faqat bemorlar dori eslatmasi qo‘sha oladi.')
+        patient = get_object_or_404(Patient, user=self.request.user)
+        serializer.save(patient=patient)
+
+
+class PatientMedicationReminderAcknowledgeView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        try:
+            acknowledgement_token = uuid.UUID(
+                str(request.data.get('acknowledgement_token', ''))
+            )
+        except (ValueError, TypeError, AttributeError):
+            return Response(
+                {'detail': 'Eslatma tasdiqlash tokeni yaroqsiz.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with transaction.atomic():
+            reminder = (
+                PatientMedicationReminder.objects.select_for_update()
+                .select_related('patient__user')
+                .filter(
+                    acknowledgement_token=acknowledgement_token,
+                    is_active=True,
+                    pending_dose_at__isnull=False,
+                )
+                .first()
+            )
+            if reminder is None:
+                return Response({'acknowledged': False}, status=status.HTTP_200_OK)
+
+            now = timezone.now()
+            reminder.pending_dose_at = None
+            reminder.next_nudge_at = None
+            reminder.acknowledgement_token = None
+            reminder.save(update_fields=[
+                'pending_dose_at',
+                'next_nudge_at',
+                'acknowledgement_token',
+                'updated_at',
+            ])
+            BroadcastNotification.objects.filter(
+                user=reminder.patient.user,
+                data__acknowledgement_token=str(acknowledgement_token),
+                read_at__isnull=True,
+            ).update(read_at=now)
+
+        return Response({'acknowledged': True}, status=status.HTTP_200_OK)

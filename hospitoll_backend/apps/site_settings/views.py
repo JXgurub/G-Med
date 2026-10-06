@@ -425,6 +425,7 @@ class BroadcastNotificationInboxView(APIView):
                 'id': str(notification.id),
                 'title': notification.title,
                 'message': notification.message,
+                'data': notification.data,
                 'created_at': notification.created_at,
             }
             for notification in notifications

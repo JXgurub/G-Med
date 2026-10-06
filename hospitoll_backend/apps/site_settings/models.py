@@ -133,6 +133,7 @@ class BroadcastNotification(models.Model):
     )
     title = models.CharField(max_length=120)
     message = models.TextField()
+    data = models.JSONField(blank=True, default=dict)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     read_at = models.DateTimeField(blank=True, null=True)
 

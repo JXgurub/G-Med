@@ -19,11 +19,22 @@ def send_saved_broadcast_push(notification_ids: list[str]) -> dict[str, int]:
     result = {'sent': 0, 'failed': 0, 'expired': 0}
     notifications = BroadcastNotification.objects.filter(id__in=notification_ids).prefetch_related('user__web_push_subscriptions')
     for notification in notifications:
+        is_medication_reminder = notification.data.get('notification_type') == 'medication_reminder'
         payload = json.dumps({
             'id': str(notification.id),
             'title': notification.title,
             'body': notification.message,
-            'url': '/',
+            'url': '/patient?tab=medication-reminders' if is_medication_reminder else '/',
+            'data': notification.data,
+            'tag': (
+                f"medication-reminder-{notification.data['reminder_id']}"
+                if is_medication_reminder else str(notification.id)
+            ),
+            'renotify': is_medication_reminder,
+            'actions': (
+                [{'action': 'taken', 'title': 'Ichdingizmi?'}]
+                if is_medication_reminder else []
+            ),
         })
         for subscription in notification.user.web_push_subscriptions.all():
             if not subscription.is_active:

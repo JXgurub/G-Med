@@ -7,7 +7,8 @@ import asyncio
 import hashlib
 from datetime import datetime
 from functools import lru_cache
-from urllib.parse import quote_plus
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 import requests
 
@@ -93,6 +94,64 @@ YOUTUBE_WORDS = frozenset(('youtube', 'youtub', 'yutub', 'qo‘shiq', 'qoshiq', 
 YOUTUBE_TRIGGER = re.compile(r'\b(?:youtube|youtub|yutub|yutube|yutobe)(?:\s*)?(?:dan|da|ga)?\b')
 YOUTUBE_QUEUE_TTL_SECONDS = 3600
 YOUTUBE_TITLE_TTL_SECONDS = 180
+INTERNET_SEARCH_CACHE_TTL_SECONDS = 180
+
+
+class _DuckDuckGoResultsParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.results = []
+        self.current_result = None
+        self.capture_field = None
+        self.capture_tag = None
+        self.capture_depth = 0
+        self.capture_text = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        classes = set((attributes.get('class') or '').split())
+        if tag == 'a' and 'result__a' in classes:
+            self._finish_result()
+            self.current_result = {
+                'title': '',
+                'url': attributes.get('href', ''),
+                'snippet': '',
+            }
+            self.capture_field = 'title'
+            self.capture_tag = tag
+            self.capture_depth = 0
+            self.capture_text = []
+        elif self.current_result and 'result__snippet' in classes:
+            self.capture_field = 'snippet'
+            self.capture_tag = tag
+            self.capture_depth = 0
+            self.capture_text = []
+        elif self.capture_field:
+            self.capture_depth += 1
+
+    def handle_data(self, data):
+        if self.capture_field:
+            self.capture_text.append(data)
+
+    def handle_endtag(self, tag):
+        if not self.capture_field:
+            return
+        if tag == self.capture_tag and self.capture_depth == 0:
+            self.current_result[self.capture_field] = ' '.join(' '.join(self.capture_text).split())
+            was_snippet = self.capture_field == 'snippet'
+            self.capture_field = None
+            self.capture_tag = None
+            self.capture_text = []
+            if was_snippet:
+                self._finish_result()
+            return
+        if self.capture_depth:
+            self.capture_depth -= 1
+
+    def _finish_result(self):
+        if self.current_result and self.current_result.get('title'):
+            self.results.append(self.current_result)
+        self.current_result = None
 
 
 def _external_query(normalized, words):
@@ -120,6 +179,7 @@ def _youtube_search_results(query):
     cached = cache.get(cache_key)
     if cached:
         return cached
+    results = []
     try:
         from yt_dlp import YoutubeDL
 
@@ -128,6 +188,7 @@ def _youtube_search_results(query):
             'no_warnings': True,
             'skip_download': True,
             'noplaylist': True,
+            'extract_flat': 'in_playlist',
             'socket_timeout': 8,
             'retries': 1,
             'extractor_retries': 1,
@@ -137,13 +198,65 @@ def _youtube_search_results(query):
         results = [
             {'id': item['id'], 'title': item.get('title') or query}
             for item in (search or {}).get('entries', [])
-            if item and item.get('id')
+            if item and isinstance(item.get('id'), str) and re.fullmatch(r'[\w-]{11}', item['id'])
         ]
-        cache.set(cache_key, results, 300)
-        return results
     except Exception:
-        logger.warning('Liza YouTube lookup failed', exc_info=True)
-        return []
+        logger.warning('Liza YouTube extractor search failed; trying YouTube page results', exc_info=True)
+
+    if not results:
+        try:
+            response = requests.get(
+                'https://www.youtube.com/results',
+                params={'search_query': query},
+                timeout=12,
+                headers={
+                    'User-Agent': (
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                        'AppleWebKit/537.36 (KHTML, like Gecko) '
+                        'Chrome/131.0.0.0 Safari/537.36'
+                    ),
+                    'Accept-Language': 'uz,en-US;q=0.9,en;q=0.8',
+                },
+            )
+            response.raise_for_status()
+            initial_data = re.search(r'(?:var\s+)?ytInitialData\s*=\s*', response.text)
+            if not initial_data:
+                raise ValueError('YouTube search page did not contain initial search data.')
+            data, _ = json.JSONDecoder().raw_decode(response.text, initial_data.end())
+            seen_ids = set()
+
+            def collect_videos(value):
+                if len(results) >= 5:
+                    return
+                if isinstance(value, dict):
+                    renderer = value.get('videoRenderer')
+                    if renderer:
+                        video_id = renderer.get('videoId')
+                        title_data = renderer.get('title') or {}
+                        title = title_data.get('simpleText') or ''.join(
+                            run.get('text', '') for run in title_data.get('runs', [])
+                        )
+                        if (
+                            isinstance(video_id, str)
+                            and re.fullmatch(r'[\w-]{11}', video_id)
+                            and video_id not in seen_ids
+                            and title
+                        ):
+                            seen_ids.add(video_id)
+                            results.append({'id': video_id, 'title': title})
+                    for child in value.values():
+                        collect_videos(child)
+                elif isinstance(value, list):
+                    for child in value:
+                        collect_videos(child)
+
+            collect_videos(data)
+        except (requests.RequestException, ValueError, TypeError, json.JSONDecodeError):
+            logger.warning('Liza YouTube page search failed', exc_info=True)
+
+    if results:
+        cache.set(cache_key, results, 300)
+    return results
 
 
 def _youtube_queue_key(user):
@@ -205,9 +318,15 @@ def _is_weather_request(normalized):
 
 
 def _weather_reply(normalized):
-    location = re.sub(r'\b(?:ob[\s-]?havo|obxavo|pogoda|weather)\b', ' ', normalized)
     location = re.sub(
-        r'\b(?:bugun|hozir|qanaqa|qanday|today|now|in|at|da|uchun|shahrida|shaharida|shaharda|shahri|shahar)\b',
+        r'\b(?:ob[\s-]?havo|obxavo)(?:si|ni|dagi|ning|ga|dan)?\b|\b(?:pogoda|weather)\b',
+        ' ',
+        normalized,
+    )
+    location = re.sub(
+        r"\b(?:bugun(?:gi)?|hozir|qanaqa|qanday|today|now|in|at|da|uchun|"
+        r"haqida|ma[' ]?lumot(?:ni|lar(?:ni)?)?|ber(?:ing)?|ayt(?:ing)?|"
+        r"shahrida|shaharida|shaharda|shahri|shahar)\b",
         ' ',
         location,
     )
@@ -256,7 +375,119 @@ def _weather_reply(normalized):
         return 'Ob-havo ma’lumotini hozir olib bo‘lmadi. Birozdan keyin qayta urinib ko‘ring.'
 
 
-def _internet_reply(normalized, user=None):
+def _internet_search_results(query):
+    cache_key = (
+        f"liza:internet-search:{hashlib.sha256(query.casefold().encode('utf-8')).hexdigest()}"
+    )
+    cached = cache.get(cache_key)
+    if cached:
+        return cached
+
+    response = requests.get(
+        'https://html.duckduckgo.com/html/',
+        params={'q': query},
+        timeout=10,
+        headers={
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/131.0.0.0 Safari/537.36'
+            ),
+            'Accept-Language': 'uz,en-US;q=0.9,en;q=0.8',
+        },
+    )
+    response.raise_for_status()
+    parser = _DuckDuckGoResultsParser()
+    parser.feed(response.text)
+    results = []
+    seen_urls = set()
+    for item in parser.results:
+        href = item['url']
+        parsed = urlparse(href)
+        if parsed.hostname and parsed.hostname.endswith('duckduckgo.com'):
+            href = parse_qs(parsed.query).get('uddg', [''])[0]
+        elif href.startswith('//'):
+            href = f'https:{href}'
+        elif href.startswith('/'):
+            continue
+        href = unquote(href)
+        parsed = urlparse(href)
+        if (
+            parsed.scheme not in {'http', 'https'}
+            or not parsed.hostname
+            or parsed.hostname.endswith('duckduckgo.com')
+            or href in seen_urls
+        ):
+            continue
+        seen_urls.add(href)
+        results.append({
+            'title': item['title'][:240],
+            'snippet': item['snippet'][:500],
+            'url': href,
+        })
+        if len(results) == 5:
+            break
+    if results:
+        cache.set(cache_key, results, INTERNET_SEARCH_CACHE_TTL_SECONDS)
+    return results
+
+
+def _safe_external_query(query):
+    query = re.sub(r'\b[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}\b', ' ', query)
+    query = re.sub(r'(?<!\w)\+?\d[\d\s().-]{6,}\d(?!\w)', ' ', query)
+    query = re.sub(r'\s+', ' ', query).strip(' ,.?!')
+    return query[:300]
+
+
+def _internet_search_reply(query):
+    query = _safe_external_query(query)
+    if not query:
+        return 'Shaxsiy ma’lumotlarni qidiruvga yubormadim. Savolni shaxsiy ma’lumotlarsiz qayta yozing.'
+
+    try:
+        results = _internet_search_results(query)
+    except requests.RequestException:
+        logger.warning('Liza internet search request failed', exc_info=True)
+        results = []
+
+    if results:
+        lines = ['Internet qidiruvi natijalari:']
+        for index, result in enumerate(results, start=1):
+            snippet = f" — {result['snippet']}" if result['snippet'] else ''
+            lines.append(f"{index}. {result['title']}{snippet}")
+        lines.append('Manbalar:')
+        lines.extend(f"{index}. {item['url']}" for index, item in enumerate(results, start=1))
+        return '\n'.join(lines)
+
+    try:
+        response = requests.get(
+            'https://api.duckduckgo.com/',
+            params={'q': query, 'format': 'json', 'no_html': 1, 'skip_disambig': 1},
+            timeout=8,
+            headers={'User-Agent': 'G-MED-Liza/1.0'},
+        )
+        response.raise_for_status()
+        data = response.json()
+        text = data.get('AbstractText') or data.get('Answer')
+        source = data.get('AbstractURL') or data.get('Redirect')
+        if text:
+            suffix = f'\nManba:\n{source}' if source else ''
+            return f'{text[:900]}{suffix}'
+        related = next((item for item in data.get('RelatedTopics', []) if item.get('Text')), None)
+        if related:
+            source = related.get('FirstURL', '')
+            suffix = f'\nManba:\n{source}' if source else ''
+            return f"{related['Text'][:900]}{suffix}"
+        return (
+            'Qidiruv natijasi topilmadi. To‘g‘ridan-to‘g‘ri ko‘rish: '
+            f'https://duckduckgo.com/?q={quote_plus(query)}'
+        )
+    except (requests.RequestException, ValueError, TypeError):
+        logger.warning('Liza internet search fallback failed', exc_info=True)
+        return 'Internet qidiruvi hozir ishlamadi. Birozdan keyin qayta urinib ko‘ring.'
+
+
+def _internet_reply(normalized, user=None, internet_search_enabled=False):
     if _is_weather_request(normalized):
         return _weather_reply(normalized)
 
@@ -285,32 +516,24 @@ def _internet_reply(normalized, user=None):
 
     if _matched_specialty_rules(normalized):
         return None
-    if not any(word in normalized for word in INTERNET_SEARCH_WORDS):
+
+    if internet_search_enabled:
+        if get_command_action(user=user, message=normalized):
+            return None
+        if any(term in normalized for term in (
+            'profil', 'qon guruh', 'tugilgan sana', 'vazn', 'boyim', 'allergiya',
+            'parol', 'qabulim', 'navbatim', 'qabulga yozil',
+        )):
+            return None
+
+    if not internet_search_enabled and not any(word in normalized for word in INTERNET_SEARCH_WORDS):
         return None
-    query = _external_query(normalized, INTERNET_SEARCH_WORDS)
+    query = _external_query(normalized, INTERNET_SEARCH_WORDS) if any(
+        word in normalized for word in INTERNET_SEARCH_WORDS
+    ) else normalized
     if not query:
         return 'Internetda nimani qidiray? Masalan: internetda bugungi yangiliklarni qidir.'
-    try:
-        response = requests.get(
-            'https://api.duckduckgo.com/',
-            params={'q': query, 'format': 'json', 'no_html': 1, 'skip_disambig': 1},
-            timeout=8,
-            headers={'User-Agent': 'G-MED-Liza/1.0'},
-        )
-        response.raise_for_status()
-        data = response.json()
-        text = data.get('AbstractText') or data.get('Answer')
-        source = data.get('AbstractURL') or data.get('Redirect')
-        if text:
-            suffix = f' Manba: {source}' if source else ''
-            return f'{text[:900]}{suffix}'
-        related = next((item for item in data.get('RelatedTopics', []) if item.get('Text')), None)
-        if related:
-            return f"{related['Text'][:900]} Manba: {related.get('FirstURL', '')}".strip()
-        return f'Qidiruv natijasi topilmadi. To‘g‘ridan-to‘g‘ri ko‘rish: https://duckduckgo.com/?q={quote_plus(query)}'
-    except (requests.RequestException, ValueError, TypeError):
-        logger.warning('Liza internet search failed', exc_info=True)
-        return 'Internet qidiruvi hozir ishlamadi. Birozdan keyin qayta urinib ko‘ring.'
+    return _internet_search_reply(query)
 
 
 _ONES = ('', 'bir', 'ikki', 'uch', "to'rt", 'besh', 'olti', 'yetti', 'sakkiz', "to'qqiz")
@@ -590,12 +813,14 @@ def get_command_action(*, user, message):
     if _is_analysis_read_request(normalized):
         return 'read_analysis'
     pending = cache.get(_booking_cache_key(user))
+    if _is_specialty_booking_request(normalized):
+        if pending and len(_pending_candidates(pending)) > 1:
+            return 'await_doctor_selection'
+        return 'await_booking_confirmation'
     if pending and _select_pending_candidate(pending, normalized):
         return 'open_booking'
-    if _is_specialty_booking_request(normalized):
-        return 'await_booking_confirmation'
     if pending and _is_affirmative(normalized):
-        return 'await_booking_confirmation' if len(_pending_candidates(pending)) > 1 else 'open_booking'
+        return 'await_doctor_selection' if len(_pending_candidates(pending)) > 1 else 'open_booking'
     return None
 
 
@@ -663,10 +888,29 @@ def _pending_candidates(pending):
 def _select_pending_candidate(pending, normalized):
     candidates = _pending_candidates(pending)
     words = re.sub(r"[^a-z0-9']+", ' ', normalized).split()
+    digits = re.findall(r'(?<!\w)\d+(?!\w)', normalized)
+    if len(digits) == 1:
+        candidate_index = int(digits[0]) - 1
+        if 0 <= candidate_index < len(candidates):
+            return candidates[candidate_index]
+
+    cardinal_words = (
+        ('bir',),
+        ('ikki',),
+        ('uch',),
+        ('tort', "to'rt"),
+        ('besh',),
+        ('olti',),
+        ('yetti',),
+        ('sakkiz',),
+        ('toqqiz', "to'qqiz"),
+        ('on', "o'n"),
+    )
     for index, forms in enumerate(ORDINAL_WORDS[:len(candidates)]):
-        if any(word in forms for word in words):
+        spoken_numbers = cardinal_words[index] if index < len(cardinal_words) else ()
+        if any(word in forms or word in spoken_numbers for word in words):
             return candidates[index]
-    if len(candidates) < 2:
+    if not candidates:
         return None
     matches = []
     for candidate in candidates:
@@ -1016,7 +1260,7 @@ def _handle_patient_command(*, user, message):
         chosen = _select_pending_candidate(pending_booking, normalized)
         if chosen is None and _is_affirmative(normalized):
             if len(_pending_candidates(pending_booking)) > 1:
-                return 'Qaysi doktorni tanlaysiz? Ismini yoki birinchi, ikkinchi deb ayting.'
+                return 'Qaysi doktorni tanlaysiz? Ismini yoki 1, 2, 3 deb ayting.'
             chosen = _pending_candidates(pending_booking)[0]
         if chosen:
             return f"{chosen['doctor_name']} doktor qabuli uchun yozilish oynasini ochyapman."
@@ -1061,7 +1305,7 @@ def _handle_patient_command(*, user, message):
                 for index, item in group
             )
             parts.append(f"{group[0][1]['clinic_name']} klinikasida: {doctors_text}.")
-        parts.append('Qaysi doktorga yozilay? Ismini yoki birinchi, ikkinchi deb ayting.')
+        parts.append('Qaysi doktorga yozilay? Ismini yoki 1, 2, 3 deb ayting.')
         return ' '.join(parts)
 
     now = timezone.localtime()
@@ -1095,7 +1339,7 @@ def _handle_patient_command(*, user, message):
     return 'Men qabulingiz, navbat holati, klinika va doktor ish vaqti hamda profilingiz bo‘yicha yordam bera olaman.'
 
 
-def handle_command(*, user, message):
+def handle_command(*, user, message, internet_search_enabled=False):
     normalized = ' '.join(_normalize_command(message).split())
     youtube_queue = (
         cache.get(_youtube_queue_key(user))
@@ -1118,7 +1362,11 @@ def handle_command(*, user, message):
     if youtube_control:
         return _handle_youtube_control(user=user, control=youtube_control)
 
-    external_reply = _internet_reply(normalized, user=user)
+    external_reply = _internet_reply(
+        normalized,
+        user=user,
+        internet_search_enabled=internet_search_enabled,
+    )
     if external_reply is not None:
         return external_reply
 

@@ -295,7 +295,19 @@ const LizaAssistant = () => {
       commandStartedRef.current = false
       commandStartedAtRef.current = Date.now()
       commandLastVoiceRef.current = commandStartedAtRef.current
+      finishingCommandRef.current = false
       setMode('confirmation', 'Hozir “ha” yoki “yo‘q” deb javob bering.')
+    }
+    const beginDoctorSelection = () => {
+      if (!activeRef.current || generationRef.current !== generation) return
+      sessionOpenRef.current = true
+      commandFramesRef.current = []
+      commandCountRef.current = 0
+      commandStartedRef.current = false
+      commandStartedAtRef.current = Date.now()
+      commandLastVoiceRef.current = commandStartedAtRef.current
+      finishingCommandRef.current = false
+      setMode('selection', 'Doktor ismini yoki 1, 2, 3 raqamini ayting.')
     }
     const pauseForRateLimit = (error, resume) => {
       if (error?.response?.status !== 429) return false
@@ -373,7 +385,9 @@ const LizaAssistant = () => {
         setPhase('reply')
         const afterReply = result.action === 'await_booking_confirmation'
           ? beginBookingConfirmation
-          : resumeWakeListening
+          : result.action === 'await_doctor_selection'
+            ? beginDoctorSelection
+            : resumeWakeListening
         void speakMadina(result.reply || 'Buyruq bajarildi.', afterReply)
       } catch (error) {
         if (pauseForRateLimit(error, resumeWakeListening)) return
@@ -439,14 +453,20 @@ const LizaAssistant = () => {
       commandFramesRef.current = []
       commandCountRef.current = 0
       if (
-        samples.length < inputRate * (inputMode === 'confirmation' ? 0.12 : 0.35)
-        || (!commandStartedRef.current && inputMode !== 'confirmation')
+        samples.length < inputRate * (inputMode === 'confirmation' || inputMode === 'selection' ? 0.12 : 0.35)
+        || (!commandStartedRef.current && inputMode !== 'confirmation' && inputMode !== 'selection')
       ) {
         setStatus(inputMode === 'confirmation'
           ? 'Javob eshitilmadi. “Ha” yoki “yo‘q” deb ayting.'
-          : 'Ovoz aniqlanmadi. Qayta “Liza” deng.')
+          : inputMode === 'selection'
+            ? 'Doktor tanlovi eshitilmadi. Ismini yoki 1, 2, 3 raqamini ayting.'
+            : 'Ovoz aniqlanmadi. Qayta “Liza” deng.')
         if (inputMode === 'confirmation') {
           beginBookingConfirmation()
+          return
+        }
+        if (inputMode === 'selection') {
+          beginDoctorSelection()
           return
         }
         resumeWakeListening()
@@ -486,6 +506,15 @@ const LizaAssistant = () => {
           void speakMadina(result.reply || 'Ha yoki yo‘q deb javob bering.', beginBookingConfirmation)
           return
         }
+        if (result.action === 'await_doctor_selection') {
+          modeRef.current = 'reply'
+          setPhase('reply')
+          void speakMadina(
+            result.reply || 'Doktor ismini yoki 1, 2, 3 raqamini ayting.',
+            beginDoctorSelection,
+          )
+          return
+        }
         if (result.action === 'open_profile') {
           setStatus('Bemor profilingiz ochildi. ' + (result.reply || ''))
         }
@@ -495,11 +524,16 @@ const LizaAssistant = () => {
       } catch (error) {
         if (pauseForRateLimit(
           error,
-          inputMode === 'confirmation' ? beginBookingConfirmation : resumeWakeListening,
+          inputMode === 'confirmation'
+            ? beginBookingConfirmation
+            : inputMode === 'selection'
+              ? beginDoctorSelection
+              : resumeWakeListening,
         )) return
         const message = error?.response?.data?.error || error.message || 'Ovozli buyruq bajarilmadi.'
         setStatus(message)
         if (inputMode === 'confirmation') beginBookingConfirmation()
+        else if (inputMode === 'selection') beginDoctorSelection()
         else resumeWakeListening()
       }
     }
@@ -538,7 +572,7 @@ const LizaAssistant = () => {
           let energy = 0
           for (let index = 0; index < frame.length; index += 1) energy += frame[index] * frame[index]
           const mode = modeRef.current
-          const voiceThreshold = mode === 'confirmation' ? 0.0035 : 0.008
+          const voiceThreshold = mode === 'confirmation' || mode === 'selection' ? 0.0035 : 0.008
           const hasVoice = Math.sqrt(energy / frame.length) > voiceThreshold
 
           if (mode === 'wake') {
@@ -555,7 +589,7 @@ const LizaAssistant = () => {
               wakeHasVoiceRef.current = false
               if (shouldCheck) void checkWakeWord(segment, context.sampleRate)
             }
-          } else if (mode === 'command' || mode === 'confirmation') {
+          } else if (mode === 'command' || mode === 'confirmation' || mode === 'selection') {
             commandFramesRef.current.push(frame)
             commandCountRef.current += frame.length
             if (hasVoice) {

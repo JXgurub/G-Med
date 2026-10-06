@@ -204,6 +204,43 @@ GET /doctors/{id}/ratings/
 PATIENT ENDPOINTS
 ━━━━━━━━━━━━━━━━
 
+POST /patients/medication-reminders/
+  Description: Add a recurring medication reminder (patient only)
+  Authentication: Required (patient role)
+  Request:
+    {
+      "medication_name": "Alsetro",
+      "interval_hours": 8
+    }
+  The first notification is scheduled after the selected interval. Valid
+  intervals are 1–168 hours.
+
+GET /patients/medication-reminders/
+  Description: List the authenticated patient's medication reminders
+
+PATCH /patients/medication-reminders/{id}/
+  Description: Change the interval or pause/resume a reminder
+  Request:
+    {
+      "is_active": false
+    }
+
+DELETE /patients/medication-reminders/{id}/
+  Description: Delete one of the authenticated patient's reminders
+
+POST /patients/medication-reminders/acknowledge/
+  Description: Confirm a due dose from its Web Push action
+  Request:
+    {
+      "acknowledgement_token": "<token from the notification>"
+    }
+  Acknowledging a dose suppresses further reminders until its next scheduled
+  dose. If not acknowledged, a new reminder is sent every 10 minutes.
+
+Notifications are delivered as Web Push. The patient must allow browser
+notifications, and the Web Push keys, Celery worker, and Celery Beat scheduler
+must be configured and running.
+
 GET /patients/profile/
   Description: Get current patient profile (patient only)
   Authentication: Required (patient role)

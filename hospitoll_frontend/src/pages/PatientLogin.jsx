@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { usePatient } from '../context/PatientContext'
 import { authApi } from '../services/api'
@@ -7,7 +7,7 @@ import './PatientLogin.css'
 
 const PatientLogin = () => {
   const navigate = useNavigate()
-  const { loginPatient } = usePatient()
+  const { patientAuth, loginPatient } = usePatient()
   const [phoneNumber, setPhoneNumber] = useState('+998')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -20,6 +20,12 @@ const PatientLogin = () => {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (patientAuth) {
+      navigate('/patient', { replace: true })
+    }
+  }, [navigate, patientAuth])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -69,6 +75,8 @@ const PatientLogin = () => {
       setLoading(false)
     }
   }
+
+  if (patientAuth) return null
 
   return (
     <div className="patient-login-page">

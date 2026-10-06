@@ -1,4 +1,5 @@
 from typing import Any, cast
+import json
 from unittest.mock import patch
 
 from django.conf import settings
@@ -9,6 +10,7 @@ from rest_framework.test import APITestCase
 from apps.users.models import CustomUser
 from apps.site_settings.models import HomeContactSettings, SystemAlert
 from apps.site_settings.models import BroadcastNotification, WebPushSubscription
+from apps.site_settings.tasks import send_saved_broadcast_push
 from core.error_logging import ErrorLogger
 from apps.patients.models import Patient
 
@@ -168,6 +170,38 @@ class SiteSettingsSystemAlertTests(APITestCase):
         self.assertEqual(read_response.status_code, 200)
         self.assertEqual(self.client.get(inbox_url).data, [])
         self.assertEqual(send_site.call_count, 2)
+
+    @patch('pywebpush.webpush')
+    @override_settings(WEB_PUSH_VAPID_PUBLIC_KEY='BElocal-test-key', WEB_PUSH_VAPID_PRIVATE_KEY_B64='dGVzdA==')
+    def test_medication_push_contains_a_taken_action(self, webpush):
+        notification = BroadcastNotification.objects.create(
+            user=self.doctor_user,
+            title='💊 Dori ichish vaqti',
+            message='Alsetro',
+            data={
+                'notification_type': 'medication_reminder',
+                'reminder_id': 42,
+                'acknowledgement_token': 'b7b883a7-e1a5-4a85-a6e0-8837c4e133a1',
+            },
+        )
+        WebPushSubscription.objects.create(
+            user=self.doctor_user,
+            endpoint='https://push.example.test/subscription/medication-action',
+            p256dh='public-key',
+            auth='auth-key',
+        )
+
+        result = send_saved_broadcast_push.run([str(notification.id)])
+        payload = json.loads(webpush.call_args.kwargs['data'])
+
+        self.assertEqual(result, {'sent': 1, 'failed': 0, 'expired': 0})
+        self.assertEqual(payload['actions'], [{'action': 'taken', 'title': 'Ichdingizmi?'}])
+        self.assertTrue(payload['renotify'])
+        self.assertEqual(payload['tag'], 'medication-reminder-42')
+        self.assertEqual(
+            payload['data']['acknowledgement_token'],
+            'b7b883a7-e1a5-4a85-a6e0-8837c4e133a1',
+        )
 
     @override_settings(WEB_PUSH_VAPID_PUBLIC_KEY='BElocal-test-key', WEB_PUSH_VAPID_PRIVATE_KEY_B64='dGVzdA==')
     def test_user_can_register_a_web_push_subscription(self):

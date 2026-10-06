@@ -21,9 +21,39 @@ $(document).ready(function () {
     var youtubeVolumeBeforeListening = null;
     var youtubeDuckTimeout = null;
     var youtubeDuckPending = false;
+    var internetSearchStorageKey = "gmed_liza_internet_search";
+    var internetSearchToggle = document.getElementById("InternetSearchToggle");
     var apiUrlMeta = document.querySelector('meta[name="liza-api-url"]');
     var commandUrl = apiUrlMeta ? apiUrlMeta.content : "/api/liza/command/";
     var apiBaseUrl = commandUrl.replace(/command\/?$/, "");
+
+    function isInternetSearchEnabled() {
+        return localStorage.getItem(internetSearchStorageKey) === "true";
+    }
+
+    function updateInternetSearchToggle() {
+        if (!internetSearchToggle) return;
+        var enabled = isInternetSearchEnabled();
+        internetSearchToggle.setAttribute("aria-checked", String(enabled));
+        var privacyNotice = document.getElementById("InternetSearchPrivacy");
+        if (privacyNotice) privacyNotice.hidden = !enabled;
+        internetSearchToggle.setAttribute(
+            "aria-label",
+            "Internet orqali qidirish " + (enabled ? "yoqilgan" : "o‘chiq")
+        );
+    }
+
+    function setNativeAudioPlayback(active) {
+        var bridge = window.LizaNativeAudio;
+        if (!bridge || typeof bridge.postMessage !== "function") return false;
+        bridge.onmessage = function (event) {
+            if (event.data === "speaker-unavailable") {
+                setStatus("Telefon karnayini yoqib bo‘lmadi. Ovoz chiqish qurilmasini telefon sozlamasidan tanlang.");
+            }
+        };
+        bridge.postMessage(JSON.stringify({ action: "playback", active: Boolean(active) }));
+        return true;
+    }
 
     if (window.SiriWave) {
         new SiriWave({
@@ -47,6 +77,28 @@ $(document).ready(function () {
         $(".siri-message").text(message);
     }
 
+    function appendTextWithLinks(element, message) {
+        var text = String(message || "");
+        var urlPattern = /https?:\/\/[^\s<>"']+/g;
+        var cursor = 0;
+        var match;
+        while ((match = urlPattern.exec(text))) {
+            var url = match[0].replace(/[.,!?;:)]+$/, "");
+            if (!url) continue;
+            element.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+            var link = document.createElement("a");
+            link.href = url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent = url;
+            link.className = "internet-search-result-link";
+            element.appendChild(link);
+            cursor = match.index + url.length;
+            urlPattern.lastIndex = cursor;
+        }
+        element.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+
     function loadYoutubeApi() {
         if (window.YT && window.YT.Player) return Promise.resolve(window.YT);
         if (youtubeApiPromise) return youtubeApiPromise;
@@ -65,10 +117,24 @@ $(document).ready(function () {
             youtubePlayer = new api.Player(iframe.id, {
                 events: {
                     onReady: function (event) {
+                        if (typeof event.target.setVolume === "function") event.target.setVolume(100);
                         event.target.playVideo();
                         if (youtubeDuckPending || youtubeVolumeBeforeListening !== null) duckYoutubeVolume();
                     },
-                    onError: function () { setStatus("Bu videoni pleyerda ijro qilib bo‘lmadi. YouTube’da ochish havolasini bosing."); }
+                    onStateChange: function (event) {
+                        if (event.data === api.PlayerState.PLAYING) {
+                            var nativeRoute = setNativeAudioPlayback(true);
+                            setStatus(nativeRoute
+                                ? "Qo‘shiq telefon karnayida ijro etilmoqda."
+                                : "Brauzer karnayni boshqara olmaydi. Telefon karnayini tanlash uchun G-MED Liza Android ilovasidan foydalaning.");
+                        } else if (event.data === api.PlayerState.PAUSED || event.data === api.PlayerState.ENDED) {
+                            setNativeAudioPlayback(false);
+                        }
+                    },
+                    onError: function () {
+                        setNativeAudioPlayback(false);
+                        setStatus("Bu videoni pleyerda ijro qilib bo‘lmadi. YouTube’da ochish havolasini bosing.");
+                    }
                 }
             });
         });
@@ -96,6 +162,7 @@ $(document).ready(function () {
     }
 
     function stopActiveYoutubePlayer() {
+        setNativeAudioPlayback(false);
         restoreYoutubeVolume();
         if (youtubePlayer) {
             try {
@@ -134,7 +201,7 @@ $(document).ready(function () {
             player.id = "liza-youtube-player-" + youtubeFrameId;
             player.className = "youtube-player";
             player.title = "YouTube qo‘shiq ijrosi";
-            player.src = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&playsinline=1&rel=0&enablejsapi=1&origin=" + encodeURIComponent(window.location.origin);
+            player.src = "https://www.youtube.com/embed/" + videoId + "?autoplay=1&playsinline=1&controls=1&rel=0&enablejsapi=1&origin=" + encodeURIComponent(window.location.origin);
             player.referrerPolicy = "strict-origin-when-cross-origin";
             player.allow = "autoplay; encrypted-media; picture-in-picture";
             player.allowFullscreen = true;
@@ -150,7 +217,7 @@ $(document).ready(function () {
             activeYoutubeBubble = bubble;
             mountYoutubePlayer(player);
         } else {
-            bubble.textContent = message;
+            appendTextWithLinks(bubble, message);
         }
         width.appendChild(bubble);
         row.appendChild(width);
@@ -251,12 +318,30 @@ $(document).ready(function () {
             }
             restoreYoutubeVolume();
             stopAfterCurrentReply = data.action === "stop_listening";
-            var afterReply = data.action === "open_profile" ? function () {
-                window.location.assign("/patient?tab=profile");
-            } : function () {
-                if (isListening && !stopAfterCurrentReply) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
-            };
-            speakMadina(data.reply, afterReply);
+            var afterReply;
+            if (data.action === "open_profile") {
+                afterReply = function () {
+                    window.location.assign("/patient?tab=profile");
+                };
+            } else if (data.action === "open_booking") {
+                afterReply = function () {
+                    if (!data.booking || !data.booking.clinic_id || !data.booking.doctor_id) {
+                        setStatus("Qabul oynasini ochish ma’lumoti topilmadi. Doktorni qayta tanlang.");
+                        return;
+                    }
+                    var params = new URLSearchParams({
+                        lizaDoctor: data.booking.doctor_id,
+                        lizaSpecialtyPriceIds: (data.booking.specialty_price_ids || []).join(",")
+                    });
+                    window.location.assign("/clinic/" + encodeURIComponent(data.booking.clinic_id) + "?" + params.toString());
+                };
+            } else {
+                afterReply = function () {
+                    if (isListening && !stopAfterCurrentReply) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
+                };
+            }
+            var spokenReply = data.reply.split("\nManbalar:\n")[0];
+            speakMadina(spokenReply, afterReply);
         }
     }
 
@@ -377,7 +462,7 @@ $(document).ready(function () {
             method: "POST",
             credentials: "same-origin",
             headers: headers,
-            body: JSON.stringify({ message: message })
+            body: JSON.stringify({ message: message, internet_search: isInternetSearchEnabled() })
         });
         var data = await response.json().catch(function () { return {}; });
         if (!response.ok) {
@@ -391,6 +476,7 @@ $(document).ready(function () {
         var formData = new FormData();
         var extension = mimeType.indexOf("wav") >= 0 ? "wav" : mimeType.indexOf("mp4") >= 0 ? "mp4" : mimeType.indexOf("ogg") >= 0 ? "ogg" : "webm";
         formData.append("audio", blob, "liza-audio." + extension);
+        formData.append("internet_search", String(isInternetSearchEnabled()));
         var response = await fetch(apiBaseUrl + "voice/", {
             method: "POST",
             credentials: "same-origin",
@@ -529,6 +615,16 @@ $(document).ready(function () {
     }
 
     $("#MicBtn").on("click", startListening);
+    if (internetSearchToggle) {
+        updateInternetSearchToggle();
+        internetSearchToggle.addEventListener("click", function () {
+            localStorage.setItem(internetSearchStorageKey, String(!isInternetSearchEnabled()));
+            updateInternetSearchToggle();
+            setStatus(isInternetSearchEnabled()
+                ? "Internet-qidiruv yoqildi. Savollaringiz DuckDuckGo’ga yuboriladi; shaxsiy ma’lumotlarni kiritmang."
+                : "Internet-qidiruv o‘chirildi. Liza odatdagi rejimda javob beradi.");
+        });
+    }
     $("#SendBtn").on("click", function () {
         sendCommand($("#chatbox").val());
     });

@@ -7,7 +7,7 @@ import { AdminProvider } from './context/AdminContext'
 import { PatientProvider } from './context/PatientContext'
 import { PharmacyProvider } from './context/PharmacyContext'
 import { PaymentProvider } from './context/PaymentContext'
-import { authApi, siteSettingsApi } from './services/api'
+import { authApi, patientsApi, siteSettingsApi } from './services/api'
 import { useNotifications } from './hooks/useWebSocket'
 const Layout = lazy(() => import('./layouts/Layout'))
 const Home = lazy(() => import('./pages/Home'))
@@ -173,6 +173,7 @@ const BroadcastNotificationListener = () => {
         id: payload.notification_id,
         title: payload.title,
         message: payload.message,
+        data: payload.data || {},
       }])
     }
   }, [enqueueNotifications])
@@ -181,6 +182,22 @@ const BroadcastNotificationListener = () => {
     window.addEventListener('hospitoll:notification', handleBroadcast)
     return () => window.removeEventListener('hospitoll:notification', handleBroadcast)
   }, [handleBroadcast])
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return undefined
+    const handleServiceWorkerMessage = (event) => {
+      if (event.data?.type !== 'medication-reminder-acknowledged') return
+      const { acknowledgement_token: acknowledgementToken } = event.data
+      setNotice((current) => (
+        current?.data?.acknowledgement_token === acknowledgementToken ? null : current
+      ))
+      setNoticeQueue((current) => current.filter(
+        (notification) => notification.data?.acknowledgement_token !== acknowledgementToken,
+      ))
+    }
+    navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage)
+    return () => navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage)
+  }, [])
 
   useEffect(() => {
     if (notice || noticeQueue.length === 0) return
@@ -220,6 +237,20 @@ const BroadcastNotificationListener = () => {
           <div>
             <strong>{notice.title || 'Bildirishnoma'}</strong>
             <p>{notice.message || ''}</p>
+            {notice.data?.notification_type === 'medication_reminder'
+              && notice.data.acknowledgement_token ? (
+                <button
+                  type="button"
+                  className="admin-broadcast-ack"
+                  onClick={() => {
+                    patientsApi.acknowledgeMedicationReminder(notice.data.acknowledgement_token)
+                      .then(() => setNotice(null))
+                      .catch((error) => console.error('Dori eslatmasini tasdiqlab bo‘lmadi:', error))
+                  }}
+                >
+                  Ichdingizmi?
+                </button>
+              ) : null}
           </div>
           <button
             type="button"

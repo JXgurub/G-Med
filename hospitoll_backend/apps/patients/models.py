@@ -351,3 +351,35 @@ class PatientDoctorRating(models.Model):
                 clinic.total_ratings = clinic_stats['total_ratings'] or 0
                 clinic.save(update_fields=['rating', 'total_ratings'])
 
+
+class PatientMedicationReminder(models.Model):
+    patient = models.ForeignKey(
+        Patient,
+        on_delete=models.CASCADE,
+        related_name='medication_reminders',
+    )
+    medication_name = models.CharField(_('medication name'), max_length=255)
+    interval_hours = models.PositiveSmallIntegerField(
+        _('interval hours'),
+        validators=[MinValueValidator(1), MaxValueValidator(168)],
+    )
+    is_active = models.BooleanField(_('active'), default=True)
+    next_reminder_at = models.DateTimeField(_('next reminder at'))
+    pending_dose_at = models.DateTimeField(blank=True, null=True)
+    next_nudge_at = models.DateTimeField(blank=True, null=True)
+    acknowledgement_token = models.UUIDField(blank=True, null=True, unique=True, editable=False)
+    last_message_key = models.CharField(max_length=40, blank=True, default='')
+    created_at = models.DateTimeField(_('created at'), auto_now_add=True)
+    updated_at = models.DateTimeField(_('updated at'), auto_now=True)
+
+    class Meta:
+        ordering = ['next_reminder_at', 'created_at']
+        indexes = [
+            models.Index(
+                fields=['is_active', 'next_reminder_at'],
+                name='patients_reminder_due_idx',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.medication_name} ({self.patient_id})'

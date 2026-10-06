@@ -148,6 +148,9 @@ const refreshAccessToken = async () => {
       const data = await response.json()
       if (data?.access) {
         storage.setItem(accessTokenKey, data.access)
+        if (data.refresh) {
+          storage.setItem(refreshTokenKey, data.refresh)
+        }
         return data.access
       }
       return null
@@ -506,6 +509,14 @@ export const patientsApi = {
   update: (id, data) => api.patch(`/patients/${id}/`, data),
   setPassword: (id, data) => api.post(`/patients/${id}/set_password/`, data),
   delete: (id) => api.delete(`/patients/${id}/`),
+  getMedicationReminders: () => api.get('/patients/medication-reminders/'),
+  createMedicationReminder: (data) => api.post('/patients/medication-reminders/', data),
+  updateMedicationReminder: (id, data) => api.patch(`/patients/medication-reminders/${id}/`, data),
+  deleteMedicationReminder: (id) => api.delete(`/patients/medication-reminders/${id}/`),
+  acknowledgeMedicationReminder: (acknowledgementToken) => api.post(
+    '/patients/medication-reminders/acknowledge/',
+    { acknowledgement_token: acknowledgementToken },
+  ),
 }
 
 // Pharmacy API endpoints
@@ -653,4 +664,3 @@ export const paymentsApi = {
 }
 
 export default api
-

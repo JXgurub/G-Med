@@ -47,6 +47,40 @@ class LizaCommandTests(SimpleTestCase):
         self.assertEqual(response.data['reply'], 'Bugungi qabullaringiz yo‘q.')
         handle_command_mock.assert_called_once_with(user=user, message='Bugungi qabullarim')
 
+    @patch('apps.liza.views.handle_command', return_value='Internet qidiruvi natijalari.')
+    def test_command_endpoint_passes_enabled_internet_search_mode(self, handle_command_mock):
+        user = SimpleNamespace(is_authenticated=True, pk='test-user', role='patient')
+        request = APIRequestFactory().post(
+            '/api/v1/liza/command/',
+            {'message': 'Python 3.12 yangiliklari', 'internet_search': True},
+            format='json',
+        )
+        force_authenticate(request, user=user)
+
+        response = CommandView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        handle_command_mock.assert_called_once_with(
+            user=user,
+            message='Python 3.12 yangiliklari',
+            internet_search_enabled=True,
+        )
+
+    @patch('apps.liza.views.handle_command')
+    def test_command_endpoint_rejects_non_boolean_internet_search_mode(self, handle_command_mock):
+        user = SimpleNamespace(is_authenticated=True, pk='test-user', role='patient')
+        request = APIRequestFactory().post(
+            '/api/v1/liza/command/',
+            {'message': 'Python yangiliklari', 'internet_search': 'yes'},
+            format='json',
+        )
+        force_authenticate(request, user=user)
+
+        response = CommandView.as_view()(request)
+
+        self.assertEqual(response.status_code, 400)
+        handle_command_mock.assert_not_called()
+
     def test_profile_navigation_is_patient_only_and_not_a_profile_edit(self):
         patient = SimpleNamespace(role='patient', pk='patient-user')
         doctor = SimpleNamespace(role='doctor')
@@ -91,6 +125,36 @@ class LizaCommandTests(SimpleTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['transcript'], "Profelimga o't")
         self.assertEqual(response.data['action'], 'open_profile')
+
+    @patch('apps.liza.views.handle_command', return_value='Internet qidiruvi natijalari.')
+    @patch('apps.liza.views.import_string')
+    def test_voice_endpoint_passes_enabled_internet_search_mode(
+        self,
+        import_string_mock,
+        handle_command_mock,
+    ):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        import_string_mock.return_value = Mock(return_value='Python yangiliklari')
+        user = SimpleNamespace(is_authenticated=True, pk='voice-search-user', role='patient')
+        request = APIRequestFactory().post(
+            '/api/v1/liza/voice/',
+            {
+                'audio': SimpleUploadedFile('command.wav', b'audio', content_type='audio/wav'),
+                'internet_search': 'true',
+            },
+            format='multipart',
+        )
+        force_authenticate(request, user=user)
+
+        response = VoiceView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        handle_command_mock.assert_called_once_with(
+            user=user,
+            message='Python yangiliklari',
+            internet_search_enabled=True,
+        )
 
     @patch('apps.liza.services.Appointment.objects.filter')
     def test_doctor_command_only_queries_own_appointments(self, filter_appointments):
@@ -155,6 +219,76 @@ class LizaCommandTests(SimpleTestCase):
         self.assertIn('Toshkentda hozir ochiq', reply)
         self.assertEqual(get_mock.call_count, 2)
 
+    @patch('apps.liza.services.requests.get')
+    def test_weather_question_extracts_city_from_uzbek_inflections(self, get_mock):
+        geocoding_response = Mock()
+        geocoding_response.json.return_value = {
+            'results': [{'name': 'Beruniy', 'country_code': 'UZ', 'latitude': 41.7, 'longitude': 60.8}],
+        }
+        forecast_response = Mock()
+        forecast_response.json.return_value = {
+            'current': {'temperature_2m': 18, 'wind_speed_10m': 2, 'weather_code': 1},
+        }
+        get_mock.side_effect = [geocoding_response, forecast_response]
+
+        user = SimpleNamespace(role='patient', pk='weather-inflection-user')
+        reply = handle_command(
+            user=user,
+            message="Beruniy ob-havosi haqida ma'lumot ber",
+        )
+
+        self.assertIn('Beruniyda hozir asosan ochiq', reply)
+        self.assertEqual(get_mock.call_args_list[0].kwargs['params']['name'], 'beruniy')
+
+    @patch('apps.liza.services.cache.set')
+    @patch('apps.liza.services.cache.get', return_value=None)
+    @patch('apps.liza.services.requests.get')
+    def test_internet_search_mode_returns_web_results_with_sources_and_redacts_pii(
+        self,
+        get_mock,
+        _cache_get_mock,
+        _cache_set_mock,
+    ):
+        response = Mock()
+        response.text = (
+            '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fpython">'
+            '<span>Python release notes</span></a>'
+            '<a class="result__snippet">Official Python release information.</a>'
+            '<a class="result__a" href="https://docs.example.org/python">Python documentation</a>'
+            '<a class="result__snippet">Documentation for the Python language.</a>'
+        )
+        get_mock.return_value = response
+        user = SimpleNamespace(role='patient', pk='internet-search-user')
+
+        reply = handle_command(
+            user=user,
+            message='Python 3.12 haqida user@example.com ga yubor +998 90 123 45 67',
+            internet_search_enabled=True,
+        )
+
+        self.assertIn('Python release notes', reply)
+        self.assertIn('Official Python release information.', reply)
+        self.assertIn('https://example.com/python', reply)
+        self.assertIn('https://docs.example.org/python', reply)
+        query = get_mock.call_args.kwargs['params']['q']
+        self.assertIn('python', query.casefold())
+        self.assertNotIn('user@example.com', query)
+        self.assertNotIn('998', query)
+        self.assertEqual(get_mock.call_args.args[0], 'https://html.duckduckgo.com/html/')
+
+    @patch('apps.liza.services.requests.get')
+    def test_internet_search_mode_keeps_profile_navigation_local(self, get_mock):
+        user = SimpleNamespace(role='patient', pk='internet-booking-user')
+
+        reply = handle_command(
+            user=user,
+            message='Profilimni och',
+            internet_search_enabled=True,
+        )
+
+        self.assertIn('Profilim bo‘limini ochyapman', reply)
+        get_mock.assert_not_called()
+
     @patch('apps.liza.services._youtube_search_results', return_value=[
         {'id': 'abcdefghijk', 'title': 'Sevara Nazarkhan'},
         {'id': 'bcdefghijkl', 'title': 'Sevara Nazarkhan 2'},
@@ -170,6 +304,52 @@ class LizaCommandTests(SimpleTestCase):
         self.assertEqual(action['video_id'], 'abcdefghijk')
         self.assertEqual(action['queue_count'], 2)
         youtube_search_mock.assert_called_once_with('sevara nazarkhan')
+
+    @patch('yt_dlp.YoutubeDL')
+    @patch('apps.liza.services.cache.get', return_value=None)
+    def test_youtube_search_keeps_flat_results_without_fetching_video_pages(self, _cache_get, youtube_dl_mock):
+        from apps.liza.services import _youtube_search_results
+
+        youtube = youtube_dl_mock.return_value.__enter__.return_value
+        youtube.extract_info.return_value = {
+            'entries': [
+                {'id': 'abcdefghijk', 'title': 'Xamdam Sobirov'},
+                {'id': None, 'title': 'Unavailable result'},
+            ],
+        }
+
+        results = _youtube_search_results('xamdam sobirov')
+
+        self.assertEqual(results, [{'id': 'abcdefghijk', 'title': 'Xamdam Sobirov'}])
+        options = youtube_dl_mock.call_args.args[0]
+        self.assertEqual(options['extract_flat'], 'in_playlist')
+        youtube.extract_info.assert_called_once_with('ytsearch5:xamdam sobirov', download=False)
+
+    @patch('apps.liza.services.requests.get')
+    @patch('yt_dlp.YoutubeDL')
+    @patch('apps.liza.services.cache.get', return_value=None)
+    def test_youtube_page_search_is_used_when_extractor_is_blocked(
+        self,
+        _cache_get,
+        youtube_dl_mock,
+        get_mock,
+    ):
+        from apps.liza.services import _youtube_search_results
+
+        youtube = youtube_dl_mock.return_value.__enter__.return_value
+        youtube.extract_info.side_effect = RuntimeError('YouTube blocked the extractor request')
+        response = Mock()
+        response.text = (
+            'var ytInitialData = {"contents":{"videoRenderer":{"videoId":"abcdefghijk",'
+            '"title":{"runs":[{"text":"Xamdam Sobirov"}]}}}};'
+        )
+        get_mock.return_value = response
+
+        results = _youtube_search_results('xamdam sobirov')
+
+        self.assertEqual(results, [{'id': 'abcdefghijk', 'title': 'Xamdam Sobirov'}])
+        get_mock.assert_called_once()
+        self.assertEqual(get_mock.call_args.args[0], 'https://www.youtube.com/results')
 
     @patch('apps.liza.services._youtube_search_results', return_value=[
         {'id': 'abcdefghijk', 'title': 'Birinchi qo‘shiq'},
@@ -271,12 +451,14 @@ class LizaCommandTests(SimpleTestCase):
 
     @patch('apps.liza.services.requests.get')
     def test_internet_search_returns_external_summary(self, get_mock):
+        html_response = Mock()
+        html_response.text = ''
         response = Mock()
         response.json.return_value = {
             'AbstractText': 'Toshkent O‘zbekiston poytaxti.',
             'AbstractURL': 'https://example.com/tashkent',
         }
-        get_mock.return_value = response
+        get_mock.side_effect = [html_response, response]
 
         user = SimpleNamespace(role='patient', pk='search-user')
         reply = handle_command(user=user, message='Internetda Toshkent haqida qidir')
@@ -487,11 +669,29 @@ class LizaPatientFunctionsTests(TestCase):
         self.assertIn('Qaysi doktorga', reply)
         self.assertEqual(
             get_command_action_data(user=self.patient_user, message='ha')['action'],
-            'await_booking_confirmation',
+            'await_doctor_selection',
         )
-        action = get_command_action_data(user=self.patient_user, message='ikkinchisi')
-        self.assertEqual(action['action'], 'open_booking')
-        self.assertIn(action['booking']['doctor_id'], {str(self.doctor.id), str(second_doctor.id)})
+        self.assertEqual(
+            get_command_action_data(
+                user=self.patient_user,
+                message="Tishim og'riyapti, stomatologiya topib ber",
+            )['action'],
+            'await_doctor_selection',
+        )
+        for selection, expected_doctor_id in (
+            ('ikkinchisi', str(second_doctor.id)),
+            ('2', str(second_doctor.id)),
+            ('Qodir', str(second_doctor.id)),
+            ('bir', str(self.doctor.id)),
+        ):
+            with self.subTest(selection=selection):
+                handle_command(user=self.patient_user, message="Tishim og'riyapti, stomatologiya topib ber")
+                selected_reply = handle_command(user=self.patient_user, message=selection)
+                action = get_command_action_data(user=self.patient_user, message=selection)
+
+                self.assertIn('yozilish oynasini ochyapman', selected_reply)
+                self.assertEqual(action['action'], 'open_booking')
+                self.assertEqual(action['booking']['doctor_id'], expected_doctor_id)
 
     def test_ear_pain_finds_lor_specialist_across_clinic_specialties(self):
         specialization = Specialization.objects.get(name='Otorinolaringologiya (LOR)')
@@ -617,6 +817,49 @@ class LizaPatientFunctionsTests(TestCase):
         self.assertEqual(response.data['action'], 'open_booking')
         self.assertEqual(response.data['booking']['doctor_id'], str(self.doctor.id))
         self.assertEqual(response.data['booking']['specialty_price_ids'], [str(price.id)])
+
+    @patch('apps.liza.views.import_string')
+    def test_voice_doctor_list_returns_selection_action(self, import_string_mock):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        specialization = Specialization.objects.get(name='Stomatologiya')
+        DoctorSpecialization.objects.create(
+            doctor=self.doctor,
+            specialization=specialization,
+            consultation_fee=Decimal('150000'),
+        )
+        second_user = CustomUser.objects.create_user(
+            username='liza_voice_second_dentist',
+            password='pass12345',
+            role='doctor',
+            first_name='Qodir',
+            last_name='Tishchi',
+        )
+        second_doctor = Doctor.objects.create(
+            user=second_user,
+            clinic=self.clinic,
+            consultation_fee=Decimal('90000'),
+            available_from=self.doctor.available_from,
+            available_until=self.doctor.available_until,
+        )
+        DoctorSpecialization.objects.create(
+            doctor=second_doctor,
+            specialization=specialization,
+            consultation_fee=Decimal('90000'),
+        )
+        import_string_mock.return_value = Mock(return_value="Tishim og'riyapti stomatologiya topib ber")
+        request = APIRequestFactory().post(
+            '/api/v1/liza/voice/',
+            {'audio': SimpleUploadedFile('booking.wav', b'audio', content_type='audio/wav')},
+            format='multipart',
+        )
+        force_authenticate(request, user=self.patient_user)
+
+        response = VoiceView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['action'], 'await_doctor_selection')
+        self.assertIn('Ismini yoki 1, 2, 3', response.data['reply'])
 
     def test_analysis_read_request_is_patient_scoped(self):
         self.assertEqual(

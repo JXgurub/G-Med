@@ -32,9 +32,19 @@ class CommandView(APIView):
         message = message.strip()
         if len(message) > MAX_MESSAGE_LENGTH:
             return Response({'error': 'Xabar juda uzun.'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        internet_search_enabled = request.data.get('internet_search', False)
+        if not isinstance(internet_search_enabled, bool):
+            return Response({'error': 'Internet-qidiruv holati noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            reply = handle_command(user=request.user, message=message)
+            if internet_search_enabled:
+                reply = handle_command(
+                    user=request.user,
+                    message=message,
+                    internet_search_enabled=True,
+                )
+            else:
+                reply = handle_command(user=request.user, message=message)
         except Exception:
             logger.exception('Liza command handler failed')
             return Response({'error': 'Buyruqni bajarishda xatolik yuz berdi.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -76,9 +86,20 @@ class VoiceView(APIView):
         if len(transcript) > MAX_MESSAGE_LENGTH:
             return Response({'error': 'Aniqlangan matn juda uzun.'}, status=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
         logger.info('Liza voice transcript accepted: user=%s characters=%s', request.user.pk, len(transcript))
+        internet_search_value = request.data.get('internet_search', 'false')
+        if internet_search_value not in {'true', 'false'}:
+            return Response({'error': 'Internet-qidiruv holati noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+        internet_search_enabled = internet_search_value == 'true'
 
         try:
-            reply = handle_command(user=request.user, message=transcript)
+            if internet_search_enabled:
+                reply = handle_command(
+                    user=request.user,
+                    message=transcript,
+                    internet_search_enabled=True,
+                )
+            else:
+                reply = handle_command(user=request.user, message=transcript)
         except Exception:
             logger.exception('Liza command handler failed after transcription')
             return Response({'error': 'Buyruqni bajarishda xatolik yuz berdi.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

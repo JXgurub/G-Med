@@ -216,6 +216,13 @@ margin-top: 8px;
 color: #8be9fd;
 font-size: 14px;
 }
+.internet-search-result-link {
+  color: var(--mint);
+  overflow-wrap: anywhere;
+}
+.internet-search-result-link:hover {
+  color: #c2f4e6;
+}
 /* Chat Box Start End*/
 
 @media (max-width: 600px) {
@@ -380,6 +387,68 @@ body::before {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.internet-search-control {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  column-gap: 9px;
+  row-gap: 3px;
+}
+
+.internet-search-privacy {
+  grid-column: 1 / -1;
+  max-width: 190px;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.3;
+  gap: 9px;
+}
+
+.internet-search-label {
+  color: #c3d1cf;
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.internet-search-toggle {
+  position: relative;
+  display: inline-flex;
+  width: 42px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 3px;
+  border: 1px solid rgba(171, 211, 204, 0.3);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.internet-search-toggle > span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #b9c7c5;
+  transition: transform 160ms ease, background 160ms ease;
+}
+
+.internet-search-toggle[aria-checked="true"] {
+  border-color: rgba(140, 232, 207, 0.65);
+  background: rgba(82, 174, 148, 0.42);
+}
+
+.internet-search-toggle[aria-checked="true"] > span {
+  background: var(--mint);
+  transform: translateX(17px);
+}
+
+.internet-search-toggle:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 3px;
 }
 
 .online-badge {

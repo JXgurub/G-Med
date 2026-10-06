@@ -570,6 +570,38 @@
   border: 1px solid rgba(30, 111, 215, 0.08);
 }
 
+.patient-account-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: #fff;
+  border: 1px solid rgba(30, 111, 215, 0.12);
+  border-radius: 1rem;
+}
+
+.patient-account-actions p {
+  margin: 0.3rem 0 0;
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+
+.patient-logout-button {
+  flex: 0 0 auto;
+  padding: 0.7rem 1rem;
+  color: #b91c1c;
+  background: #fff;
+  border: 1px solid rgba(185, 28, 28, 0.3);
+  border-radius: 999px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.patient-logout-button:hover {
+  background: #fef2f2;
+}
+
 .profile-forms-stack {
   display: grid;
   gap: 1rem;
@@ -630,6 +662,100 @@
 .save-profile-btn:disabled {
   opacity: 0.7;
   cursor: wait;
+}
+
+.reminders-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.reminders-heading p,
+.reminder-disclaimer {
+  color: #64748b;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.reminders-heading p {
+  margin: 0;
+}
+
+.reminder-push-status {
+  flex: 0 0 auto;
+  padding: 0.45rem 0.7rem;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.reminder-form {
+  align-items: end;
+}
+
+.reminder-form-action .save-profile-btn {
+  margin-top: 0;
+}
+
+.reminder-list {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.reminder-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem;
+  border: 1px solid rgba(30, 111, 215, 0.12);
+  border-radius: 0.9rem;
+  background: #f8fbff;
+}
+
+.reminder-card.paused {
+  opacity: 0.68;
+}
+
+.reminder-card-info {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.reminder-card-info strong {
+  color: #1e3a8a;
+}
+
+.reminder-card-info span,
+.reminder-empty {
+  color: #64748b;
+  font-size: 0.87rem;
+}
+
+.reminder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.reminder-delete-btn {
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.reminder-error {
+  color: #b91c1c;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.reminder-disclaimer {
+  margin: 1rem 0 0;
 }
 
 @media (max-width: 900px) {
@@ -761,5 +887,19 @@
 
   .history-action-btn {
     width: 100%;
+  }
+
+  .reminders-heading,
+  .reminder-card {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .reminder-actions {
+    width: 100%;
+  }
+
+  .reminder-actions .history-action-btn {
+    flex: 1;
   }
 }

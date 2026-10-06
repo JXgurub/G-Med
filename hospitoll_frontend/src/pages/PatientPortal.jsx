@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { usePatient } from '../context/PatientContext'
+import { patientsApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
 import './PatientPortal.css'
 
@@ -14,6 +15,19 @@ const formatHistoryDate = (value) => {
     year: 'numeric',
     month: 'long',
     day: 'numeric'
+  })
+}
+
+const formatReminderDate = (value) => {
+  if (!value) return '—'
+  const parsed = new Date(value)
+  if (Number.isNaN(parsed.getTime())) return '—'
+  return parsed.toLocaleString('uz-UZ', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
   })
 }
 
@@ -41,7 +55,7 @@ const copyTextToClipboard = async (text) => {
 const PatientPortal = () => {
   const navigate = useNavigate()
   const location = useLocation()
-  const { patientAuth, patientData, updateDoctorRating, updatePatientProfile, changePatientPassword } = usePatient()
+  const { patientAuth, patientData, updateDoctorRating, updatePatientProfile, changePatientPassword, logoutPatient } = usePatient()
   const [activeTab, setActiveTab] = useState('history')
   const [profileForm, setProfileForm] = useState({
     bloodType: '',
@@ -52,6 +66,11 @@ const PatientPortal = () => {
     animalAllergies: ''
   })
   const [savingProfile, setSavingProfile] = useState(false)
+  const [medicationReminders, setMedicationReminders] = useState([])
+  const [loadingReminders, setLoadingReminders] = useState(false)
+  const [savingReminder, setSavingReminder] = useState(false)
+  const [reminderError, setReminderError] = useState('')
+  const [reminderForm, setReminderForm] = useState({ medicationName: '', intervalHours: '8' })
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
     newPassword: '',
@@ -60,6 +79,24 @@ const PatientPortal = () => {
   const [savingPassword, setSavingPassword] = useState(false)
 
   const { profile, history, doctors, ratings, lastUpdated } = patientData
+
+  useEffect(() => {
+    if (!patientAuth) return undefined
+    let cancelled = false
+    setLoadingReminders(true)
+    patientsApi.getMedicationReminders()
+      .then((response) => {
+        const reminders = response?.results || response
+        if (!cancelled) setMedicationReminders(Array.isArray(reminders) ? reminders : [])
+      })
+      .catch(() => {
+        if (!cancelled) setReminderError('Dori eslatmalarini yuklab bo‘lmadi. Sahifani yangilang.')
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingReminders(false)
+      })
+    return () => { cancelled = true }
+  }, [patientAuth])
 
   useEffect(() => {
     if (!patientAuth) {
@@ -136,6 +173,55 @@ const PatientPortal = () => {
       alert(message)
     } finally {
       setSavingProfile(false)
+    }
+  }
+
+  const handleReminderCreate = async (event) => {
+    event.preventDefault()
+    setSavingReminder(true)
+    setReminderError('')
+    try {
+      const reminder = await patientsApi.createMedicationReminder({
+        medication_name: reminderForm.medicationName.trim(),
+        interval_hours: Number(reminderForm.intervalHours)
+      })
+      setMedicationReminders((current) => [...current, reminder].sort(
+        (first, second) => new Date(first.next_reminder_at) - new Date(second.next_reminder_at)
+      ))
+      setReminderForm({ medicationName: '', intervalHours: '8' })
+    } catch (error) {
+      const details = error?.response?.data
+      setReminderError(
+        details?.medication_name?.[0]
+        || details?.interval_hours?.[0]
+        || details?.detail
+        || 'Dori eslatmasini saqlashda xatolik yuz berdi.'
+      )
+    } finally {
+      setSavingReminder(false)
+    }
+  }
+
+  const handleReminderToggle = async (reminder) => {
+    setReminderError('')
+    try {
+      const updated = await patientsApi.updateMedicationReminder(reminder.id, {
+        is_active: !reminder.is_active
+      })
+      setMedicationReminders((current) => current.map((item) => item.id === updated.id ? updated : item))
+    } catch (error) {
+      setReminderError(error?.response?.data?.detail || 'Eslatma holatini o‘zgartirib bo‘lmadi.')
+    }
+  }
+
+  const handleReminderDelete = async (reminder) => {
+    if (!window.confirm(`“${reminder.medication_name}” eslatmasini o‘chirmoqchimisiz?`)) return
+    setReminderError('')
+    try {
+      await patientsApi.deleteMedicationReminder(reminder.id)
+      setMedicationReminders((current) => current.filter((item) => item.id !== reminder.id))
+    } catch (error) {
+      setReminderError(error?.response?.data?.detail || 'Eslatmani o‘chirib bo‘lmadi.')
     }
   }
 
@@ -260,6 +346,13 @@ const PatientPortal = () => {
           </button>
           <button
             type="button"
+            className={`tab-btn ${activeTab === 'medication-reminders' ? 'active' : ''}`}
+            onClick={() => setActiveTab('medication-reminders')}
+          >
+            Dorilarni eslatish 💊
+          </button>
+          <button
+            type="button"
             className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`}
             onClick={() => setActiveTab('profile')}
           >
@@ -378,8 +471,101 @@ const PatientPortal = () => {
           </div>
         )}
 
+        {activeTab === 'medication-reminders' && (
+          <section className="patient-profile-form medication-reminders">
+            <div className="reminders-heading">
+              <div>
+                <h3 className="password-form-title">Dorilarni eslatish 💊</h3>
+                <p>Intervalni soatlarda belgilang. Birinchi eslatma shu vaqt o‘tgach keladi, keyingilari takrorlanadi.</p>
+              </div>
+              <span className="reminder-push-status">
+                Telefon bildirishnomalari uchun brauzer ruxsati kerak
+              </span>
+            </div>
+
+            {reminderError && <p className="reminder-error" role="alert">{reminderError}</p>}
+
+            <form className="profile-grid reminder-form" onSubmit={handleReminderCreate}>
+              <div className="form-group">
+                <label htmlFor="reminder-medication-name">Dori nomi</label>
+                <input
+                  id="reminder-medication-name"
+                  type="text"
+                  value={reminderForm.medicationName}
+                  onChange={(event) => setReminderForm((current) => ({ ...current, medicationName: event.target.value }))}
+                  placeholder="Masalan: Alsetro"
+                  maxLength="255"
+                  required
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="reminder-interval-hours">Ichish oralig‘i (soat)</label>
+                <input
+                  id="reminder-interval-hours"
+                  type="number"
+                  value={reminderForm.intervalHours}
+                  onChange={(event) => setReminderForm((current) => ({ ...current, intervalHours: event.target.value }))}
+                  min="1"
+                  max="168"
+                  step="1"
+                  required
+                />
+              </div>
+              <div className="reminder-form-action">
+                <button type="submit" className="save-profile-btn" disabled={savingReminder}>
+                  {savingReminder ? 'Saqlanmoqda...' : 'Eslatma qo‘shish'}
+                </button>
+              </div>
+            </form>
+
+            {loadingReminders ? (
+              <p className="reminder-empty">Eslatmalar yuklanmoqda...</p>
+            ) : medicationReminders.length ? (
+              <div className="reminder-list">
+                {medicationReminders.map((reminder) => (
+                  <article className={`reminder-card ${reminder.is_active ? '' : 'paused'}`} key={reminder.id}>
+                    <div className="reminder-card-info">
+                      <strong>💊 {reminder.medication_name}</strong>
+                      <span>Har {reminder.interval_hours} soatda</span>
+                      <span>{reminder.is_active ? `Keyingi eslatma: ${formatReminderDate(reminder.next_reminder_at)}` : 'Eslatma vaqtincha to‘xtatilgan'}</span>
+                    </div>
+                    <div className="reminder-actions">
+                      <button type="button" className="history-action-btn history-action-btn-ghost" onClick={() => handleReminderToggle(reminder)}>
+                        {reminder.is_active ? 'To‘xtatish' : 'Davom ettirish'}
+                      </button>
+                      <button type="button" className="history-action-btn reminder-delete-btn" onClick={() => handleReminderDelete(reminder)}>
+                        O‘chirish
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="reminder-empty">Hozircha dori eslatmalari yo‘q. Birinchi eslatmani qo‘shing.</p>
+            )}
+            <p className="reminder-disclaimer">Eslatmalar faqat telefoningizda bildirishnomalarga ruxsat berilganida yuboriladi. Dori qabul qilish tartibini shifokor tavsiyasiga muvofiq belgilang.</p>
+          </section>
+        )}
+
         {activeTab === 'profile' && (
           <div className="profile-forms-stack">
+            <div className="patient-account-actions">
+              <div>
+                <strong>Hisobingiz</strong>
+                <p>Chiqmaguningizcha ushbu qurilmada profilingiz ochiq qoladi.</p>
+              </div>
+              <button
+                type="button"
+                className="patient-logout-button"
+                onClick={() => {
+                  logoutPatient()
+                  navigate('/patient-login', { replace: true })
+                }}
+              >
+                Chiqish
+              </button>
+            </div>
+
             <form className="patient-profile-form" onSubmit={handleProfileSave}>
               <div className="profile-grid">
                 <div className="form-group">

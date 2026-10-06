@@ -1,10 +1,10 @@
-const CACHE_NAME = "liza-pwa-v9";
+const CACHE_NAME = "liza-pwa-v11";
 const APP_FILES = [
     "./",
     "./index.html",
-    "./style.css?v=20261001-micdock",
+    "./style.css?v=20261004-internet-search-v1",
     "./orb-particles.js",
-    "./assistant-client.js?v=20261001-session9",
+    "./assistant-client.js?v=20261004-internet-search-v1",
     "./manifest.webmanifest",
     "./assets/img/pwa-192.png",
     "./assets/img/pwa-512.png"
