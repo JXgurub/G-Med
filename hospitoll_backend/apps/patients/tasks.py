@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from apps.site_settings.models import BroadcastNotification
 from .models import PatientMedicationReminder
+from .reminder_utils import next_scheduled_reminder_at
 
 
 REMINDER_MESSAGES = (
@@ -38,7 +39,9 @@ def send_due_medication_reminders():
             is_active=True,
         ).filter(
             Q(pending_dose_at__isnull=True, next_reminder_at__lte=now)
-            | Q(pending_dose_at__isnull=False, next_nudge_at__lte=now),
+            | Q(pending_dose_at__isnull=True, next_scheduled_reminder_at__lte=now)
+            | Q(pending_dose_at__isnull=False, next_nudge_at__lte=now)
+            | Q(pending_dose_at__isnull=False, next_scheduled_reminder_at__lte=now),
         ).order_by('next_reminder_at').values_list('pk', flat=True)[:100]
     )
     notification_ids = []
@@ -54,24 +57,58 @@ def send_due_medication_reminders():
                 )
                 .filter(
                     Q(pending_dose_at__isnull=True, next_reminder_at__lte=now)
-                    | Q(pending_dose_at__isnull=False, next_nudge_at__lte=now),
+                    | Q(pending_dose_at__isnull=True, next_scheduled_reminder_at__lte=now)
+                    | Q(pending_dose_at__isnull=False, next_nudge_at__lte=now)
+                    | Q(pending_dose_at__isnull=False, next_scheduled_reminder_at__lte=now),
                 )
                 .first()
             )
             if reminder is None:
                 continue
 
+            interval_due = (
+                reminder.next_reminder_at is not None
+                and reminder.next_reminder_at <= now
+            )
+            scheduled_due = (
+                reminder.next_scheduled_reminder_at is not None
+                and reminder.next_scheduled_reminder_at <= now
+            )
+            scheduled_dose_at = reminder.next_scheduled_reminder_at if scheduled_due else None
+            dose_is_pending = reminder.pending_dose_at is not None
+
+            if scheduled_due:
+                reminder.next_scheduled_reminder_at = next_scheduled_reminder_at(
+                    reminder.daily_times,
+                    after=now,
+                )
+                if (
+                    dose_is_pending
+                    and (reminder.next_nudge_at is None or reminder.next_nudge_at > now)
+                ):
+                    reminder.save(update_fields=[
+                        'next_scheduled_reminder_at',
+                        'updated_at',
+                    ])
+                    continue
+
             message_key, message = _build_reminder_message(reminder)
             if reminder.pending_dose_at is None:
-                interval = timedelta(hours=reminder.interval_hours)
-                missed_intervals = (now - reminder.next_reminder_at) // interval + 1
-                reminder.pending_dose_at = reminder.next_reminder_at
-                reminder.next_reminder_at += interval * missed_intervals
+                due_times = []
+                if interval_due:
+                    interval = timedelta(hours=reminder.interval_hours)
+                    missed_intervals = (now - reminder.next_reminder_at) // interval + 1
+                    due_times.append(reminder.next_reminder_at)
+                    reminder.next_reminder_at += interval * missed_intervals
+                if scheduled_due:
+                    due_times.append(scheduled_dose_at)
+                reminder.pending_dose_at = min(due_times)
                 reminder.acknowledgement_token = uuid4()
             reminder.next_nudge_at = now + timedelta(minutes=10)
             reminder.last_message_key = message_key
             reminder.save(update_fields=[
                 'next_reminder_at',
+                'next_scheduled_reminder_at',
                 'pending_dose_at',
                 'next_nudge_at',
                 'acknowledgement_token',

@@ -120,6 +120,29 @@ class ReceptionStatsAndThrottleTests(TestCase):
             status=status,
         )
 
+    def test_reception_staff_can_add_custom_doctor_specialty_price_in_own_clinic(self):
+        self.clinic.reception_room_enabled = True
+        self.clinic.save(update_fields=['reception_room_enabled'])
+
+        response = self.client.post(
+            '/api/v1/clinics/reception-staff/specialty-prices/',
+            {
+                'doctor_id': str(self.doctor.id),
+                'name': 'Qabulxona qo‘shimcha xizmati',
+                'consultation_fee': '75000',
+            },
+            format='json',
+            **self._reception_headers(),
+        )
+
+        self.assertEqual(response.status_code, 201)
+        specialty_price = DoctorSpecialization.objects.get(id=response.json()['id'])
+        self.assertEqual(specialty_price.doctor_id, self.doctor.id)
+        self.assertEqual(specialty_price.doctor.clinic_id, self.reception_staff.clinic_id)
+        self.assertTrue(specialty_price.doctor_custom)
+        self.assertEqual(specialty_price.custom_name, 'Qabulxona qo‘shimcha xizmati')
+        self.assertEqual(float(specialty_price.consultation_fee), 75000.0)
+
     def test_stats_monthly_revenue_stays_within_selected_month(self):
         report_date = date(2026, 8, 15)
 

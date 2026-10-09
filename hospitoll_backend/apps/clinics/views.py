@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
@@ -334,6 +334,62 @@ class ReceptionStaffViewSet(viewsets.ModelViewSet):
                 if item.get('doctor_custom') is True
             ]
         return Response(serialized_doctors)
+
+    @action(detail=False, methods=['post'], url_path='specialty-prices', permission_classes=[permissions.AllowAny])
+    def create_specialty_price(self, request):
+        staff = self._resolve_staff_from_session(request)
+        if not staff:
+            return Response({'detail': 'Reception sessiyasi yaroqsiz yoki tugagan.'}, status=status.HTTP_401_UNAUTHORIZED)
+        if not staff.clinic.reception_room_enabled:
+            return Response({'detail': 'Qabulxona funksiyasi yoqilmagan.'}, status=status.HTTP_403_FORBIDDEN)
+
+        from apps.doctors.models import Doctor, DoctorSpecialization, Specialization
+        from apps.doctors.serializers import DoctorSpecializationSerializer
+
+        doctor = Doctor.objects.filter(
+            id=request.data.get('doctor_id'),
+            clinic_id=staff.clinic_id,
+            is_active=True,
+        ).first()
+        if not doctor:
+            return Response({'detail': 'Doktor ushbu klinikada topilmadi.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        name = str(request.data.get('name') or '').strip()
+        if not name:
+            return Response({'detail': 'Ixtisoslik nomini kiriting.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(name) > 255:
+            return Response({'detail': 'Ixtisoslik nomi 255 belgidan oshmasin.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            price = Decimal(str(request.data.get('consultation_fee')))
+        except (InvalidOperation, TypeError, ValueError):
+            return Response({'detail': 'Narxni to‘g‘ri kiriting.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not price.is_finite() or price < 0:
+            return Response({'detail': 'Narx manfiy yoki noto‘g‘ri bo‘lishi mumkin emas.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        specialization = Specialization.objects.filter(name__iexact=name).first()
+        if not specialization:
+            base_code = ''.join(character for character in name.upper() if character.isalnum())[:12] or 'SPEC'
+            code = base_code
+            suffix = 1
+            while Specialization.objects.filter(code=code).exists():
+                suffix += 1
+                code = f'{base_code[:8]}{suffix}'
+            specialization = Specialization.objects.create(name=name, code=code, is_active=True)
+
+        if DoctorSpecialization.objects.filter(doctor=doctor, specialization=specialization).exists():
+            return Response({'detail': 'Bu ixtisoslik doktorda allaqachon mavjud.'}, status=status.HTTP_409_CONFLICT)
+
+        specialty_price = DoctorSpecialization.objects.create(
+            doctor=doctor,
+            specialization=specialization,
+            consultation_fee=price,
+            doctor_custom=True,
+            custom_name=name,
+            is_active=True,
+        )
+        return Response(DoctorSpecializationSerializer(specialty_price).data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=['get'], url_path='patients', permission_classes=[permissions.AllowAny], throttle_classes=[])
     def patients(self, request):
         staff = self._resolve_staff_from_session(request)

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { doctorsApi, receptionStaffApi, medicalApi, printersApi, normalizeUzPhoneWithPrefix } from '../services/api'
+import { api, doctorsApi, receptionStaffApi, medicalApi, printersApi, normalizeUzPhoneWithPrefix } from '../services/api'
 import './ReceptionDashboard.css'
+import './ReceptionDashboardPriceInput.css'
 
 const buildTempPatientNumber = () => `GM${Date.now().toString().slice(-8)}`
 
@@ -19,6 +20,8 @@ const formatPhoneInput = (digits) => {
   const p4 = d.slice(7, 9)
   return [p1, p2, p3, p4].filter(Boolean).join(' ')
 }
+
+const formatAmountInput = (value) => String(value || '').replace(/\B(?=(\d{3})+(?!\d))/g, ' ')
 
 const ReceptionDashboard = () => {
   const navigate = useNavigate()
@@ -61,6 +64,10 @@ const ReceptionDashboard = () => {
   const [onlineAppointments, setOnlineAppointments] = useState([])
   const [onlineAppointmentId, setOnlineAppointmentId] = useState('')
   const [showPrinterPanel, setShowPrinterPanel] = useState(false)
+  const [showSpecialtyPriceModal, setShowSpecialtyPriceModal] = useState(false)
+  const [specialtyPriceSaving, setSpecialtyPriceSaving] = useState(false)
+  const [specialtyPriceError, setSpecialtyPriceError] = useState('')
+  const [specialtyPriceForm, setSpecialtyPriceForm] = useState({ doctor_id: '', name: '', consultation_fee: '' })
   const [printerStatus, setPrinterStatus] = useState({ devices: [] })
   const [printerLoading, setPrinterLoading] = useState(false)
   const [printerTesting, setPrinterTesting] = useState(false)
@@ -343,6 +350,46 @@ const ReceptionDashboard = () => {
   const canCheckIn = !attendance.today_checked_in_at || attendance.today_checked_out_at
   const canCheckOut = Boolean(attendance.today_checked_in_at) && !attendance.today_checked_out_at
 
+  const openSpecialtyPriceModal = () => {
+    setSpecialtyPriceForm({
+      doctor_id: form.doctor || String(doctors[0]?.id || ''),
+      name: '',
+      consultation_fee: '',
+    })
+    setSpecialtyPriceError('')
+    setShowSpecialtyPriceModal(true)
+  }
+
+  const handleCreateSpecialtyPrice = async (event) => {
+    event.preventDefault()
+    setSpecialtyPriceSaving(true)
+    setSpecialtyPriceError('')
+    try {
+      const created = await api.request('/clinics/reception-staff/specialty-prices/', {
+        method: 'POST',
+        headers: {
+          'X-Reception-Session': localStorage.getItem('reception_session_token') || '',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(specialtyPriceForm),
+      })
+      const doctorData = await receptionStaffApi.getDoctors()
+      setDoctors(Array.isArray(doctorData) ? doctorData : doctorData?.results || [])
+      if (String(form.doctor) === String(specialtyPriceForm.doctor_id) && created?.id) {
+        setForm((previous) => ({
+          ...previous,
+          specialty_price_ids: Array.from(new Set([...previous.specialty_price_ids, String(created.id)])),
+        }))
+      }
+      setShowSpecialtyPriceModal(false)
+      setMessage('Qo‘shimcha ixtisoslik va narx saqlandi.')
+    } catch (error) {
+      setSpecialtyPriceError(error?.message || 'Ixtisoslik va narxni saqlab bo‘lmadi.')
+    } finally {
+      setSpecialtyPriceSaving(false)
+    }
+  }
+
   const persistPrinterToken = (token) => {
     const cleanToken = String(token || '').trim()
     if (!cleanToken) return
@@ -477,6 +524,9 @@ const ReceptionDashboard = () => {
           <button type="button" className="reception-printer-toggle" onClick={() => setShowPrinterPanel((prev) => !prev)}>
             Printer
           </button>
+          <button type="button" className="reception-printer-toggle" onClick={openSpecialtyPriceModal}>
+            Ixtisoslik va narx qo‘shish
+          </button>
           <button type="button" className="reception-checkin-btn" onClick={handleCheckIn} disabled={!canCheckIn || attendanceLoading}>Ishga keldim</button>
           <button type="button" className="reception-checkout-btn" onClick={handleCheckOut} disabled={!canCheckOut || attendanceLoading}>Ishdan ketdim</button>
           <button type="button" className="reception-logout-button" onClick={logout}>Chiqish</button>
@@ -551,6 +601,70 @@ const ReceptionDashboard = () => {
             </div>
           )}
         </section>
+      )}
+
+      {showSpecialtyPriceModal && (
+        <div className="reception-modal-overlay" onClick={() => setShowSpecialtyPriceModal(false)}>
+          <div className="reception-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>Qo‘shimcha ixtisoslik va narx</h3>
+            <p className="reception-modal-subtitle">Ixtisoslik tanlangan doktorga biriktiriladi va qabulga yozilishda ko‘rinadi.</p>
+            <form onSubmit={handleCreateSpecialtyPrice}>
+              <div className="reception-modal-details">
+                <label>
+                  Doktor
+                  <select
+                    className="reception-patient-search"
+                    required
+                    value={specialtyPriceForm.doctor_id}
+                    onChange={(event) => setSpecialtyPriceForm((previous) => ({ ...previous, doctor_id: event.target.value }))}
+                  >
+                    <option value="">Doktorni tanlang</option>
+                    {doctors.map((doctor) => (
+                      <option key={doctor.id} value={doctor.id}>{doctor.user?.first_name} {doctor.user?.last_name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Ixtisoslik nomi
+                  <input
+                    className="reception-patient-search"
+                    required
+                    maxLength={255}
+                    value={specialtyPriceForm.name}
+                    onChange={(event) => setSpecialtyPriceForm((previous) => ({ ...previous, name: event.target.value }))}
+                    placeholder="Masalan: Fizioterapiya"
+                  />
+                </label>
+                <label>
+                  Narx (so‘m)
+                  <div className="reception-currency-input">
+                    <input
+                      required
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      value={formatAmountInput(specialtyPriceForm.consultation_fee)}
+                      onChange={(event) => setSpecialtyPriceForm((previous) => ({
+                        ...previous,
+                        consultation_fee: event.target.value.replace(/\D/g, ''),
+                      }))}
+                      placeholder="75 000"
+                      aria-label="Narx so‘mda"
+                    />
+                    <span>so‘m</span>
+                  </div>
+                </label>
+              </div>
+              {specialtyPriceError && <div className="reception-dashboard-message">{specialtyPriceError}</div>}
+              <div className="reception-modal-actions">
+                <button type="submit" className="reception-modal-primary" disabled={specialtyPriceSaving || doctors.length === 0}>
+                  {specialtyPriceSaving ? 'Saqlanmoqda...' : 'Saqlash'}
+                </button>
+                <button type="button" className="reception-modal-secondary" onClick={() => setShowSpecialtyPriceModal(false)} disabled={specialtyPriceSaving}>Bekor qilish</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {showReportPanel && (

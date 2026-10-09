@@ -31,9 +31,18 @@ const formatFileSize = (bytes) => {
 const HEALTH_INDICATOR_RANGES = {
   "glukoza": { min: 3.9, max: 5.5, unit: "mmol/L" },
   "gemoglobin": { min: 120, max: 160, unit: "g/L" },
+  "hemoglobin": { min: 120, max: 160, unit: "g/L" },
+  "hb": { min: 120, max: 160, unit: "g/L" },
   "oq qon": { min: 4.5, max: 11.0, unit: "×10⁹/L" },
+  "leykotsit": { min: 4.0, max: 10.0, unit: "×10⁹/L" },
+  "leukocyte": { min: 4.0, max: 10.0, unit: "×10⁹/L" },
+  "wbc": { min: 4.0, max: 10.0, unit: "×10⁹/L" },
   "qizil qon": { min: 4.5, max: 5.5, unit: "×10¹²/L" },
+  "eritrotsit": { min: 4.0, max: 5.5, unit: "×10¹²/L" },
+  "rbc": { min: 4.0, max: 5.5, unit: "×10¹²/L" },
   "trombosit": { min: 150, max: 400, unit: "×10⁹/L" },
+  "plt": { min: 150, max: 400, unit: "×10⁹/L" },
+  "esr": { min: 0, max: 20, unit: "mm/soat" },
   "hematokrit": { min: 35, max: 45, unit: "%" },
   "xolesterin": { min: 0, max: 5.18, unit: "mmol/L" },
   "triglicerid": { min: 0, max: 1.7, unit: "mmol/L" },
@@ -43,45 +52,236 @@ const HEALTH_INDICATOR_RANGES = {
   "ureia": { min: 2.5, max: 7.1, unit: "mmol/L" },
 }
 
+const PARASITOLOGY_INDICATORS = [
+  { name: "Ichak amyobasi", keys: ["entamoeba coli", "ichak amyobasi"] },
+  { name: "Dizenteriya amyobasi", keys: ["entamoeba histolytica", "dizenteriya amyobasi"] },
+  { name: "Lyambliya", keys: ["lamblia intestinalis", "giardia intestinalis", "giardia lamblia", "lyambliya"] },
+  { name: "Trichomonada", keys: ["trichomonas", "trixomonada", "trichomonada"] },
+  { name: "Ostritsa", keys: ["enterobius vermicularis", "ostritsa", "enterobius"] },
+  { name: "Askarida", keys: ["ascaris lumbricoides", "askarida", "ascaris"] },
+  { name: "Kuchuk askaridasi", keys: ["toxocara canis", "kuchuk askaridasi"] },
+  { name: "Mushuk askaridasi", keys: ["toxocara cati", "mushuk askaridasi"] },
+  { name: "Ankilostoma", keys: ["ancylostoma", "ankilostoma"] },
+  { name: "Qilbosh gijja", keys: ["trichocephalus", "trichuris trichiura", "qilbosh gijja"] },
+  { name: "Cho'chqa tasmasi", keys: ["taenia solium", "cho'chqa tasmasi"] },
+  { name: "Qoramol tasmasi", keys: ["taeniarhynchus", "taenia saginata", "qoramol tasmasi"] },
+  { name: "Pakana gijja", keys: ["hymenolepis nana", "pakana gijja"] },
+  { name: "Kalamush tasmasi", keys: ["hymenolepis diminuta", "kalamush tasmasi"] },
+  { name: "Keng lentasimon gijja", keys: ["diphyllobothrium", "keng lentasimon gijja"] },
+  { name: "Jigar so'rg'ichi", keys: ["fasciola hepatica", "jigar so'rg'ichi"] },
+  { name: "Shistosoma", keys: ["schistosoma", "shistosoma"] },
+  { name: "Lansetsimon so'rg'ich", keys: ["dicrocoelium", "lansetsimon"] },
+  { name: "Miaz", keys: ["miaz", "myiasis"] },
+  { name: "Echinococcus", keys: ["echinococcus", "exinokokk"] },
+]
+
+const normalizeAnalysisText = (text) => text
+  .toLowerCase()
+  .replace(/ё/g, 'е')
+  .replace(/ʻ|ʼ|’|`/g, "'")
+
 const parseHealthIndicators = (text) => {
   if (!text) return []
   const lines = text.split('\n')
   const indicators = []
 
-  lines.forEach((line) => {
-    const match = line.match(/([a-zA-Z0-9\s]+?)[:\s]+\*?(\d+(?:\.\d+)?)\s*([a-zA-Z/°\-].*?)(?:\s*\(|$)/i)
-    if (!match) return
+  lines.forEach((sourceLine) => {
+    const line = sourceLine
+      .replace(/[*_`]/g, '')
+      .replace(/^\s*[-•]\s*/, '')
+      .replace(/^\s*\d{1,2}\s*[.)]\s*/, '')
+      .trim()
+    if (!line) return
 
-    const name = match[1].trim()
-    const value = parseFloat(match[2])
-    const unit = (match[3] || "").trim()
-
-    const nameLower = name.toLowerCase()
-    const key = Object.keys(HEALTH_INDICATOR_RANGES).find((k) =>
-      nameLower.includes(k) || k.includes(nameLower.split(" ")[0])
+    const normalizedLine = normalizeAnalysisText(line)
+    const healthKey = Object.keys(HEALTH_INDICATOR_RANGES).find((key) =>
+      normalizedLine.includes(key)
     )
 
-    if (key && !isNaN(value)) {
-      const range = HEALTH_INDICATOR_RANGES[key]
+    if (healthKey) {
+      const valueMatch = line.match(/[+-]?\d+(?:[.,]\d+)?/)
+      if (!valueMatch || valueMatch.index === undefined) return
+
+      const name = line.slice(0, valueMatch.index).replace(/[:：\-–—]\s*$/, '').trim()
+      const value = Number(valueMatch[0].replace(',', '.'))
+      if (!name || !Number.isFinite(value)) return
+
+      const range = HEALTH_INDICATOR_RANGES[healthKey]
+      const restOfLine = line.slice(valueMatch.index + valueMatch[0].length)
+      const referenceRangeMatch = restOfLine.match(
+        /\(\s*(?:[^)]*?(?:me['’]?yor|normal|referens|reference)[^)]*?)?([+-]?\d+(?:[.,]\d+)?)\s*[-–—]\s*([+-]?\d+(?:[.,]\d+)?)/i
+      )
+      const minNormal = referenceRangeMatch
+        ? Number(referenceRangeMatch[1].replace(',', '.'))
+        : range.min
+      const maxNormal = referenceRangeMatch
+        ? Number(referenceRangeMatch[2].replace(',', '.'))
+        : range.max
+      const unitMatch = restOfLine.match(
+        /^\s*((?:[×x]\s*)?10(?:\^[⁰-⁹0-9]+)?\/[a-zA-Zµμ⁰-⁹0-9]+|[a-zA-Zµμ%°][a-zA-Zµμ%°/⁰-⁹0-9^]*)/u
+      )
+      const unit = unitMatch?.[1]?.replace(/\s+/g, '') || range.unit
+
       let status = "normal"
-      if (value < range.min * 0.9 || value > range.max * 1.1) {
+      if (value < minNormal * 0.9 || value > maxNormal * 1.1) {
         status = "critical"
-      } else if (value < range.min * 0.95 || value > range.max * 1.05) {
+      } else if (value < minNormal * 0.95 || value > maxNormal * 1.05) {
         status = "warning"
       }
 
       indicators.push({
         name,
         value,
-        unit: unit || range.unit,
-        minNormal: range.min,
-        maxNormal: range.max,
+        unit,
+        minNormal,
+        maxNormal,
         status,
+        kind: "quantitative",
       })
+      return
     }
+
+    const parasite = PARASITOLOGY_INDICATORS
+      .flatMap((indicator) => indicator.keys.map((key) => ({ indicator, key })))
+      .sort((a, b) => b.key.length - a.key.length)
+      .find(({ key }) => normalizedLine.includes(key))
+    if (!parasite) return
+
+    const parasiteText = normalizedLine.slice(normalizedLine.indexOf(parasite.key) + parasite.key.length)
+    const resultText = parasiteText.split(/\b(?:me['’]?yor|normal|referens|reference|norma)\b/i)[0]
+    const positiveResult = /(?:\b(?:ijobiy|musbat|positive|topildi|aniqlandi)\b|\+\s*\d*(?:[.,]\d+)?|\b\d+(?:[.,]\d+)?\s*(?:ta|dona|sht)?\b)/i.test(resultText)
+    const negativeResult = /(?:\b(?:manfiy|negative|aniqlanmadi|topilmadi|yo'q|yoq|bo'lmaydi|mavjud emas|not detected|absent)\b|-\s*(?:\d|$))/i.test(resultText)
+    if (!positiveResult && !negativeResult) return
+
+    const positiveCount = resultText.match(/\+\s*(\d+(?:[.,]\d+)?)/)
+      || resultText.match(/\b(\d+(?:[.,]\d+)?)\s*(?:ta|dona|sht)\b/)
+    const result = negativeResult
+      ? "Aniqlanmadi"
+      : positiveCount
+        ? `+${positiveCount[1].replace(',', '.')}`
+        : "Aniqlandi"
+
+    indicators.push({
+      name: parasite.indicator.name,
+      value: result,
+      unit: "",
+      minNormal: null,
+      maxNormal: null,
+      status: negativeResult ? "normal" : "warning",
+      kind: "qualitative",
+      result,
+    })
   })
 
   return indicators
+}
+
+const extractAiConclusion = (text) => {
+  if (!text) return ''
+
+  const conclusion = []
+  let readingConclusion = false
+  const lines = text.split(/\r?\n/)
+
+  for (const sourceLine of lines) {
+    const line = sourceLine
+      .replace(/[*_`]/g, '')
+      .replace(/^\s*-{2,}\s*|\s*-{2,}\s*$/g, '')
+      .trim()
+
+    if (!readingConclusion && /(?:qisqa|umumiy|ai)\s+xulosa/i.test(line)) {
+      readingConclusion = true
+      const content = line.replace(/.*?(?:qisqa|umumiy|ai)\s+xulosa/i, '').replace(/^[:\s-]+/, '').trim()
+      if (content) conclusion.push(content)
+      continue
+    }
+
+    if (readingConclusion && /^(?:muhim topilmalar|nima qilish kerak|tavsiyalar|important findings|what to do)\b/i.test(line)) {
+      break
+    }
+
+    if (readingConclusion && line) conclusion.push(line)
+  }
+
+  return conclusion.join(' ').trim()
+}
+
+const getGaugePoint = (ratio) => {
+  const angle = Math.PI * (1 - ratio)
+  return {
+    x: 50 + 38 * Math.cos(angle),
+    y: 48 - 38 * Math.sin(angle),
+  }
+}
+
+const getIndicatorIcon = (name) => {
+  const normalizedName = name.toLowerCase()
+  if (PARASITOLOGY_INDICATORS.some((indicator) => indicator.name.toLowerCase() === normalizedName)) return '🦠'
+  if (normalizedName.includes('gemoglobin')) return '🩸'
+  if (normalizedName.includes('eritrotsit')) return '🔴'
+  if (normalizedName.includes('leykotsit')) return '🟣'
+  if (normalizedName.includes('trombosit')) return '🟡'
+  return '🧪'
+}
+
+const IndicatorGauge = ({ indicator }) => {
+  if (indicator.kind === "qualitative") {
+    const detected = indicator.status !== "normal"
+    const resultLabel = detected ? "Aniqlandi" : "Aniqlanmadi"
+
+    return (
+      <article className={`indicator-chart-card qualitative ${indicator.status}`}>
+        <div className="indicator-chart-heading">
+          <span className="indicator-chart-icon" aria-hidden="true">{getIndicatorIcon(indicator.name)}</span>
+          <span className="indicator-chart-name">{indicator.name}</span>
+        </div>
+        <div className={`qualitative-result-visual ${detected ? 'detected' : 'not-detected'}`}>
+          <span aria-hidden="true">{detected ? '!' : '✓'}</span>
+          <strong>{indicator.result}</strong>
+        </div>
+        <div className={`indicator-chart-status ${indicator.status}`}>{resultLabel}</div>
+        <div className="indicator-chart-range">Me'yor: aniqlanmasligi kerak</div>
+      </article>
+    )
+  }
+
+  const range = indicator.maxNormal - indicator.minNormal
+  const scaleMin = indicator.minNormal - range * 0.5
+  const scaleMax = indicator.maxNormal + range * 0.5
+  const valueRatio = Math.max(0, Math.min(1, (indicator.value - scaleMin) / (scaleMax - scaleMin)))
+  const valuePoint = getGaugePoint(valueRatio)
+  const rangeStart = getGaugePoint(0.25)
+  const rangeEnd = getGaugePoint(0.75)
+  const statusLabel = indicator.status === 'normal'
+    ? "Me'yorida"
+    : indicator.value < indicator.minNormal ? 'Past' : 'Yuqori'
+
+  return (
+    <article className={`indicator-chart-card ${indicator.status}`}>
+      <div className="indicator-chart-heading">
+        <span className="indicator-chart-icon" aria-hidden="true">{getIndicatorIcon(indicator.name)}</span>
+        <span className="indicator-chart-name">{indicator.name}</span>
+      </div>
+      <div className="indicator-gauge" role="img" aria-label={`${indicator.name}: ${indicator.value} ${indicator.unit}; me'yor ${indicator.minNormal} dan ${indicator.maxNormal} gacha`}>
+        <svg viewBox="0 0 100 58" aria-hidden="true">
+          <path className="gauge-track" d="M 12 48 A 38 38 0 0 1 88 48" />
+          <path
+            className="gauge-normal-range"
+            d={`M ${rangeStart.x} ${rangeStart.y} A 38 38 0 0 1 ${rangeEnd.x} ${rangeEnd.y}`}
+          />
+          <circle className="gauge-value-marker" cx={valuePoint.x} cy={valuePoint.y} r="3.2" />
+        </svg>
+        <div className="gauge-reading">
+          <strong>{indicator.value}</strong>
+          <span>{indicator.unit}</span>
+        </div>
+      </div>
+      <div className={`indicator-chart-status ${indicator.status}`}>{statusLabel}</div>
+      <div className="indicator-chart-range">
+        {indicator.minNormal} – {indicator.maxNormal} {indicator.unit}
+      </div>
+    </article>
+  )
 }
 
 const AnalysisPage = () => {
@@ -329,6 +529,10 @@ const AnalysisPage = () => {
   }
 
   const indicators = currentAnalysis ? parseHealthIndicators(currentAnalysis.result_text) : []
+  const normalIndicators = indicators.filter((indicator) => indicator.status === 'normal').length
+  const attentionIndicators = indicators.length - normalIndicators
+  const normalPercentage = indicators.length ? Math.round((normalIndicators / indicators.length) * 100) : 0
+  const aiConclusion = currentAnalysis ? extractAiConclusion(currentAnalysis.result_text) : ''
 
   return (
     <div className="analysis-page">
@@ -487,48 +691,86 @@ const AnalysisPage = () => {
                 </div>
               ) : (
                 <>
-                  {/* Indicators Chart / List if parsed */}
-                  {indicators.length > 0 && (
-                    <div className="indicators-section">
-                      <h3>📈 Aniqlangan Salomatlik Ko'rsatkichlari</h3>
-                      <div className="indicators-grid">
-                        {indicators.map((ind, idx) => (
-                          <div key={idx} className={`indicator-card ${ind.status}`}>
-                            <div className="ind-header">
-                              <span className="ind-name">{ind.name}</span>
-                              <span className={`ind-badge ${ind.status}`}>
-                                {ind.status === 'normal' ? 'ME\'YORDA' : ind.status === 'warning' ? 'OGOHLANTIRISH' : 'XAVFLI'}
-                              </span>
-                            </div>
-                            <div className="ind-value-box">
-                              <strong>{ind.value}</strong> <small>{ind.unit}</small>
-                            </div>
-                            <div className="ind-range">
-                              Normal diapazon: {ind.minNormal} - {ind.maxNormal} {ind.unit}
+                  {indicators.length > 0 ? (
+                    <div className="analysis-visual-report">
+                      <section className="analysis-overview" aria-label="Tahlilning umumiy holati">
+                        <div className={`overview-condition ${attentionIndicators ? 'attention' : ''}`}>
+                          <span className="overview-condition-icon" aria-hidden="true">
+                            {attentionIndicators ? '!' : '✓'}
+                          </span>
+                          <div>
+                            <span className="overview-label">Umumiy holat</span>
+                            <strong>{attentionIndicators ? 'DIQQAT' : 'YAXSHI'}</strong>
+                            <small>
+                              {attentionIndicators
+                                ? `${attentionIndicators} ta ko'rsatkich me'yordan tashqarida`
+                                : "Barcha ko'rsatkichlar me'yorida"}
+                            </small>
+                          </div>
+                        </div>
+                        <div className="overview-score">
+                          <div
+                            className={`overview-score-ring ${attentionIndicators ? 'attention' : ''}`}
+                            role="img"
+                            aria-label={`${normalPercentage}% ko'rsatkich me'yorida`}
+                          >
+                            <strong>{normalPercentage}%</strong>
+                          </div>
+                          <div>
+                            <strong>Tahlil ko'rsatkichlari</strong>
+                            <span>{normalIndicators} / {indicators.length} ko'rsatkich me'yorida</span>
+                            <div className="overview-progress">
+                              <span style={{ width: `${normalPercentage}%` }} />
                             </div>
                           </div>
-                        ))}
+                        </div>
+                        <div className="overview-legend" aria-label="Ko'rsatkichlar taqsimoti">
+                          <div><span className="legend-dot normal" />Me'yorida<strong>{normalIndicators}</strong></div>
+                          <div><span className="legend-dot attention" />Diqqat<strong>{attentionIndicators}</strong></div>
+                        </div>
+                      </section>
+
+                      <section className="indicators-section">
+                        <h3>📊 Tahlil ko'rsatkichlari</h3>
+                        <div className="indicators-grid">
+                          {indicators.map((indicator, idx) => (
+                            <IndicatorGauge key={`${indicator.name}-${idx}`} indicator={indicator} />
+                          ))}
+                        </div>
+                      </section>
+
+                      <section className={`analysis-summary ${attentionIndicators ? 'attention' : ''}`}>
+                        <span className="analysis-summary-icon" aria-hidden="true">
+                          {attentionIndicators ? '📋' : '✅'}
+                        </span>
+                        <div>
+                          <strong>AI XULOSASI</strong>
+                          <p>
+                            {aiConclusion || (attentionIndicators
+                              ? `${indicators.length} ta ko'rsatkichdan ${attentionIndicators} tasi laboratoriya me'yoridan farq qiladi. Natijalarni shifokor bilan muhokama qiling.`
+                              : `Aniqlangan ${indicators.length} ta ko'rsatkich laboratoriya me'yoriy chegaralarida.`)}
+                          </p>
+                        </div>
+                      </section>
+                    </div>
+                  ) : (
+                    <div className="result-text-card analysis-text-fallback">
+                      <h3>📑 Shifokor AI Xulosasi va Tavsiyalar</h3>
+                      <div className="result-formatted-text">
+                        {currentAnalysis.result_text ? (
+                          currentAnalysis.result_text.split(/\r?\n\s*\r?\n/).map((paragraph, idx) => (
+                            <div key={idx} className="result-paragraph">
+                              {paragraph.split(/\r?\n/).map((line, lineIdx) => (
+                                <p key={lineIdx}>{line}</p>
+                              ))}
+                            </div>
+                          ))
+                        ) : (
+                          <p>Xulosa matni mavjud emas.</p>
+                        )}
                       </div>
                     </div>
                   )}
-
-                  {/* Complete AI Result Text Box */}
-                  <div className="result-text-card">
-                    <h3>📑 Shifokor AI Xulosasi va Tavsiyalar</h3>
-                    <div className="result-formatted-text">
-                      {currentAnalysis.result_text ? (
-                        currentAnalysis.result_text.split('\n\n').map((paragraph, idx) => (
-                          <div key={idx} className="result-paragraph">
-                            {paragraph.split('\n').map((line, lIdx) => (
-                              <p key={lIdx}>{line}</p>
-                            ))}
-                          </div>
-                        ))
-                      ) : (
-                        <p>Xulosa matni mavjud emas.</p>
-                      )}
-                    </div>
-                  </div>
                 </>
               )}
 

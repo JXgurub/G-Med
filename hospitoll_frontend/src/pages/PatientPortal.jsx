@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { usePatient } from '../context/PatientContext'
 import { patientsApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
+import DietTables from './DietTables'
 import './PatientPortal.css'
 
 const PHARMACY_PRESCRIPTION_KEY = 'gmed-pharmacy-prescription-search'
@@ -70,7 +71,19 @@ const PatientPortal = () => {
   const [loadingReminders, setLoadingReminders] = useState(false)
   const [savingReminder, setSavingReminder] = useState(false)
   const [reminderError, setReminderError] = useState('')
-  const [reminderForm, setReminderForm] = useState({ medicationName: '', intervalHours: '8' })
+  const [editingReminderId, setEditingReminderId] = useState(null)
+  const [editingReminderScheduleType, setEditingReminderScheduleType] = useState('interval')
+  const [editingReminderIntervalHours, setEditingReminderIntervalHours] = useState('8')
+  const [editingReminderTimes, setEditingReminderTimes] = useState([])
+  const [editingReminderTimeInput, setEditingReminderTimeInput] = useState('08:00')
+  const [savingReminderTimes, setSavingReminderTimes] = useState(false)
+  const [reminderForm, setReminderForm] = useState({
+    medicationName: '',
+    scheduleType: 'interval',
+    intervalHours: '8',
+    dailyTimes: [],
+    dailyTimeInput: '08:00'
+  })
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
     newPassword: '',
@@ -178,27 +191,95 @@ const PatientPortal = () => {
 
   const handleReminderCreate = async (event) => {
     event.preventDefault()
+    if (reminderForm.scheduleType === 'daily' && reminderForm.dailyTimes.length === 0) {
+      setReminderError('Kamida bitta aniq eslatma vaqtini qo‘shing.')
+      return
+    }
     setSavingReminder(true)
     setReminderError('')
     try {
       const reminder = await patientsApi.createMedicationReminder({
         medication_name: reminderForm.medicationName.trim(),
-        interval_hours: Number(reminderForm.intervalHours)
+        interval_hours: reminderForm.scheduleType === 'interval'
+          ? Number(reminderForm.intervalHours)
+          : null,
+        daily_times: reminderForm.scheduleType === 'daily' ? reminderForm.dailyTimes : []
       })
       setMedicationReminders((current) => [...current, reminder].sort(
-        (first, second) => new Date(first.next_reminder_at) - new Date(second.next_reminder_at)
+        (first, second) => new Date(first.next_reminder_at || first.next_scheduled_reminder_at)
+          - new Date(second.next_reminder_at || second.next_scheduled_reminder_at)
       ))
-      setReminderForm({ medicationName: '', intervalHours: '8' })
+      setReminderForm({
+        medicationName: '',
+        scheduleType: 'interval',
+        intervalHours: '8',
+        dailyTimes: [],
+        dailyTimeInput: '08:00'
+      })
     } catch (error) {
       const details = error?.response?.data
       setReminderError(
         details?.medication_name?.[0]
         || details?.interval_hours?.[0]
+        || details?.daily_times?.[0]
+        || details?.non_field_errors?.[0]
         || details?.detail
         || 'Dori eslatmasini saqlashda xatolik yuz berdi.'
       )
     } finally {
       setSavingReminder(false)
+    }
+  }
+
+  const handleAddReminderTime = () => {
+    const time = reminderForm.dailyTimeInput
+    if (!time || reminderForm.dailyTimes.includes(time)) return
+    setReminderForm((current) => ({
+      ...current,
+      dailyTimes: [...current.dailyTimes, time].sort()
+    }))
+  }
+
+  const handleRemoveReminderTime = (time) => {
+    setReminderForm((current) => ({
+      ...current,
+      dailyTimes: current.dailyTimes.filter((item) => item !== time)
+    }))
+  }
+
+  const startEditingReminderTimes = (reminder) => {
+    setReminderError('')
+    setEditingReminderId(reminder.id)
+    setEditingReminderScheduleType(reminder.interval_hours == null ? 'daily' : 'interval')
+    setEditingReminderIntervalHours(String(reminder.interval_hours || 8))
+    setEditingReminderTimes(reminder.daily_times || [])
+    setEditingReminderTimeInput('08:00')
+  }
+
+  const handleSaveReminderTimes = async (reminderId) => {
+    setSavingReminderTimes(true)
+    setReminderError('')
+    try {
+      const updated = await patientsApi.updateMedicationReminder(reminderId, {
+        interval_hours: editingReminderScheduleType === 'interval'
+          ? Number(editingReminderIntervalHours)
+          : null,
+        daily_times: editingReminderScheduleType === 'daily' ? editingReminderTimes : []
+      })
+      setMedicationReminders((current) => current.map((item) => item.id === updated.id ? updated : item))
+      setEditingReminderId(null)
+      setEditingReminderTimes([])
+    } catch (error) {
+      const details = error?.response?.data
+      setReminderError(
+        details?.daily_times?.[0]
+        || details?.interval_hours?.[0]
+        || details?.non_field_errors?.[0]
+        || details?.detail
+        || 'Dori ichish vaqtlarini saqlab bo‘lmadi.'
+      )
+    } finally {
+      setSavingReminderTimes(false)
     }
   }
 
@@ -353,6 +434,13 @@ const PatientPortal = () => {
           </button>
           <button
             type="button"
+            className={`tab-btn ${activeTab === 'diet-tables' ? 'active' : ''}`}
+            onClick={() => setActiveTab('diet-tables')}
+          >
+            Parhez stollari 🥗
+          </button>
+          <button
+            type="button"
             className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`}
             onClick={() => setActiveTab('profile')}
           >
@@ -476,7 +564,7 @@ const PatientPortal = () => {
             <div className="reminders-heading">
               <div>
                 <h3 className="password-form-title">Dorilarni eslatish 💊</h3>
-                <p>Intervalni soatlarda belgilang. Birinchi eslatma shu vaqt o‘tgach keladi, keyingilari takrorlanadi.</p>
+                <p>Dori ichish tartibini tanlang: interval bo‘yicha yoki har kuni belgilangan aniq vaqtlarda. Ikkalasi bir vaqtda qo‘llanmaydi.</p>
               </div>
               <span className="reminder-push-status">
                 Telefon bildirishnomalari uchun brauzer ruxsati kerak
@@ -498,19 +586,85 @@ const PatientPortal = () => {
                   required
                 />
               </div>
-              <div className="form-group">
-                <label htmlFor="reminder-interval-hours">Ichish oralig‘i (soat)</label>
-                <input
-                  id="reminder-interval-hours"
-                  type="number"
-                  value={reminderForm.intervalHours}
-                  onChange={(event) => setReminderForm((current) => ({ ...current, intervalHours: event.target.value }))}
-                  min="1"
-                  max="168"
-                  step="1"
-                  required
-                />
-              </div>
+              <fieldset className="reminder-schedule-choice">
+                <legend>Eslatma tartibi</legend>
+                <label>
+                  <input
+                    type="radio"
+                    name="reminder-schedule-type"
+                    value="interval"
+                    checked={reminderForm.scheduleType === 'interval'}
+                    onChange={() => setReminderForm((current) => ({ ...current, scheduleType: 'interval' }))}
+                  />
+                  <span>Har necha soatda</span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="reminder-schedule-type"
+                    value="daily"
+                    checked={reminderForm.scheduleType === 'daily'}
+                    onChange={() => setReminderForm((current) => ({ ...current, scheduleType: 'daily' }))}
+                  />
+                  <span>Har kuni aniq vaqtda</span>
+                </label>
+              </fieldset>
+              {reminderForm.scheduleType === 'interval' ? (
+                <div className="form-group">
+                  <label htmlFor="reminder-interval-hours">Ichish oralig‘i (soat)</label>
+                  <input
+                    id="reminder-interval-hours"
+                    type="number"
+                    value={reminderForm.intervalHours}
+                    onChange={(event) => setReminderForm((current) => ({ ...current, intervalHours: event.target.value }))}
+                    min="1"
+                    max="168"
+                    step="1"
+                    required
+                  />
+                </div>
+              ) : (
+                <div className="form-group reminder-daily-times-field">
+                  <label htmlFor="reminder-daily-time">Kunlik ichish vaqtlari</label>
+                  <div className="reminder-time-input-row">
+                    <input
+                      id="reminder-daily-time"
+                      type="time"
+                      value={reminderForm.dailyTimeInput}
+                      onChange={(event) => setReminderForm((current) => ({
+                        ...current,
+                        dailyTimeInput: event.target.value
+                      }))}
+                    />
+                    <button
+                      type="button"
+                      className="history-action-btn history-action-btn-ghost"
+                      onClick={handleAddReminderTime}
+                      disabled={!reminderForm.dailyTimeInput || reminderForm.dailyTimes.includes(reminderForm.dailyTimeInput)}
+                    >
+                      Vaqt qo‘shish
+                    </button>
+                  </div>
+                  {reminderForm.dailyTimes.length > 0 ? (
+                    <div className="reminder-time-list" aria-label="Tanlangan kunlik eslatma vaqtlari">
+                      {reminderForm.dailyTimes.map((time) => (
+                        <span className="reminder-time-chip" key={time}>
+                          🕒 {time}
+                          <button
+                            type="button"
+                            aria-label={`${time} vaqtini olib tashlash`}
+                            onClick={() => handleRemoveReminderTime(time)}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="reminder-time-hint">Masalan, har kuni 08:00 va 20:00 da.</span>
+                  )}
+                </div>
+              )}
               <div className="reminder-form-action">
                 <button type="submit" className="save-profile-btn" disabled={savingReminder}>
                   {savingReminder ? 'Saqlanmoqda...' : 'Eslatma qo‘shish'}
@@ -526,10 +680,31 @@ const PatientPortal = () => {
                   <article className={`reminder-card ${reminder.is_active ? '' : 'paused'}`} key={reminder.id}>
                     <div className="reminder-card-info">
                       <strong>💊 {reminder.medication_name}</strong>
-                      <span>Har {reminder.interval_hours} soatda</span>
-                      <span>{reminder.is_active ? `Keyingi eslatma: ${formatReminderDate(reminder.next_reminder_at)}` : 'Eslatma vaqtincha to‘xtatilgan'}</span>
+                      {reminder.interval_hours != null ? (
+                        <span>Har {reminder.interval_hours} soatda</span>
+                      ) : (
+                        <>
+                          <span>Har kuni: {reminder.daily_times?.join(', ')}</span>
+                          <span>Keyingi eslatma: {formatReminderDate(reminder.next_scheduled_reminder_at)}</span>
+                        </>
+                      )}
+                      {reminder.interval_hours != null && (
+                        <span>Keyingi eslatma: {reminder.is_active ? formatReminderDate(reminder.next_reminder_at) : 'Eslatma vaqtincha to‘xtatilgan'}</span>
+                      )}
+                      {!reminder.is_active && reminder.interval_hours == null && (
+                        <span>Eslatma vaqtincha to‘xtatilgan</span>
+                      )}
                     </div>
                     <div className="reminder-actions">
+                      <button
+                        type="button"
+                        className="history-action-btn history-action-btn-ghost"
+                        onClick={() => editingReminderId === reminder.id
+                          ? setEditingReminderId(null)
+                          : startEditingReminderTimes(reminder)}
+                      >
+                        {editingReminderId === reminder.id ? 'Yopish' : 'Soatlarni sozlash'}
+                      </button>
                       <button type="button" className="history-action-btn history-action-btn-ghost" onClick={() => handleReminderToggle(reminder)}>
                         {reminder.is_active ? 'To‘xtatish' : 'Davom ettirish'}
                       </button>
@@ -537,6 +712,103 @@ const PatientPortal = () => {
                         O‘chirish
                       </button>
                     </div>
+                    {editingReminderId === reminder.id && (
+                      <div className="reminder-schedule-editor">
+                        <strong>Eslatma tartibi</strong>
+                        <div className="reminder-schedule-choice">
+                          <label>
+                            <input
+                              type="radio"
+                              name={`reminder-schedule-type-${reminder.id}`}
+                              value="interval"
+                              checked={editingReminderScheduleType === 'interval'}
+                              onChange={() => setEditingReminderScheduleType('interval')}
+                            />
+                            <span>Har necha soatda</span>
+                          </label>
+                          <label>
+                            <input
+                              type="radio"
+                              name={`reminder-schedule-type-${reminder.id}`}
+                              value="daily"
+                              checked={editingReminderScheduleType === 'daily'}
+                              onChange={() => setEditingReminderScheduleType('daily')}
+                            />
+                            <span>Har kuni aniq vaqtda</span>
+                          </label>
+                        </div>
+                        {editingReminderScheduleType === 'interval' ? (
+                          <div className="form-group">
+                            <label htmlFor={`reminder-edit-interval-${reminder.id}`}>Ichish oralig‘i (soat)</label>
+                            <input
+                              id={`reminder-edit-interval-${reminder.id}`}
+                              type="number"
+                              min="1"
+                              max="168"
+                              step="1"
+                              value={editingReminderIntervalHours}
+                              onChange={(event) => setEditingReminderIntervalHours(event.target.value)}
+                            />
+                          </div>
+                        ) : (
+                        <>
+                        <p>Kunlik eslatma vaqtlarini tanlang. Toshkent vaqti bo‘yicha ishlaydi.</p>
+                        <div className="reminder-time-input-row">
+                          <input
+                            type="time"
+                            aria-label="Yangi kunlik eslatma vaqti"
+                            value={editingReminderTimeInput}
+                            onChange={(event) => setEditingReminderTimeInput(event.target.value)}
+                          />
+                          <button
+                            type="button"
+                            className="history-action-btn history-action-btn-ghost"
+                            disabled={!editingReminderTimeInput || editingReminderTimes.includes(editingReminderTimeInput)}
+                            onClick={() => {
+                              setEditingReminderTimes((current) => [...current, editingReminderTimeInput].sort())
+                            }}
+                          >
+                            Vaqt qo‘shish
+                          </button>
+                        </div>
+                        <div className="reminder-time-list">
+                          {editingReminderTimes.map((time) => (
+                            <span className="reminder-time-chip" key={time}>
+                              🕒 {time}
+                              <button
+                                type="button"
+                                aria-label={`${time} vaqtini olib tashlash`}
+                                onClick={() => setEditingReminderTimes((current) => current.filter((item) => item !== time))}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        </>
+                        )}
+                        <div className="reminder-schedule-actions">
+                          <button
+                            type="button"
+                            className="history-action-btn history-action-btn-primary"
+                            disabled={
+                              savingReminderTimes
+                              || (editingReminderScheduleType === 'daily' && editingReminderTimes.length === 0)
+                              || (editingReminderScheduleType === 'interval'
+                                && (!editingReminderIntervalHours
+                                  || Number(editingReminderIntervalHours) < 1
+                                  || Number(editingReminderIntervalHours) > 168))
+                            }
+                            onClick={() => handleSaveReminderTimes(reminder.id)}
+                          >
+                            {savingReminderTimes ? 'Saqlanmoqda...' : 'Vaqtlarni saqlash'}
+                          </button>
+                          <span className="reminder-time-hint">
+                            Vaqtlar: {editingReminderTimes.length ? editingReminderTimes.join(', ') : 'tanlanmagan'}
+                          </span>
+                        </div>
+                      </div>
+                    )}
                   </article>
                 ))}
               </div>
@@ -546,6 +818,10 @@ const PatientPortal = () => {
             <p className="reminder-disclaimer">Eslatmalar faqat telefoningizda bildirishnomalarga ruxsat berilganida yuboriladi. Dori qabul qilish tartibini shifokor tavsiyasiga muvofiq belgilang.</p>
           </section>
         )}
+
+        <div hidden={activeTab !== 'diet-tables'}>
+          <DietTables />
+        </div>
 
         {activeTab === 'profile' && (
           <div className="profile-forms-stack">

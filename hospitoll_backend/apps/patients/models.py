@@ -361,10 +361,14 @@ class PatientMedicationReminder(models.Model):
     medication_name = models.CharField(_('medication name'), max_length=255)
     interval_hours = models.PositiveSmallIntegerField(
         _('interval hours'),
+        blank=True,
+        null=True,
         validators=[MinValueValidator(1), MaxValueValidator(168)],
     )
+    daily_times = models.JSONField(_('daily reminder times'), default=list, blank=True)
     is_active = models.BooleanField(_('active'), default=True)
-    next_reminder_at = models.DateTimeField(_('next reminder at'))
+    next_reminder_at = models.DateTimeField(_('next reminder at'), blank=True, null=True)
+    next_scheduled_reminder_at = models.DateTimeField(blank=True, null=True)
     pending_dose_at = models.DateTimeField(blank=True, null=True)
     next_nudge_at = models.DateTimeField(blank=True, null=True)
     acknowledgement_token = models.UUIDField(blank=True, null=True, unique=True, editable=False)

@@ -45,6 +45,104 @@ class PatientMedicationReminderApiTests(APITestCase):
         self.assertEqual(reminder.interval_hours, 8)
         self.assertGreater(reminder.next_reminder_at, timezone.now())
 
+    def test_patient_can_add_daily_reminder_times(self):
+        response = self.client.post(
+            self.url,
+            {
+                'medication_name': 'Alsetro',
+                'interval_hours': None,
+                'daily_times': ['20:00', '08:00'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        reminder = PatientMedicationReminder.objects.get(patient=self.patient)
+        self.assertIsNone(reminder.interval_hours)
+        self.assertIsNone(reminder.next_reminder_at)
+        self.assertEqual(reminder.daily_times, ['08:00', '20:00'])
+        self.assertEqual(response.data['daily_times'], ['08:00', '20:00'])
+        self.assertGreater(reminder.next_scheduled_reminder_at, timezone.now())
+
+    def test_daily_reminder_times_must_be_valid_and_unique(self):
+        for times in (['24:00'], ['08:00', '08:00']):
+            with self.subTest(times=times):
+                response = self.client.post(
+                    self.url,
+                    {
+                        'medication_name': 'Alsetro',
+                        'interval_hours': None,
+                        'daily_times': times,
+                    },
+                    format='json',
+                )
+
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('daily_times', response.data)
+
+    def test_patient_can_switch_from_interval_to_fixed_daily_times(self):
+        reminder = PatientMedicationReminder.objects.create(
+            patient=self.patient,
+            medication_name='Alsetro',
+            interval_hours=8,
+            next_reminder_at=timezone.now() + timedelta(hours=6),
+        )
+
+        response = self.client.patch(
+            reverse('patient-medication-reminder-detail', args=[reminder.id]),
+            {
+                'interval_hours': None,
+                'daily_times': ['20:00', '08:00'],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        reminder.refresh_from_db()
+        self.assertIsNone(reminder.interval_hours)
+        self.assertIsNone(reminder.next_reminder_at)
+        self.assertEqual(reminder.daily_times, ['08:00', '20:00'])
+        self.assertGreater(reminder.next_scheduled_reminder_at, timezone.now())
+
+    def test_patient_can_switch_from_fixed_daily_times_to_interval(self):
+        reminder = PatientMedicationReminder.objects.create(
+            patient=self.patient,
+            medication_name='Alsetro',
+            interval_hours=None,
+            daily_times=['08:00', '20:00'],
+            next_reminder_at=None,
+        )
+
+        response = self.client.patch(
+            reverse('patient-medication-reminder-detail', args=[reminder.id]),
+            {
+                'interval_hours': 8,
+                'daily_times': [],
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        reminder.refresh_from_db()
+        self.assertEqual(reminder.interval_hours, 8)
+        self.assertGreater(reminder.next_reminder_at, timezone.now())
+        self.assertEqual(reminder.daily_times, [])
+
+    def test_reminder_requires_exactly_one_schedule_type(self):
+        invalid_payloads = (
+            {'interval_hours': None, 'daily_times': []},
+            {'interval_hours': 8, 'daily_times': ['08:00']},
+        )
+        for schedule in invalid_payloads:
+            with self.subTest(schedule=schedule):
+                response = self.client.post(
+                    self.url,
+                    {'medication_name': 'Alsetro', **schedule},
+                    format='json',
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('non_field_errors', response.data)
+
     def test_patient_only_sees_own_reminders(self):
         owned = PatientMedicationReminder.objects.create(
             patient=self.patient,
@@ -201,3 +299,34 @@ class PatientMedicationReminderTaskTests(APITestCase):
         self.assertEqual(reminder.acknowledgement_token, first_acknowledgement_token)
         self.assertGreater(reminder.next_nudge_at, timezone.now())
         self.assertEqual(push_task.call_count, 2)
+
+    def test_daily_reminder_time_sends_notification_and_advances_to_next_day(self):
+        user = CustomUser.objects.create_user(
+            username='scheduled-reminder-patient',
+            email='scheduled-reminder-patient@example.com',
+            password='Pass12345!',
+            role='patient',
+        )
+        patient = Patient.objects.create(user=user)
+        now = timezone.now()
+        scheduled_time = now - timedelta(minutes=1)
+        reminder = PatientMedicationReminder.objects.create(
+            patient=patient,
+            medication_name='Alsetro',
+            interval_hours=None,
+            daily_times=['08:00', '20:00'],
+            next_reminder_at=None,
+            next_scheduled_reminder_at=scheduled_time,
+        )
+
+        with patch('apps.site_settings.tasks.send_saved_broadcast_push.delay') as push_task:
+            result = send_due_medication_reminders.run()
+
+        reminder.refresh_from_db()
+        notification = BroadcastNotification.objects.get(user=user)
+        self.assertEqual(result, {'sent': 1})
+        self.assertEqual(reminder.pending_dose_at, scheduled_time)
+        self.assertIsNone(reminder.next_reminder_at)
+        self.assertGreater(reminder.next_scheduled_reminder_at, timezone.now())
+        self.assertEqual(notification.data['notification_type'], 'medication_reminder')
+        self.assertEqual(push_task.call_count, 1)
