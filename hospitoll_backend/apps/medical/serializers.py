@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from django.urls import reverse
 
 from apps.clinics.models import Clinic
 from apps.doctors.models import Doctor, DoctorAvailability
@@ -23,6 +24,15 @@ class DoctorDetailsSerializer(serializers.Serializer):
             specs = obj.specializations.all()
             return [spec.name for spec in specs] if specs.exists() else []
         return []
+
+
+class MedicalRecordAttachmentField(serializers.FileField):
+    def to_representation(self, value):
+        if not value:
+            return None
+        url = reverse('medical-record-attachment', kwargs={'pk': self.parent.instance.pk})
+        request = self.context.get('request')
+        return request.build_absolute_uri(url) if request else url
 
 
 class AppointmentSerializer(serializers.ModelSerializer):
@@ -131,6 +141,7 @@ class MedicalRecordSerializer(serializers.ModelSerializer):
     doctor_specialization = serializers.SerializerMethodField()
     clinic_name = serializers.SerializerMethodField()
     clinic_details = serializers.SerializerMethodField()
+    attachment = MedicalRecordAttachmentField(required=False, allow_null=True)
     
     class Meta:
         model = MedicalRecord
@@ -155,7 +166,7 @@ class MedicalRecordSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-    
+
     def get_doctor_details(self, obj):
         if obj.doctor:
             doctor = obj.doctor

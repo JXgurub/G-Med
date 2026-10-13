@@ -1167,6 +1167,22 @@
   gap: 0.45rem;
 }
 
+.admin-broadcast-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.admin-broadcast-options .form-group:last-child {
+  grid-column: 1 / -1;
+}
+
+.admin-broadcast-options input,
+.admin-broadcast-options select {
+  width: 100%;
+  min-height: 42px;
+}
+
 .admin-broadcast-form textarea {
   resize: vertical;
 }
@@ -1184,6 +1200,16 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+@media (max-width: 560px) {
+  .admin-broadcast-options {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-broadcast-options .form-group:last-child {
+    grid-column: auto;
+  }
 }
 
 .child-safety-admin-form {

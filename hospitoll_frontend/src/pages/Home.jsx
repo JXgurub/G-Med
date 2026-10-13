@@ -278,49 +278,6 @@ const Home = () => {
         </div>
       </section>
 
-      {/* Features Section */}
-      <section className="features-section">
-        <div className="container">
-          <div className="features-grid">
-            <div className="feature-card">
-              <div className="feature-icon feature-icon-blue">
-                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-                  <path d="M5 13.333h30M13.333 5v30" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
-                </svg>
-              </div>
-              <div className="feature-content">
-                <h3>Keng Tanlov</h3>
-                <p>Zamonaviy tibbiyot jihozlari va uskunalar</p>
-              </div>
-            </div>
-
-            <div className="feature-card">
-              <div className="feature-icon feature-icon-green">
-                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-                  <path d="M28 12L16 24l-8-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-                </svg>
-              </div>
-              <div className="feature-content">
-                <h3>Yugori Sifat</h3>
-                <p>Eng yugori darajadagi sifatli talablar</p>
-              </div>
-            </div>
-
-            <div className="feature-card">
-              <div className="feature-icon feature-icon-blue">
-                <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
-                  <path d="M8 30h24M20 5v25M20 30v5" stroke="currentColor" strokeWidth="3" strokeLinecap="round"/>
-                </svg>
-              </div>
-              <div className="feature-content">
-                <h3>Professional Qo'llab-Quvvatlash</h3>
-                <p>Mutaxassislarimizdan 10% yordam</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
       <section className="ai-analysis-section" id="ai-analysis">
         <div className="container">
           <div className="ai-analysis-banner">

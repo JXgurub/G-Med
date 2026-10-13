@@ -1,11 +1,13 @@
 from datetime import datetime, timedelta
 from decimal import Decimal
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 from uuid import uuid4
 
 from django.db import transaction
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.urls import reverse
 from django.test import override_settings
 from django.utils import timezone
@@ -1083,6 +1085,162 @@ class MedicalRecordAutoAppointmentTests(MedicalApiTestCase):
         self.assertIsNotNone(appointment)
         self.assertEqual(appointment.status, Appointment.Status.COMPLETED)
         self.assertEqual(float(appointment.consultation_fee), 25000.0)
+
+
+class MedicalRecordAccessTests(MedicalApiTestCase):
+    def setUp(self):
+        self.clinic_owner = CustomUser.objects.create_user(
+            username='record_access_clinic',
+            email='record-access-clinic@example.com',
+            password='Pass12345!',
+            role='clinic',
+        )
+        self.clinic = Clinic.objects.create(
+            owner=self.clinic_owner,
+            name='Record Access Clinic',
+            slug='record-access-clinic',
+            address='Test address',
+            phone_number='+998901234589',
+            email='record.access@example.com',
+            registration_number='REG-RECORD-ACCESS-001',
+            status='active',
+        )
+        self.doctor_user = CustomUser.objects.create_user(
+            username='record_access_doctor',
+            email='record-access-doctor@example.com',
+            password='Pass12345!',
+            role='doctor',
+        )
+        self.doctor = Doctor.objects.create(
+            user=self.doctor_user,
+            clinic=self.clinic,
+            license_number='LIC-RECORD-ACCESS-001',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+        )
+        self.patient_user = CustomUser.objects.create_user(
+            username='record_access_patient',
+            email='record-access-patient@example.com',
+            password='Pass12345!',
+            role='patient',
+        )
+        self.patient = Patient.objects.create(user=self.patient_user)
+        self.other_patient_user = CustomUser.objects.create_user(
+            username='record_access_other_patient',
+            email='record-access-other-patient@example.com',
+            password='Pass12345!',
+            role='patient',
+        )
+        self.other_patient = Patient.objects.create(user=self.other_patient_user)
+        self.other_clinic_owner = CustomUser.objects.create_user(
+            username='record_access_other_clinic',
+            email='record-access-other-clinic@example.com',
+            password='Pass12345!',
+            role='clinic',
+        )
+        self.other_clinic = Clinic.objects.create(
+            owner=self.other_clinic_owner,
+            name='Other Record Access Clinic',
+            slug='other-record-access-clinic',
+            address='Other test address',
+            phone_number='+998901234590',
+            email='other.record.access@example.com',
+            registration_number='REG-RECORD-ACCESS-002',
+            status='active',
+        )
+        self.other_doctor_user = CustomUser.objects.create_user(
+            username='record_access_other_doctor',
+            email='record-access-other-doctor@example.com',
+            password='Pass12345!',
+            role='doctor',
+        )
+        self.other_doctor = Doctor.objects.create(
+            user=self.other_doctor_user,
+            clinic=self.other_clinic,
+            license_number='LIC-RECORD-ACCESS-003',
+            working_days='Mon,Tue,Wed,Thu,Fri,Sat,Sun',
+        )
+        self.record = MedicalRecord.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            assessment='Private assessment',
+        )
+        self.other_record = MedicalRecord.objects.create(
+            patient=self.other_patient,
+            doctor=self.other_doctor,
+            clinic=self.other_clinic,
+            assessment='Other private assessment',
+        )
+
+        self.media_directory = TemporaryDirectory()
+        self.addCleanup(self.media_directory.cleanup)
+        self.media_settings = override_settings(MEDIA_ROOT=self.media_directory.name)
+        self.media_settings.enable()
+        self.addCleanup(self.media_settings.disable)
+
+        self.list_url = reverse('medical-record-list')
+
+    def _list_record_ids(self):
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        rows = data.get('results', data) if isinstance(data, dict) else data
+        return {str(row['id']) for row in rows}
+
+    def test_patient_sees_only_own_records_and_cannot_retrieve_another(self):
+        self.auth_as(self.patient_user)
+
+        self.assertEqual(self._list_record_ids(), {str(self.record.id)})
+        response = self.client.get(reverse('medical-record-detail', args=[self.other_record.id]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_doctor_sees_only_records_written_by_that_doctor(self):
+        self.auth_as(self.doctor_user)
+
+        self.assertEqual(self._list_record_ids(), {str(self.record.id)})
+
+    def test_clinic_owner_sees_only_records_for_their_clinic(self):
+        self.auth_as(self.clinic_owner)
+
+        self.assertEqual(self._list_record_ids(), {str(self.record.id)})
+
+    def test_patient_cannot_create_a_medical_record(self):
+        self.auth_as(self.patient_user)
+
+        response = self.client.post(self.list_url, {
+            'patient': str(self.patient.id),
+            'doctor': str(self.doctor.id),
+            'clinic': str(self.clinic.id),
+            'assessment': 'Unauthorized',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(MedicalRecord.objects.count(), 2)
+
+    def test_patient_cannot_delete_own_medical_record(self):
+        self.auth_as(self.patient_user)
+
+        response = self.client.delete(reverse('medical-record-detail', args=[self.record.id]))
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(MedicalRecord.objects.filter(id=self.record.id).exists())
+
+    def test_attachment_is_downloaded_through_authorized_record_endpoint(self):
+        self.record.attachment.save(
+            'report.txt',
+            SimpleUploadedFile('report.txt', b'confidential report', content_type='text/plain'),
+        )
+        self.record.save()
+        self.auth_as(self.doctor_user)
+
+        response = self.client.get(reverse('medical-record-attachment', args=[self.record.id]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(b''.join(response.streaming_content), b'confidential report')
+
+        self.auth_as(self.other_doctor_user)
+        response = self.client.get(reverse('medical-record-attachment', args=[self.record.id]))
+        self.assertEqual(response.status_code, 404)
+
 
 class BookingWindowLunchTests(MedicalApiTestCase):
     def setUp(self):

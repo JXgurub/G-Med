@@ -1,12 +1,21 @@
 import json
 import logging
+from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
+from django.utils import timezone
 
 from .models import BroadcastNotification, WebPushSubscription
 
 logger = logging.getLogger(__name__)
+
+
+@shared_task
+def purge_read_broadcast_notifications() -> dict[str, int]:
+    cutoff = timezone.now() - timedelta(days=2)
+    deleted, _ = BroadcastNotification.objects.filter(read_at__lt=cutoff).delete()
+    return {'deleted': deleted}
 
 
 @shared_task
@@ -19,22 +28,13 @@ def send_saved_broadcast_push(notification_ids: list[str]) -> dict[str, int]:
     result = {'sent': 0, 'failed': 0, 'expired': 0}
     notifications = BroadcastNotification.objects.filter(id__in=notification_ids).prefetch_related('user__web_push_subscriptions')
     for notification in notifications:
-        is_medication_reminder = notification.data.get('notification_type') == 'medication_reminder'
         payload = json.dumps({
             'id': str(notification.id),
             'title': notification.title,
             'body': notification.message,
-            'url': '/patient?tab=medication-reminders' if is_medication_reminder else '/',
-            'data': notification.data,
-            'tag': (
-                f"medication-reminder-{notification.data['reminder_id']}"
-                if is_medication_reminder else str(notification.id)
-            ),
-            'renotify': is_medication_reminder,
-            'actions': (
-                [{'action': 'taken', 'title': 'Ichdingizmi?'}]
-                if is_medication_reminder else []
-            ),
+            'url': notification.data.get('url', '/'),
+            'category': notification.data.get('category', 'general'),
+            'priority': notification.data.get('priority', 'normal'),
         })
         for subscription in notification.user.web_push_subscriptions.all():
             if not subscription.is_active:

@@ -1,0 +1,32 @@
+.clinic-public {
+  width: 100%;
+  padding-top: 2rem;
+}
+
+.clinic-not-found {
+  padding: 6rem 0;
+  text-align: center;
+}
+
+.clinic-not-found h1 {
+  font-size: 2.5rem;
+  color: var(--text-dark);
+  margin-bottom: 1rem;
+}
+
+.clinic-not-found p {
+  font-size: 1.125rem;
+  color: var(--text-light);
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+
+@media (max-width: 768px) {
+  .clinic-public {
+    padding-top: 1rem;
+  }
+}

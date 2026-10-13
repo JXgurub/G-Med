@@ -1,5 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react'
-import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import { Navigate } from 'react-router-dom'
 import { ClinicProvider } from './context/ClinicContext'
 import { DoctorProvider } from './context/DoctorContext'
@@ -7,7 +7,7 @@ import { AdminProvider } from './context/AdminContext'
 import { PatientProvider } from './context/PatientContext'
 import { PharmacyProvider } from './context/PharmacyContext'
 import { PaymentProvider } from './context/PaymentContext'
-import { authApi, patientsApi, siteSettingsApi } from './services/api'
+import { authApi, siteSettingsApi } from './services/api'
 import { useNotifications } from './hooks/useWebSocket'
 const Layout = lazy(() => import('./layouts/Layout'))
 const Home = lazy(() => import('./pages/Home'))
@@ -38,20 +38,25 @@ const SubscriptionBlockedPage = lazy(() => import('./pages/SubscriptionBlockedPa
 const PaymentSuccess = lazy(() => import('./pages/PaymentSuccess'))
 const PaymentHistory = lazy(() => import('./components/PaymentHistory'))
 import PwaStatusWidget from './components/PwaStatusWidget'
-import LizaAssistant from './components/LizaAssistant'
 const Contact = lazy(() => import('./pages/Contact'))
 
 const RouteLoader = () => <div style={{ padding: '2rem', textAlign: 'center' }}>Yuklanmoqda...</div>
 
 const BroadcastNotificationListener = () => {
   const location = useLocation()
+  const navigate = useNavigate()
   const [userId, setUserId] = useState(null)
   const [notice, setNotice] = useState(null)
   const [noticeQueue, setNoticeQueue] = useState([])
+  const [inboxItems, setInboxItems] = useState([])
+  const [inboxFilter, setInboxFilter] = useState('all')
+  const [inboxOpen, setInboxOpen] = useState(false)
+  const [expandedNotificationIds, setExpandedNotificationIds] = useState(() => new Set())
   const [pushConfig, setPushConfig] = useState(null)
   const [pushStatus, setPushStatus] = useState('checking')
   const resolvedToken = useRef('')
   const seenNotificationIds = useRef(new Set())
+  const pushPreferenceKey = userId ? `gmed_push_disabled_${userId}` : ''
 
   const enqueueNotifications = useCallback((notifications) => {
     setNoticeQueue((current) => {
@@ -97,14 +102,19 @@ const BroadcastNotificationListener = () => {
       seenNotificationIds.current.clear()
       setNotice(null)
       setNoticeQueue([])
+      setInboxItems([])
+      setInboxOpen(false)
+      setExpandedNotificationIds(new Set())
       setPushConfig(null)
       setPushStatus('checking')
       return
     }
     let cancelled = false
-    siteSettingsApi.getBroadcastInbox()
+    siteSettingsApi.getBroadcastInbox({ unread: false, limit: 100 })
       .then((notifications) => {
-        if (!cancelled) enqueueNotifications(Array.isArray(notifications) ? notifications : [])
+        if (cancelled) return
+        const items = Array.isArray(notifications) ? notifications : []
+        setInboxItems(items)
       })
       .catch((error) => console.error('Bildirishnomalarni yuklashda xatolik:', error))
     return () => { cancelled = true }
@@ -125,12 +135,13 @@ const BroadcastNotificationListener = () => {
         })
       }
       await siteSettingsApi.registerWebPushSubscription(subscription.toJSON())
+      localStorage.removeItem(pushPreferenceKey)
       setPushStatus('enabled')
     } catch (error) {
       console.error('Telefon bildirishnomasini sozlashda xatolik:', error)
       setPushStatus('error')
     }
-  }, [userId])
+  }, [pushPreferenceKey, userId])
 
   useEffect(() => {
     if (!userId) return undefined
@@ -143,6 +154,8 @@ const BroadcastNotificationListener = () => {
           setPushStatus('unavailable')
         } else if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
           setPushStatus('unsupported')
+        } else if (localStorage.getItem(pushPreferenceKey) === '1') {
+          setPushStatus('disabled')
         } else if (Notification.permission === 'granted') {
           void registerPushDevice(config)
         } else if (Notification.permission === 'denied') {
@@ -153,10 +166,11 @@ const BroadcastNotificationListener = () => {
       })
       .catch(() => setPushStatus('error'))
     return () => { cancelled = true }
-  }, [registerPushDevice, userId])
+  }, [pushPreferenceKey, registerPushDevice, userId])
 
   const enablePushNotifications = async () => {
     if (!pushConfig?.enabled || !('Notification' in window)) return
+    localStorage.removeItem(pushPreferenceKey)
     const permission = await Notification.requestPermission()
     if (permission === 'granted') {
       await registerPushDevice(pushConfig)
@@ -169,12 +183,17 @@ const BroadcastNotificationListener = () => {
     const notification = event.detail?.data
     if (notification?.notification_type === 'admin_broadcast') {
       const payload = notification.payload || {}
-      enqueueNotifications([{
+      const item = {
         id: payload.notification_id,
         title: payload.title,
         message: payload.message,
-        data: payload.data || {},
-      }])
+        category: payload.category || 'general',
+        priority: payload.priority || 'normal',
+        url: payload.url || '/',
+        read_at: null,
+      }
+      setInboxItems((current) => [item, ...current.filter((existing) => existing.id !== item.id)].slice(0, 100))
+      enqueueNotifications([item])
     }
   }, [enqueueNotifications])
 
@@ -182,22 +201,6 @@ const BroadcastNotificationListener = () => {
     window.addEventListener('hospitoll:notification', handleBroadcast)
     return () => window.removeEventListener('hospitoll:notification', handleBroadcast)
   }, [handleBroadcast])
-
-  useEffect(() => {
-    if (!('serviceWorker' in navigator)) return undefined
-    const handleServiceWorkerMessage = (event) => {
-      if (event.data?.type !== 'medication-reminder-acknowledged') return
-      const { acknowledgement_token: acknowledgementToken } = event.data
-      setNotice((current) => (
-        current?.data?.acknowledgement_token === acknowledgementToken ? null : current
-      ))
-      setNoticeQueue((current) => current.filter(
-        (notification) => notification.data?.acknowledgement_token !== acknowledgementToken,
-      ))
-    }
-    navigator.serviceWorker.addEventListener('message', handleServiceWorkerMessage)
-    return () => navigator.serviceWorker.removeEventListener('message', handleServiceWorkerMessage)
-  }, [])
 
   useEffect(() => {
     if (notice || noticeQueue.length === 0) return
@@ -211,11 +214,64 @@ const BroadcastNotificationListener = () => {
     return () => window.clearTimeout(timeout)
   }, [notice])
 
+  const markNotificationRead = async (notification) => {
+    if (!notification.id || notification.read_at) return
+    const readAt = new Date().toISOString()
+    setInboxItems((current) => current.map((item) => (
+      item.id === notification.id ? { ...item, read_at: readAt } : item
+    )))
+    try {
+      await siteSettingsApi.markBroadcastRead(notification.id)
+    } catch (error) {
+      setInboxItems((current) => current.map((item) => (
+        item.id === notification.id ? { ...item, read_at: null } : item
+      )))
+      console.error('Bildirishnomani o‘qilgan deb belgilab bo‘lmadi:', error)
+    }
+  }
+
+  const openNotification = async (notification) => {
+    await markNotificationRead(notification)
+    setNotice(null)
+    setInboxOpen(false)
+    const target = typeof notification.url === 'string' && notification.url.startsWith('/') && !notification.url.startsWith('//')
+      ? notification.url
+      : '/'
+    navigate(target)
+  }
+
+  const markAllNotificationsRead = async () => {
+    const readAt = new Date().toISOString()
+    setInboxItems((current) => current.map((item) => ({ ...item, read_at: item.read_at || readAt })))
+    try {
+      await siteSettingsApi.markAllBroadcastsRead()
+    } catch (error) {
+      console.error('Barcha bildirishnomalarni o‘qilgan deb belgilab bo‘lmadi:', error)
+      const items = await siteSettingsApi.getBroadcastInbox({ unread: false, limit: 100 }).catch(() => null)
+      if (Array.isArray(items)) setInboxItems(items)
+    }
+  }
+
+  const unreadCount = inboxItems.filter((item) => !item.read_at).length
+  const toggleNotificationExpanded = (notificationId) => {
+    setExpandedNotificationIds((current) => {
+      const next = new Set(current)
+      if (next.has(notificationId)) next.delete(notificationId)
+      else next.add(notificationId)
+      return next
+    })
+  }
+  const visibleInboxItems = inboxFilter === 'unread'
+    ? inboxItems.filter((item) => !item.read_at)
+    : inboxFilter === 'important'
+      ? inboxItems.filter((item) => item.priority === 'high' || item.category === 'important')
+      : inboxItems
+
   useNotifications(userId)
 
   return (
     <>
-      {pushStatus === 'prompt' ? (
+      {pushStatus === 'prompt' || pushStatus === 'disabled' ? (
         <aside className="push-permission-prompt" role="status">
           <div>
             <strong>Telefon bildirishnomalarini yoqing</strong>
@@ -234,37 +290,81 @@ const BroadcastNotificationListener = () => {
       ) : null}
       {notice ? (
         <aside className="admin-broadcast-toast" role="status" aria-live="polite">
-          <div>
+          <button type="button" className="admin-broadcast-toast-content" onClick={() => openNotification(notice)}>
             <strong>{notice.title || 'Bildirishnoma'}</strong>
             <p>{notice.message || ''}</p>
-            {notice.data?.notification_type === 'medication_reminder'
-              && notice.data.acknowledgement_token ? (
-                <button
-                  type="button"
-                  className="admin-broadcast-ack"
-                  onClick={() => {
-                    patientsApi.acknowledgeMedicationReminder(notice.data.acknowledgement_token)
-                      .then(() => setNotice(null))
-                      .catch((error) => console.error('Dori eslatmasini tasdiqlab bo‘lmadi:', error))
-                  }}
-                >
-                  Ichdingizmi?
-                </button>
-              ) : null}
-          </div>
+            <span>Batafsil ko‘rish</span>
+          </button>
           <button
             type="button"
             aria-label="Bildirishnomani yopish"
-            onClick={() => {
-              const dismissed = notice
-              setNotice(null)
-              if (dismissed.id) {
-                siteSettingsApi.markBroadcastRead(dismissed.id)
-                  .catch((error) => console.error('Bildirishnomani o‘qilgan deb belgilab bo‘lmadi:', error))
-              }
-            }}
+            onClick={() => setNotice(null)}
           >×</button>
         </aside>
+      ) : null}
+      {userId ? (
+        <div className={`notification-center${localStorage.getItem('user_role') === 'patient' ? ' has-liza-assistant' : ''}`}>
+          {inboxOpen ? (
+            <section className="notification-center-panel" aria-label="Bildirishnomalar markazi">
+              <header>
+                <div>
+                  <strong>Bildirishnomalar</strong>
+                  <span>{unreadCount ? `${unreadCount} ta o‘qilmagan` : 'Hammasi ko‘rib chiqilgan'}</span>
+                </div>
+                <button type="button" aria-label="Bildirishnomalar oynasini yopish" onClick={() => setInboxOpen(false)}>×</button>
+              </header>
+              <nav className="notification-center-filters" aria-label="Bildirishnomalarni filtrlash">
+                <button type="button" aria-pressed={inboxFilter === 'all'} onClick={() => setInboxFilter('all')}>Barchasi</button>
+                <button type="button" aria-pressed={inboxFilter === 'unread'} onClick={() => setInboxFilter('unread')}>O‘qilmagan</button>
+                <button type="button" aria-pressed={inboxFilter === 'important'} onClick={() => setInboxFilter('important')}>Muhim</button>
+                {unreadCount > 0 ? (
+                  <button type="button" className="notification-mark-all" onClick={markAllNotificationsRead}>Hammasini o‘qildi</button>
+                ) : null}
+              </nav>
+              <div className="notification-center-list">
+                {visibleInboxItems.length ? visibleInboxItems.map((item) => (
+                  <article
+                    className={`notification-center-item${item.read_at ? '' : ' is-unread'}${item.priority === 'high' ? ' is-important' : ''}${expandedNotificationIds.has(item.id) ? ' is-expanded' : ''}`}
+                    key={item.id}
+                  >
+                    <button
+                      type="button"
+                      className={`notification-center-item-open${expandedNotificationIds.has(item.id) ? ' is-expanded' : ''}`}
+                      aria-expanded={expandedNotificationIds.has(item.id)}
+                      aria-label={`${expandedNotificationIds.has(item.id) ? 'Yig‘ish' : 'Xabarni to‘liq ko‘rish'}: ${item.title}`}
+                      onClick={() => toggleNotificationExpanded(item.id)}
+                    >
+                      <span className="notification-center-item-meta">
+                        {item.priority === 'high' ? 'Muhim' : item.category === 'service' ? 'Xizmat xabari' : item.category === 'important' ? 'Muhim xabar' : 'Umumiy'}
+                        {item.created_at ? ` · ${new Date(item.created_at).toLocaleString('uz-UZ')}` : ''}
+                      </span>
+                      <strong>{item.title}</strong>
+                      <span>{item.message}</span>
+                    </button>
+                    {item.read_at ? (
+                      <span className="notification-center-read-state" aria-label="O‘qilgan">O‘qildi</span>
+                    ) : (
+                      <button type="button" className="notification-center-read-button" onClick={() => markNotificationRead(item)}>
+                        O‘qildi
+                      </button>
+                    )}
+                  </article>
+                )) : <p className="notification-center-empty">{inboxFilter === 'unread' ? 'O‘qilmagan bildirishnoma yo‘q.' : inboxFilter === 'important' ? 'Muhim bildirishnoma yo‘q.' : 'Hozircha bildirishnoma yo‘q.'}</p>}
+              </div>
+            </section>
+          ) : null}
+          <button
+            type="button"
+            className="notification-center-toggle"
+            aria-label={unreadCount ? `Bildirishnomalar, ${unreadCount} ta o‘qilmagan` : 'Bildirishnomalar'}
+            aria-expanded={inboxOpen}
+            onClick={() => setInboxOpen((open) => !open)}
+          >
+            <span aria-hidden="true">🔔</span>
+            <span>Bildirishnomalar</span>
+            {unreadCount ? <span className="notification-center-count">{unreadCount > 99 ? '99+' : unreadCount}</span> : null}
+          </button>
+        </div>
       ) : null}
     </>
   )
@@ -286,7 +386,6 @@ function App() {
               <PaymentProvider>
                 <Router>
                 <PwaStatusWidget />
-                <LizaAssistant />
                 <BroadcastNotificationListener />
                 <Suspense fallback={<RouteLoader />}>
                   <Routes>

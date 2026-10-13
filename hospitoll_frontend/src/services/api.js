@@ -196,6 +196,7 @@ export const api = {
     const providedHeaders = options.headers || {}
     const method = (options.method || 'GET').toUpperCase()
     const shouldSkipJwtAuth = Boolean(options._skipAuth) || isPublicNoAuthEndpoint(endpoint)
+    
     const shouldSetJsonContentType = !isFormData && !Object.prototype.hasOwnProperty.call(providedHeaders, 'Content-Type')
     const contentTypeHeader = shouldSetJsonContentType ? { 'Content-Type': 'application/json' } : {}
 
@@ -430,11 +431,7 @@ export const receptionStaffApi = {
   getDoctors: () => api.getWithHeaders('/clinics/reception-staff/doctors/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
   searchPatients: (query = '') => api.getWithHeaders('/clinics/reception-staff/patients/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }, { q: query }),
   getOnlineAppointments: () => api.getWithHeaders('/clinics/reception-staff/online-appointments/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
-  confirmOnlineAppointment: (id, specialty_price_ids, payment_method = 'cash') => api.request(`/clinics/reception-staff/online-appointments/${id}/confirm/`, {
-    method: 'POST',
-    headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ specialty_price_ids, payment_method }),
-  }),
+  confirmOnlineAppointment: (id) => api.request(`/clinics/reception-staff/online-appointments/${id}/confirm/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
   cancelOnlineAppointment: (id) => api.request(`/clinics/reception-staff/online-appointments/${id}/cancel/`, { method: 'POST', headers: { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' } }),
   getStats: (params) => api.getWithHeaders('/clinics/reception-staff/stats/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }, params),
   getMe: () => api.getWithHeaders('/clinics/reception-staff/me/', { 'X-Reception-Session': localStorage.getItem('reception_session_token') || '' }),
@@ -611,8 +608,9 @@ export const siteSettingsApi = {
   adminResolveSystemAlert: (id) => api.patch(`/site-settings/system-alerts/${id}/resolve/`, {}),
   adminGetBroadcastStats: () => api.get('/site-settings/broadcast/admin/'),
   adminSendBroadcast: (data) => api.post('/site-settings/broadcast/admin/', data),
-  getBroadcastInbox: () => api.get('/site-settings/broadcast/inbox/'),
+  getBroadcastInbox: (params) => api.get('/site-settings/broadcast/inbox/', params),
   markBroadcastRead: (id) => api.patch(`/site-settings/broadcast/inbox/${id}/read/`, {}),
+  markAllBroadcastsRead: () => api.post('/site-settings/broadcast/inbox/', {}),
   getWebPushConfig: () => api.get('/site-settings/push/config/'),
   registerWebPushSubscription: (subscription) => api.post('/site-settings/push/subscriptions/', { subscription }),
   removeWebPushSubscription: (endpoint) => api.delete('/site-settings/push/subscriptions/', { endpoint }),

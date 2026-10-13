@@ -1,0 +1,297 @@
+/* === MedicineAutocomplete (mac) === */
+
+.mac-wrapper {
+  position: relative;
+  width: 100%;
+  font-family: inherit;
+}
+
+/* ─── Input row ─── */
+.mac-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1.5px solid #d0d7de;
+  border-radius: 10px;
+  background: #fff;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  cursor: text;
+}
+
+.mac-input-row:focus-within {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.mac-input-row--open {
+  border-radius: 10px 10px 0 0;
+  border-bottom-color: transparent;
+}
+
+.mac-icon {
+  font-size: 1.2rem;
+  flex-shrink: 0;
+  opacity: 0.75;
+  user-select: none;
+}
+
+.mac-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 0.95rem;
+  font-family: inherit;
+  color: #1a1a2e;
+  background: transparent;
+  min-width: 0;
+}
+
+.mac-input::placeholder {
+  color: #9ca3af;
+  font-weight: 400;
+}
+
+.mac-spinner {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  border: 2px solid #e5e7eb;
+  border-top-color: #3b82f6;
+  border-radius: 50%;
+  animation: mac-spin 0.6s linear infinite;
+}
+
+@keyframes mac-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mac-clear-input {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: 0.85rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+  flex-shrink: 0;
+}
+
+.mac-clear-input:hover {
+  background: #fee2e2;
+  color: #dc2626;
+}
+
+/* ─── Dropdown ─── */
+.mac-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border: 1.5px solid #3b82f6;
+  border-top: none;
+  border-radius: 0 0 10px 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  z-index: 1200;
+  overflow: hidden;
+}
+
+.mac-dropdown-header {
+  padding: 7px 14px 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6b7280;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.mac-suggestion-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f3f4f6;
+  transition: background 0.15s;
+}
+
+.mac-suggestion-item:last-of-type {
+  border-bottom: none;
+}
+
+.mac-suggestion-item--active,
+.mac-suggestion-item:hover {
+  background: #eff6ff;
+}
+
+.mac-sugg-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.mac-sugg-name {
+  font-weight: 600;
+  font-size: 0.93rem;
+  color: #1e3a5f;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mac-sugg-generic {
+  font-size: 0.78rem;
+  color: #6b7280;
+  margin-top: 2px;
+  font-style: italic;
+}
+
+.mac-sugg-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mac-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+.mac-badge--strength {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.mac-badge--form {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.mac-badge--category {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.mac-dropdown-footer {
+  padding: 5px 14px;
+  font-size: 0.72rem;
+  color: #9ca3af;
+  background: #f9fafb;
+  border-top: 1px solid #e5e7eb;
+  text-align: right;
+}
+
+.mac-empty {
+  padding: 18px 14px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.88rem;
+}
+
+/* ─── Chips ─── */
+.mac-chips-wrap {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #f8fafc;
+  border: 1.5px dashed #cbd5e1;
+  border-radius: 10px;
+}
+
+.mac-chips-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #64748b;
+  margin-bottom: 10px;
+}
+
+.mac-chips {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: 100%;
+}
+
+.mac-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1.5px solid;
+  border-radius: 22px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  overflow: hidden;
+  max-width: none;
+  width: 100%;
+  transition: box-shadow 0.15s;
+}
+
+.mac-chip:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.mac-chip-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 28px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.mac-chip-text {
+  padding: 4px 10px 4px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: none;
+  flex: 1;
+}
+
+.mac-chip-remove {
+  background: none;
+  border: none;
+  border-left: 1.5px solid currentColor;
+  opacity: 0.5;
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: opacity 0.15s, background 0.15s;
+  line-height: 1;
+}
+
+.mac-chip-remove:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+@media (max-width: 1100px) {
+  .mac-chips {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .mac-chips {
+    grid-template-columns: 1fr;
+  }
+}

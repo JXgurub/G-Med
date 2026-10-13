@@ -1,0 +1,177 @@
+.subscription-blocked-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 20px;
+}
+
+.subscription-blocked-card {
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  max-width: 600px;
+  width: 100%;
+  padding: 40px;
+  text-align: center;
+  animation: slideUp 0.5s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.blocked-icon {
+  color: #ef4444;
+  margin-bottom: 20px;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.blocked-title {
+  font-size: 32px;
+  font-weight: bold;
+  color: #1f2937;
+  margin-bottom: 20px;
+}
+
+.blocked-info {
+  margin-bottom: 30px;
+}
+
+.blocked-entity-name {
+  font-size: 24px;
+  font-weight: 600;
+  color: #4f46e5;
+  margin-bottom: 15px;
+}
+
+.blocked-description {
+  font-size: 16px;
+  color: #6b7280;
+  line-height: 1.6;
+  margin-bottom: 15px;
+}
+
+.expiry-date {
+  font-size: 14px;
+  color: #ef4444;
+  font-weight: 500;
+  padding: 8px 16px;
+  background: #fef2f2;
+  border-radius: 8px;
+  display: inline-block;
+  margin-top: 10px;
+}
+
+.contact-section {
+  background: #f9fafb;
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 30px;
+}
+
+.contact-section h2 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1f2937;
+  margin-bottom: 16px;
+}
+
+.contact-details {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contact-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: white;
+  border-radius: 8px;
+  font-size: 15px;
+}
+
+.contact-label {
+  font-weight: 500;
+  color: #6b7280;
+}
+
+.contact-value {
+  font-weight: 600;
+  color: #1f2937;
+}
+
+.action-section {
+  margin-top: 30px;
+}
+
+.action-instruction {
+  font-size: 14px;
+  color: #6b7280;
+  margin-bottom: 20px;
+  padding: 12px;
+  background: #fef3c7;
+  border-radius: 8px;
+  border: 1px solid #fbbf24;
+}
+
+.logout-button {
+  background: #ef4444;
+  color: white;
+  border: none;
+  padding: 12px 32px;
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.logout-button:hover {
+  background: #dc2626;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+}
+
+.logout-button:active {
+  transform: translateY(0);
+}
+
+@media (max-width: 640px) {
+  .subscription-blocked-card {
+    padding: 24px;
+  }
+
+  .blocked-title {
+    font-size: 24px;
+  }
+
+  .blocked-entity-name {
+    font-size: 20px;
+  }
+
+  .contact-item {
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+  }
+}

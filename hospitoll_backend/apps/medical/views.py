@@ -12,6 +12,7 @@ from django.db.models import Count, Max, Sum, Q, Value, DecimalField
 from django.db.models.functions import TruncMonth, Coalesce
 from django.utils import timezone
 from django.conf import settings
+from django.http import FileResponse
 from django.core.cache import cache
 from django.core import signing
 import django_filters
@@ -2018,12 +2019,50 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return Response({'detail': 'Queue yangilandi.'}, status=status.HTTP_200_OK)
 
 
+class IsMedicalRecordEditor(permissions.BasePermission):
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(
+            user
+            and user.is_authenticated
+            and (
+                user.is_superuser
+                or user.is_administrator
+                or user.is_doctor
+                or user.is_clinic
+            )
+        )
+
+
 class MedicalRecordViewSet(viewsets.ModelViewSet):
     queryset = MedicalRecord.objects.select_related('patient', 'doctor', 'clinic').all()
     serializer_class = MedicalRecordSerializer
     filterset_fields = ['patient', 'doctor', 'clinic', 'is_locked']
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+
+    def get_permissions(self):
+        if self.action in {'create', 'update', 'partial_update', 'destroy'}:
+            return [permissions.IsAuthenticated(), IsMedicalRecordEditor()]
+        return super().get_permissions()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+
+        if user.is_superuser or user.is_administrator:
+            return queryset
+        if user.is_doctor:
+            return queryset.filter(doctor__user=user)
+        if user.is_patient:
+            return queryset.filter(patient__user=user)
+        if user.is_clinic:
+            return queryset.filter(clinic__owner=user)
+        return queryset.none()
+
+    @staticmethod
+    def _is_administrator(user):
+        return user.is_superuser or user.is_administrator
 
     @staticmethod
     def _managed_queue_enabled(appointment):
@@ -2147,6 +2186,26 @@ class MedicalRecordViewSet(viewsets.ModelViewSet):
         return response
 
     def perform_create(self, serializer):
+        user = self.request.user
+        if not self._is_administrator(user):
+            doctor = serializer.validated_data.get('doctor')
+            patient = serializer.validated_data.get('patient')
+            clinic = serializer.validated_data.get('clinic')
+            appointment = serializer.validated_data.get('appointment')
+            user_doctor = getattr(user, 'doctor', None) if user.is_doctor else None
+
+            if not user_doctor or not doctor or doctor.user_id != user.pk:
+                raise PermissionDenied('Tibbiy yozuvni faqat o‘z profilingizdan yaratishingiz mumkin.')
+            if clinic and clinic.id != user_doctor.clinic_id:
+                raise PermissionDenied('Faqat o‘z klinikangiz uchun yozuv yaratishingiz mumkin.')
+            if appointment and (
+                not patient
+                or appointment.doctor_id != doctor.id
+                or appointment.patient_id != patient.id
+                or (clinic and appointment.clinic_id != clinic.id)
+            ):
+                raise PermissionDenied('Uchrashuv bemor, doktor va klinikaga mos kelmaydi.')
+
         appointment = self._resolve_completed_appointment_for_record(serializer)
         if appointment:
             record = serializer.save(appointment=appointment)
@@ -2179,6 +2238,27 @@ class MedicalRecordViewSet(viewsets.ModelViewSet):
                 logger.exception('Medical record rating prompt failed')
         if record.appointment:
             self._advance_managed_queue(record.appointment)
+
+    def perform_update(self, serializer):
+        if not self._is_administrator(self.request.user):
+            record = self.get_object()
+            for field in ('patient', 'doctor', 'clinic'):
+                if field in serializer.validated_data and serializer.validated_data[field] != getattr(record, field):
+                    raise PermissionDenied('Tibbiy yozuvning bemor, doktor yoki klinikasini o‘zgartirib bo‘lmaydi.')
+        serializer.save()
+
+    @action(detail=True, methods=['get'], url_path='attachment')
+    def attachment(self, request, pk=None):
+        record = self.get_object()
+        if not record.attachment:
+            return Response({'detail': 'Ilova topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+        file_handle = record.attachment.open('rb')
+        return FileResponse(
+            file_handle,
+            as_attachment=True,
+            filename=record.attachment.name.rsplit('/', 1)[-1],
+        )
 
     def update(self, request, *args, **kwargs):
         self._ensure_doctor_can_practice()

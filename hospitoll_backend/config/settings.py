@@ -29,16 +29,6 @@ GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-2.5-flash')
 WEB_PUSH_VAPID_PUBLIC_KEY = config('WEB_PUSH_VAPID_PUBLIC_KEY', default='')
 WEB_PUSH_VAPID_PRIVATE_KEY_B64 = config('WEB_PUSH_VAPID_PRIVATE_KEY_B64', default='')
 WEB_PUSH_VAPID_SUBJECT = config('WEB_PUSH_VAPID_SUBJECT', default='mailto:mailer@g-med.uz')
-LIZA_TRANSCRIBE_HANDLER = config(
-    'LIZA_TRANSCRIBE_HANDLER',
-    default='apps.liza.services.transcribe_audio',
-)
-LIZA_VOSK_MODEL_PATH = config(
-    'LIZA_VOSK_MODEL_PATH',
-    default=str(BASE_DIR.parent / 'jx.group_ovozli_yordamchi' / 'engine' / 'vosk-model-small-uz-0.22'),
-)
-LIZA_TTS_VOICE = config('LIZA_TTS_VOICE', default='uz-UZ-MadinaNeural')
-LIZA_TTS_RATE = config('LIZA_TTS_RATE', default='-15%')
 
 # Application definition
 INSTALLED_APPS = [
@@ -77,7 +67,6 @@ INSTALLED_APPS = [
     'apps.site_settings',
     'apps.printers',
     'apps.child_safety',
-    'apps.liza',
 ]
 
 MIDDLEWARE = [
@@ -201,10 +190,6 @@ REST_FRAMEWORK = {
         'password_reset_request': '5/hour',
         'password_reset_verify': '30/hour',
         'password_reset_confirm': '20/hour',
-        'liza_command': '120/hour',
-        'liza_voice': '120/hour',
-        'liza_wake': '90/minute',
-        'liza_speech': '120/hour',
         'ai_analysis_upload': '20/hour',
         'ai_analysis_read': '120/hour',
         'child_safety_vote': '10/hour',
@@ -368,9 +353,9 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'apps.medical.tasks.send_today_first_queue_reminders',
         'schedule': crontab(minute='*'),  # Every minute, task itself checks start-30m window
     },
-    'send-due-medication-reminders': {
-        'task': 'apps.patients.tasks.send_due_medication_reminders',
-        'schedule': crontab(minute='*'),
+    'purge-read-broadcast-notifications': {
+        'task': 'apps.site_settings.tasks.purge_read_broadcast_notifications',
+        'schedule': crontab(minute=0),  # Remove read notifications older than 48 hours hourly
     },
     # Invoice management
     'send-overdue-invoice-reminders': {

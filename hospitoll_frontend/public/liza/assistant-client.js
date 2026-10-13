@@ -7,11 +7,14 @@ $(document).ready(function () {
     var audioProcessor = null;
     var recordingSampleRate = 16000;
     var audioFrames = [];
+    var preRollFrames = [];
+    var preRollSamples = 0;
     var utteranceSamples = 0;
     var voicedSamples = 0;
     var lastVoiceAt = 0;
     var isProcessingVoice = false;
     var isSpeaking = false;
+    var listeningMode = "command";
     var speakingToken = 0;
     var stopAfterCurrentReply = false;
     var youtubePlayer = null;
@@ -21,6 +24,7 @@ $(document).ready(function () {
     var youtubeVolumeBeforeListening = null;
     var youtubeDuckTimeout = null;
     var youtubeDuckPending = false;
+    var restoreYoutubeAfterReply = false;
     var internetSearchStorageKey = "gmed_liza_internet_search";
     var internetSearchToggle = document.getElementById("InternetSearchToggle");
     var apiUrlMeta = document.querySelector('meta[name="liza-api-url"]');
@@ -75,6 +79,12 @@ $(document).ready(function () {
 
     function setStatus(message) {
         $(".siri-message").text(message);
+    }
+
+    function listeningStatus() {
+        return listeningMode === "wake"
+            ? "Tinglayapman. Buyruq uchun “Liza” deb chaqiring."
+            : "Tinglayapman. Gapiring yoki mikrofonni bosing.";
     }
 
     function appendTextWithLinks(element, message) {
@@ -156,6 +166,7 @@ $(document).ready(function () {
         window.clearTimeout(youtubeDuckTimeout);
         youtubeDuckTimeout = null;
         youtubeDuckPending = false;
+        restoreYoutubeAfterReply = false;
         if (youtubeVolumeBeforeListening === null) return;
         if (youtubePlayer && typeof youtubePlayer.setVolume === "function") youtubePlayer.setVolume(youtubeVolumeBeforeListening);
         youtubeVolumeBeforeListening = null;
@@ -265,6 +276,7 @@ $(document).ready(function () {
         } finally {
             if (audioUrl) URL.revokeObjectURL(audioUrl);
             if (token === speakingToken) {
+                if (restoreYoutubeAfterReply) restoreYoutubeVolume();
                 isSpeaking = false;
                 if (stopAfterCurrentReply) {
                     stopAfterCurrentReply = false;
@@ -316,7 +328,13 @@ $(document).ready(function () {
                 setStatus(data.reply);
                 return;
             }
-            restoreYoutubeVolume();
+            var keepYoutubeDucked = restoreYoutubeAfterReply && youtubeVolumeBeforeListening !== null;
+            if (keepYoutubeDucked) {
+                window.clearTimeout(youtubeDuckTimeout);
+                youtubeDuckTimeout = null;
+            } else {
+                restoreYoutubeVolume();
+            }
             stopAfterCurrentReply = data.action === "stop_listening";
             var afterReply;
             if (data.action === "open_profile") {
@@ -337,11 +355,14 @@ $(document).ready(function () {
                 };
             } else {
                 afterReply = function () {
-                    if (isListening && !stopAfterCurrentReply) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
+                    if (isListening && !stopAfterCurrentReply) setStatus(listeningStatus());
                 };
             }
             var spokenReply = data.reply.split("\nManbalar:\n")[0];
-            speakMadina(spokenReply, afterReply);
+            speakMadina(spokenReply, function () {
+                if (keepYoutubeDucked) restoreYoutubeVolume();
+                if (afterReply) afterReply();
+            });
         }
     }
 
@@ -395,9 +416,67 @@ $(document).ready(function () {
 
     function resetUtterance() {
         audioFrames = [];
+        preRollFrames = [];
+        preRollSamples = 0;
         utteranceSamples = 0;
         voicedSamples = 0;
         lastVoiceAt = 0;
+    }
+
+    function playWakeTone() {
+        if (!audioContext) return;
+        var oscillator = audioContext.createOscillator();
+        var gain = audioContext.createGain();
+        oscillator.frequency.value = 880;
+        gain.gain.setValueAtTime(0.08, audioContext.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.12);
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.12);
+    }
+
+    function handleWakeResult(data) {
+        if (!isListening || !data.wake) return;
+
+        if (youtubePlayer && typeof youtubePlayer.getPlayerState === "function" && youtubePlayer.getPlayerState() === 1) {
+            duckYoutubeVolume();
+            restoreYoutubeAfterReply = true;
+        }
+
+        var transcript = String(data.transcript || "");
+        var wakeWord = /\b(?:liza|lisa|lizza|lizaa|liz)\b/i.exec(transcript);
+        var command = wakeWord
+            ? transcript.slice(wakeWord.index + wakeWord[0].length).replace(/^[\s,.:;!?-]+/, "").trim()
+            : transcript.trim();
+        if (command || data.action === "open_profile") {
+            listeningMode = "command";
+            setStatus("Buyruqni bajaryapman...");
+            return sendToDjango(command || transcript)
+                .catch(function (error) { setStatus(error.message || "Buyruq bajarilmadi."); })
+                .finally(function () {
+                    listeningMode = "wake";
+                    if (isListening && !isSpeaking) setStatus(listeningStatus());
+                });
+        }
+
+        listeningMode = "command";
+        setStatus("Ha, eshitaman. Buyrug'ingizni ayting.");
+        playWakeTone();
+    }
+
+    function processUtterance(blob, useWakeDetection) {
+        isProcessingVoice = true;
+        if (!useWakeDetection) setStatus("Buyruqni tushunib, javob tayyorlayapman...");
+
+        var request = useWakeDetection
+            ? sendWakeToDjango(blob).then(handleWakeResult)
+            : sendVoiceToDjango(blob, "audio/wav").then(function () { listeningMode = "wake"; });
+        request
+            .catch(function (error) {
+                setStatus(error.message || (useWakeDetection ? "Liza chaqiruvini tekshirib bo'lmadi." : "Ovoz serverda qayta ishlanmadi."));
+            })
+            .finally(function () { isProcessingVoice = false; });
     }
 
     function submitCurrentUtterance() {
@@ -407,17 +486,10 @@ $(document).ready(function () {
             return;
         }
         var blob = createWavBlob(audioFrames, recordingSampleRate);
+        var useWakeDetection = listeningMode === "wake";
         resetUtterance();
         if (!blob) return;
-
-        isProcessingVoice = true;
-        setStatus("Buyruqni tushunib, javob tayyorlayapman...");
-        sendVoiceToDjango(blob, "audio/wav")
-            .catch(function (error) { setStatus(error.message || "Ovoz serverda qayta ishlanmadi."); })
-            .finally(function () {
-                isProcessingVoice = false;
-                if (isListening && !isSpeaking) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
-            });
+        processUtterance(blob, useWakeDetection);
     }
 
     function stopRecording(submitPending) {
@@ -444,15 +516,14 @@ $(document).ready(function () {
         $("#MicBtn").attr("aria-pressed", "false");
         $("#SiriWave").attr("hidden", true);
         document.body.classList.remove("liza-listening");
-        var blob = submitPending ? createWavBlob(audioFrames, recordingSampleRate) : null;
+        var blob = submitPending && listeningMode === "command"
+            ? createWavBlob(audioFrames, recordingSampleRate)
+            : null;
         resetUtterance();
         if (!blob || isSpeaking) return;
 
         setStatus("Oxirgi buyruqni yakunlayapman...");
-        isProcessingVoice = true;
-        sendVoiceToDjango(blob, "audio/wav")
-            .catch(function (error) { setStatus(error.message || "Ovoz serverda qayta ishlanmadi."); })
-            .finally(function () { isProcessingVoice = false; });
+        processUtterance(blob, false);
     }
 
     async function sendToDjango(message) {
@@ -486,6 +557,21 @@ $(document).ready(function () {
         var data = await response.json().catch(function () { return {}; });
         if (!response.ok) throw new Error(data.error || "Ovoz serverda qayta ishlanmadi.");
         showReply(data);
+    }
+
+    async function sendWakeToDjango(blob) {
+        var headers = authHeaders();
+        var formData = new FormData();
+        formData.append("audio", blob, "liza-wake.wav");
+        var response = await fetch(apiBaseUrl + "wake/", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: headers,
+            body: formData
+        });
+        var data = await response.json().catch(function () { return {}; });
+        if (!response.ok) throw new Error(data.error || "Liza chaqiruvini tekshirib bo'lmadi.");
+        return data;
     }
 
     async function sendCommand(message) {
@@ -529,8 +615,11 @@ $(document).ready(function () {
         }
 
         isListening = true;
+        listeningMode = youtubePlayer && typeof youtubePlayer.getPlayerState === "function" && youtubePlayer.getPlayerState() === 1
+            ? "wake"
+            : "command";
         showAssistant();
-        setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
+        setStatus(listeningStatus());
         $("#MicBtn").attr("aria-pressed", "true");
         navigator.mediaDevices.getUserMedia({
             audio: {
@@ -563,10 +652,23 @@ $(document).ready(function () {
                     voicedSamples += frame.length;
                 }
                 if (lastVoiceAt) {
+                    if (!utteranceSamples && preRollFrames.length) {
+                        audioFrames = preRollFrames.slice();
+                        utteranceSamples = preRollSamples;
+                        preRollFrames = [];
+                        preRollSamples = 0;
+                    }
                     audioFrames.push(frame);
                     utteranceSamples += frame.length;
-                    if (now - lastVoiceAt > 900 || utteranceSamples >= recordingSampleRate * 12) {
+                    var maxUtteranceSeconds = listeningMode === "wake" ? 7 : 12;
+                    if (now - lastVoiceAt > 900 || utteranceSamples >= recordingSampleRate * maxUtteranceSeconds) {
                         submitCurrentUtterance();
+                    }
+                } else {
+                    preRollFrames.push(frame);
+                    preRollSamples += frame.length;
+                    while (preRollSamples > recordingSampleRate * 0.3 && preRollFrames.length) {
+                        preRollSamples -= preRollFrames.shift().length;
                     }
                 }
             };
@@ -577,7 +679,7 @@ $(document).ready(function () {
             silentOutput.connect(audioContext.destination);
             if (!youtubePlayer) {
                 speakMadina("Salom, men Lizaman. Sizga qanday yordam beray?", function () {
-                    if (isListening) setStatus("Tinglayapman. Davom eting yoki mikrofonni bosing.");
+                    if (isListening) setStatus(listeningStatus());
                 });
             }
         }).catch(function () {
@@ -615,13 +717,19 @@ $(document).ready(function () {
     }
 
     $("#MicBtn").on("click", startListening);
+    document.addEventListener("visibilitychange", function () {
+        if (document.hidden && isListening) {
+            stopRecording(false);
+            setStatus("Ilova fonda. Tinglash to‘xtatildi; qaytgach mikrofonni qayta yoqing.");
+        }
+    });
     if (internetSearchToggle) {
         updateInternetSearchToggle();
         internetSearchToggle.addEventListener("click", function () {
             localStorage.setItem(internetSearchStorageKey, String(!isInternetSearchEnabled()));
             updateInternetSearchToggle();
             setStatus(isInternetSearchEnabled()
-                ? "Internet-qidiruv yoqildi. Savollaringiz DuckDuckGo’ga yuboriladi; shaxsiy ma’lumotlarni kiritmang."
+                ? "Internet-qidiruv yoqildi. Savollaringiz qidiruv tizimlariga yuboriladi; shaxsiy ma’lumotlarni kiritmang."
                 : "Internet-qidiruv o‘chirildi. Liza odatdagi rejimda javob beradi.");
         });
     }

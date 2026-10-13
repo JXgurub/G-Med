@@ -1,16 +1,17 @@
 from typing import Any, cast
-import json
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.conf import settings
 from django.test import override_settings
+from django.utils import timezone
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
 from apps.users.models import CustomUser
 from apps.site_settings.models import HomeContactSettings, SystemAlert
 from apps.site_settings.models import BroadcastNotification, WebPushSubscription
-from apps.site_settings.tasks import send_saved_broadcast_push
+from apps.site_settings.tasks import purge_read_broadcast_notifications
 from core.error_logging import ErrorLogger
 from apps.patients.models import Patient
 
@@ -109,7 +110,13 @@ class SiteSettingsSystemAlertTests(APITestCase):
         response = self.client.get(reverse('admin-broadcast'))
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'site_users': 2, 'telegram_users': 1, 'push_devices': 0})
+        self.assertEqual(response.json(), {
+            'site_users': 2,
+            'telegram_users': 1,
+            'push_devices': 0,
+            'notifications_read': 0,
+            'notifications_unread': 0,
+        })
 
     @patch('apps.medical.telegram_bot_service.TelegramBotService._require_client')
     @patch('core.websocket_service.WebSocketService.send_notification', return_value=True)
@@ -171,37 +178,78 @@ class SiteSettingsSystemAlertTests(APITestCase):
         self.assertEqual(self.client.get(inbox_url).data, [])
         self.assertEqual(send_site.call_count, 2)
 
-    @patch('pywebpush.webpush')
-    @override_settings(WEB_PUSH_VAPID_PUBLIC_KEY='BElocal-test-key', WEB_PUSH_VAPID_PRIVATE_KEY_B64='dGVzdA==')
-    def test_medication_push_contains_a_taken_action(self, webpush):
-        notification = BroadcastNotification.objects.create(
-            user=self.doctor_user,
-            title='💊 Dori ichish vaqti',
-            message='Alsetro',
-            data={
-                'notification_type': 'medication_reminder',
-                'reminder_id': 42,
-                'acknowledgement_token': 'b7b883a7-e1a5-4a85-a6e0-8837c4e133a1',
-            },
+    @patch('core.websocket_service.WebSocketService.send_notification', return_value=True)
+    def test_broadcast_metadata_and_notification_history(self, send_site):
+        patient_user = CustomUser.objects.create_user(
+            username='patient_broadcast_history',
+            email='patient.broadcast.history@example.com',
+            password='Pass12345!',
+            role='patient',
         )
-        WebPushSubscription.objects.create(
+        self.auth_as(self.admin_user)
+        response = self.client.post(reverse('admin-broadcast'), {
+            'title': 'Qabul eslatmasi',
+            'message': 'Qabul vaqtingiz yaqinlashdi.',
+            'category': 'important',
+            'priority': 'high',
+            'target_url': '/patient',
+            'channels': ['site'],
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        notification = BroadcastNotification.objects.get(user=patient_user)
+        self.assertEqual(notification.data, {
+            'category': 'important',
+            'priority': 'high',
+            'url': '/patient',
+        })
+        self.assertEqual(send_site.call_args_list[0].args[2]['url'], '/patient')
+
+        self.auth_as(patient_user)
+        inbox_url = reverse('broadcast-inbox')
+        self.assertEqual(len(self.client.get(inbox_url).data), 1)
+        self.assertEqual(len(self.client.get(inbox_url, {'unread': 'false'}).data), 1)
+        mark_all_response = self.client.post(inbox_url, {}, format='json')
+        self.assertEqual(mark_all_response.data, {'updated': 1})
+        self.assertEqual(self.client.get(inbox_url).data, [])
+        history = self.client.get(inbox_url, {'unread': 'false'}).data
+        self.assertEqual(len(history), 1)
+        self.assertIsNotNone(history[0]['read_at'])
+
+    def test_broadcast_rejects_external_notification_destination(self):
+        self.auth_as(self.admin_user)
+        response = self.client.post(reverse('admin-broadcast'), {
+            'title': 'Xavfsizlik tekshiruvi',
+            'message': 'Manzil tekshiruvi',
+            'target_url': 'https://example.com',
+            'channels': ['site'],
+        }, format='json')
+        self.assertEqual(response.status_code, 400)
+
+    def test_cleanup_deletes_only_read_notifications_older_than_two_days(self):
+        old_read = BroadcastNotification.objects.create(
             user=self.doctor_user,
-            endpoint='https://push.example.test/subscription/medication-action',
-            p256dh='public-key',
-            auth='auth-key',
+            title='Eski o‘qilgan',
+            message='Bu xabar o‘chishi kerak.',
+            read_at=timezone.now() - timedelta(days=2, minutes=1),
+        )
+        recent_read = BroadcastNotification.objects.create(
+            user=self.doctor_user,
+            title='Yaqinda o‘qilgan',
+            message='Bu xabar saqlanadi.',
+            read_at=timezone.now() - timedelta(days=2) + timedelta(minutes=1),
+        )
+        unread = BroadcastNotification.objects.create(
+            user=self.doctor_user,
+            title='O‘qilmagan',
+            message='O‘qilmagan xabar doim saqlanadi.',
         )
 
-        result = send_saved_broadcast_push.run([str(notification.id)])
-        payload = json.loads(webpush.call_args.kwargs['data'])
+        result = purge_read_broadcast_notifications.run()
 
-        self.assertEqual(result, {'sent': 1, 'failed': 0, 'expired': 0})
-        self.assertEqual(payload['actions'], [{'action': 'taken', 'title': 'Ichdingizmi?'}])
-        self.assertTrue(payload['renotify'])
-        self.assertEqual(payload['tag'], 'medication-reminder-42')
-        self.assertEqual(
-            payload['data']['acknowledgement_token'],
-            'b7b883a7-e1a5-4a85-a6e0-8837c4e133a1',
-        )
+        self.assertEqual(result, {'deleted': 1})
+        self.assertFalse(BroadcastNotification.objects.filter(pk=old_read.pk).exists())
+        self.assertTrue(BroadcastNotification.objects.filter(pk=recent_read.pk).exists())
+        self.assertTrue(BroadcastNotification.objects.filter(pk=unread.pk, read_at__isnull=True).exists())
 
     @override_settings(WEB_PUSH_VAPID_PUBLIC_KEY='BElocal-test-key', WEB_PUSH_VAPID_PRIVATE_KEY_B64='dGVzdA==')
     def test_user_can_register_a_web_push_subscription(self):

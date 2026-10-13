@@ -4,11 +4,17 @@ import os
 import re
 import wave
 import asyncio
+import base64
 import hashlib
+import ipaddress
+import socket
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from functools import lru_cache
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
+from xml.etree import ElementTree
 
 import requests
 
@@ -95,6 +101,11 @@ YOUTUBE_TRIGGER = re.compile(r'\b(?:youtube|youtub|yutub|yutube|yutobe)(?:\s*)?(
 YOUTUBE_QUEUE_TTL_SECONDS = 3600
 YOUTUBE_TITLE_TTL_SECONDS = 180
 INTERNET_SEARCH_CACHE_TTL_SECONDS = 180
+INTERNET_SEARCH_MAX_RESULTS = 8
+INTERNET_SEARCH_EXCERPT_PAGES = 3
+INTERNET_SEARCH_EXCERPT_CHARS = 450
+INTERNET_SEARCH_PAGE_MAX_BYTES = 300_000
+TTS_MAX_ATTEMPTS = 4
 
 
 class _DuckDuckGoResultsParser(HTMLParser):
@@ -152,6 +163,20 @@ class _DuckDuckGoResultsParser(HTMLParser):
         if self.current_result and self.current_result.get('title'):
             self.results.append(self.current_result)
         self.current_result = None
+
+
+SEARCH_FILLER_RE = re.compile(
+    r"\b(?:haqida|xaqida|togrisida|to'g'risida|malumot|ma'lumot|ma'lumotlar|malumotlar|ber|bering|ayt|ayting|"
+    r"aytib|gapirib|gapir|nima|kim|qanday|tushuntir|tushuntirib|menga|iltimos|bilasanmi|bilasizmi|kerak|"
+    r"haqidagi|boyicha|bo'yicha|qidir|qidiring|izla|top|toping|internetda|internetdan|googleda|yandexda)\b"
+)
+
+
+def _search_topic(query):
+    cleaned = re.sub(r"[’‘ʻʼ`´]", "'", query).casefold()
+    cleaned = SEARCH_FILLER_RE.sub(' ', cleaned)
+    cleaned = ' '.join(cleaned.split()).strip(" ,.?!'")
+    return cleaned or query
 
 
 def _external_query(normalized, words):
@@ -375,6 +400,200 @@ def _weather_reply(normalized):
         return 'Ob-havo ma’lumotini hozir olib bo‘lmadi. Birozdan keyin qayta urinib ko‘ring.'
 
 
+class _BingResultsParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.results = []
+        self.current = None
+        self.in_h2 = False
+        self.in_title_link = False
+        self.in_snippet = False
+        self.title_parts = []
+        self.snippet_parts = []
+
+    def handle_starttag(self, tag, attrs):
+        attributes = dict(attrs)
+        classes = set((attributes.get('class') or '').split())
+        if tag == 'li' and 'b_algo' in classes:
+            self._finish()
+            self.current = {'title': '', 'url': '', 'snippet': ''}
+        elif self.current is None:
+            return
+        elif tag == 'h2':
+            self.in_h2 = True
+        elif tag == 'a' and self.in_h2 and not self.current['url']:
+            self.current['url'] = attributes.get('href', '')
+            self.in_title_link = True
+        elif tag == 'p' and not self.snippet_parts and not self.current['snippet']:
+            self.in_snippet = True
+
+    def handle_data(self, data):
+        if self.in_title_link:
+            self.title_parts.append(data)
+        elif self.in_snippet:
+            self.snippet_parts.append(data)
+
+    def handle_endtag(self, tag):
+        if self.current is None:
+            return
+        if tag == 'a' and self.in_title_link:
+            self.in_title_link = False
+            self.current['title'] = ' '.join(' '.join(self.title_parts).split())
+            self.title_parts = []
+        elif tag == 'h2':
+            self.in_h2 = False
+        elif tag == 'p' and self.in_snippet:
+            self.in_snippet = False
+            self.current['snippet'] = ' '.join(' '.join(self.snippet_parts).split())
+            self.snippet_parts = []
+
+    def _finish(self):
+        if self.current and self.current['title'] and self.current['url']:
+            self.results.append(self.current)
+        self.current = None
+
+    def close(self):
+        super().close()
+        self._finish()
+
+
+def _unwrap_bing_url(href):
+    parsed = urlparse(href)
+    if parsed.hostname and parsed.hostname.endswith('bing.com'):
+        encoded = parse_qs(parsed.query).get('u', [''])[0]
+        if encoded.startswith('a1'):
+            payload = encoded[2:]
+            try:
+                return base64.urlsafe_b64decode(payload + '=' * (-len(payload) % 4)).decode('utf-8')
+            except (ValueError, UnicodeDecodeError):
+                return ''
+        return ''
+    return href
+
+
+def _bing_search_results(query):
+    response = requests.get(
+        'https://www.bing.com/search',
+        params={'q': query, 'setlang': 'uz'},
+        timeout=10,
+        headers={
+            'User-Agent': (
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/131.0.0.0 Safari/537.36'
+            ),
+            'Accept-Language': 'uz,en-US;q=0.9,en;q=0.8',
+        },
+    )
+    response.raise_for_status()
+    parser = _BingResultsParser()
+    parser.feed(response.text)
+    parser.close()
+    return parser.results
+
+
+def _clean_search_results(items, skip_hosts):
+    results = []
+    seen_urls = set()
+    for item in items:
+        href = item['url']
+        if href.startswith('//'):
+            href = f'https:{href}'
+        href = unquote(href)
+        parsed = urlparse(href)
+        if (
+            parsed.scheme not in {'http', 'https'}
+            or not parsed.hostname
+            or any(parsed.hostname.endswith(host) for host in skip_hosts)
+            or href in seen_urls
+        ):
+            continue
+        seen_urls.add(href)
+        results.append({
+            'title': item['title'][:240],
+            'snippet': item['snippet'][:500],
+            'url': href,
+        })
+        if len(results) == INTERNET_SEARCH_MAX_RESULTS:
+            break
+    return results
+
+
+def _google_api_results(query):
+    key = getattr(settings, 'LIZA_GOOGLE_SEARCH_API_KEY', '')
+    cx = getattr(settings, 'LIZA_GOOGLE_SEARCH_CX', '')
+    if not key or not cx:
+        return []
+    response = requests.get(
+        'https://www.googleapis.com/customsearch/v1',
+        params={'key': key, 'cx': cx, 'q': query, 'num': 10, 'hl': 'uz'},
+        timeout=8,
+    )
+    response.raise_for_status()
+    return [
+        {'title': item.get('title', ''), 'snippet': item.get('snippet', ''), 'url': item.get('link', '')}
+        for item in response.json().get('items', [])
+    ]
+
+
+def _yandex_api_results(query):
+    key = getattr(settings, 'LIZA_YANDEX_SEARCH_API_KEY', '')
+    folder = getattr(settings, 'LIZA_YANDEX_SEARCH_FOLDER_ID', '')
+    if not key or not folder:
+        return []
+    response = requests.get(
+        'https://yandex.com/search/xml',
+        params={'folderid': folder, 'apikey': key, 'query': query, 'l10n': 'ru', 'sortby': 'rlv'},
+        timeout=10,
+    )
+    response.raise_for_status()
+    root = ElementTree.fromstring(response.content)
+    items = []
+    for doc in root.iter('doc'):
+        title = ' '.join(''.join(doc.find('title').itertext()).split()) if doc.find('title') is not None else ''
+        url = doc.findtext('url', default='')
+        passages = ' '.join(' '.join(''.join(p.itertext()).split()) for p in doc.iter('passage'))
+        items.append({'title': title, 'snippet': passages, 'url': url})
+    return items
+
+
+def _brave_api_results(query):
+    key = getattr(settings, 'LIZA_BRAVE_SEARCH_API_KEY', '')
+    if not key:
+        return []
+    response = requests.get(
+        'https://api.search.brave.com/res/v1/web/search',
+        params={'q': query, 'count': 10},
+        timeout=8,
+        headers={'X-Subscription-Token': key, 'Accept': 'application/json'},
+    )
+    response.raise_for_status()
+    return [
+        {
+            'title': item.get('title', ''),
+            'snippet': re.sub(r'<[^>]+>', '', item.get('description', '')),
+            'url': item.get('url', ''),
+        }
+        for item in (response.json().get('web') or {}).get('results', [])
+    ]
+
+
+def _bing_scrape_results(query):
+    items = _bing_search_results(query)
+    for item in items:
+        item['url'] = _unwrap_bing_url(item['url'])
+    return _relevant_results(query, _clean_search_results(items, ('bing.com', 'microsoft.com')))
+
+
+SEARCH_PROVIDERS = (
+    ('google', lambda query: _google_api_results(query)),
+    ('yandex', lambda query: _yandex_api_results(query)),
+    ('brave', lambda query: _brave_api_results(query)),
+    ('duckduckgo', lambda query: _duckduckgo_search_results(query)),
+    ('bing', lambda query: _bing_scrape_results(query)),
+)
+
+
 def _internet_search_results(query):
     cache_key = (
         f"liza:internet-search:{hashlib.sha256(query.casefold().encode('utf-8')).hexdigest()}"
@@ -383,6 +602,31 @@ def _internet_search_results(query):
     if cached:
         return cached
 
+    results = []
+    for name, provider in SEARCH_PROVIDERS:
+        try:
+            results = _clean_search_results(provider(query), ())
+        except (requests.RequestException, ElementTree.ParseError, ValueError):
+            logger.warning('Liza %s search failed', name, exc_info=True)
+            results = []
+        if results:
+            break
+    if results:
+        cache.set(cache_key, results, INTERNET_SEARCH_CACHE_TTL_SECONDS)
+    return results
+
+
+def _relevant_results(query, results):
+    tokens = {token[:5] for token in re.findall(r'\w{4,}', query.casefold())}
+    if not tokens:
+        return results
+    return [
+        item for item in results
+        if any(token in f"{item['title']} {item['snippet']} {item['url']}".casefold() for token in tokens)
+    ]
+
+
+def _duckduckgo_search_results(query):
     response = requests.get(
         'https://html.duckduckgo.com/html/',
         params={'q': query},
@@ -425,10 +669,8 @@ def _internet_search_results(query):
             'snippet': item['snippet'][:500],
             'url': href,
         })
-        if len(results) == 5:
+        if len(results) == INTERNET_SEARCH_MAX_RESULTS:
             break
-    if results:
-        cache.set(cache_key, results, INTERNET_SEARCH_CACHE_TTL_SECONDS)
     return results
 
 
@@ -439,10 +681,132 @@ def _safe_external_query(query):
     return query[:300]
 
 
+class _PageTextParser(HTMLParser):
+    SKIP_TAGS = frozenset(('script', 'style', 'noscript', 'nav', 'footer', 'header', 'aside', 'form', 'svg'))
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.paragraphs = []
+        self._skip_depth = 0
+        self._in_paragraph = False
+        self._buffer = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP_TAGS:
+            self._skip_depth += 1
+        elif tag == 'p' and not self._skip_depth:
+            self._in_paragraph = True
+            self._buffer = []
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP_TAGS and self._skip_depth:
+            self._skip_depth -= 1
+        elif tag == 'p' and self._in_paragraph:
+            self._in_paragraph = False
+            text = ' '.join(' '.join(self._buffer).split())
+            if len(text) >= 60:
+                self.paragraphs.append(text)
+
+    def handle_data(self, data):
+        if self._in_paragraph and not self._skip_depth:
+            self._buffer.append(data)
+
+
+def _is_public_http_url(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
+        return False
+    try:
+        addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, None)}
+    except OSError:
+        return False
+    return bool(addresses) and all(ipaddress.ip_address(address).is_global for address in addresses)
+
+
+def _page_excerpt(url):
+    try:
+        if not _is_public_http_url(url):
+            return ''
+        response = requests.get(
+            url,
+            timeout=6,
+            stream=True,
+            allow_redirects=False,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (compatible; G-MED-Liza/1.0)',
+                'Accept-Language': 'uz,en-US;q=0.9,en;q=0.8',
+            },
+        )
+        if response.status_code != 200 or 'html' not in response.headers.get('Content-Type', '').lower():
+            return ''
+        body = response.raw.read(INTERNET_SEARCH_PAGE_MAX_BYTES, decode_content=True)
+        encoding = response.encoding or 'utf-8'
+        parser = _PageTextParser()
+        parser.feed(body.decode(encoding, errors='ignore'))
+        text = ' '.join(parser.paragraphs[:3])
+        return text[:INTERNET_SEARCH_EXCERPT_CHARS].rstrip()
+    except Exception:
+        logger.info('Liza page excerpt failed for %s', url, exc_info=True)
+        return ''
+
+
+def _wikipedia_summary(query):
+    for language in ('uz', 'en'):
+        try:
+            response = requests.get(
+                f'https://{language}.wikipedia.org/w/api.php',
+                params={
+                    'action': 'query',
+                    'format': 'json',
+                    'generator': 'search',
+                    'gsrsearch': query,
+                    'gsrlimit': 3,
+                    'prop': 'extracts|info',
+                    'inprop': 'url',
+                    'exintro': 1,
+                    'explaintext': 1,
+                    'exsentences': 4,
+                    'exlimit': 3,
+                },
+                timeout=6,
+                headers={'User-Agent': 'G-MED-Liza/1.0'},
+            )
+            response.raise_for_status()
+            pages = sorted(
+                ((response.json().get('query') or {}).get('pages') or {}).values(),
+                key=lambda item: item.get('index', 0),
+            )
+            articles = []
+            for page in pages:
+                extract = ' '.join(page.get('extract', '').split())
+                if extract and page.get('fullurl'):
+                    articles.append({'title': page.get('title', ''), 'text': extract[:700], 'url': page['fullurl']})
+            if articles:
+                return {
+                    'text': articles[0]['text'],
+                    'url': articles[0]['url'],
+                    'others': articles[1:],
+                }
+        except (requests.RequestException, ValueError, TypeError, AttributeError):
+            logger.info('Liza Wikipedia lookup failed', exc_info=True)
+    return None
+
+
+def _enrich_internet_results(query, results):
+    pages = results[:INTERNET_SEARCH_EXCERPT_PAGES]
+    with ThreadPoolExecutor(max_workers=INTERNET_SEARCH_EXCERPT_PAGES + 1) as pool:
+        wiki_future = pool.submit(_wikipedia_summary, query)
+        excerpt_futures = [pool.submit(_page_excerpt, item['url']) for item in pages]
+        wiki = wiki_future.result()
+        excerpts = [future.result() for future in excerpt_futures]
+    return wiki, excerpts
+
+
 def _internet_search_reply(query):
     query = _safe_external_query(query)
     if not query:
         return 'Shaxsiy ma’lumotlarni qidiruvga yubormadim. Savolni shaxsiy ma’lumotlarsiz qayta yozing.'
+    query = _search_topic(query)
 
     try:
         results = _internet_search_results(query)
@@ -450,13 +814,30 @@ def _internet_search_reply(query):
         logger.warning('Liza internet search request failed', exc_info=True)
         results = []
 
-    if results:
+    try:
+        wiki, excerpts = _enrich_internet_results(query, results)
+    except Exception:
+        logger.warning('Liza internet search enrichment failed', exc_info=True)
+        wiki, excerpts = None, []
+
+    if results or wiki:
         lines = ['Internet qidiruvi natijalari:']
+        if wiki:
+            lines.append(f"Qisqacha: {wiki['text']}")
         for index, result in enumerate(results, start=1):
             snippet = f" — {result['snippet']}" if result['snippet'] else ''
             lines.append(f"{index}. {result['title']}{snippet}")
+            excerpt = excerpts[index - 1] if index <= len(excerpts) else ''
+            if excerpt and excerpt not in result['snippet']:
+                lines.append(f'   Batafsil: {excerpt}')
+        sources = [item['url'] for item in results]
+        if wiki:
+            sources.append(wiki['url'])
+            for other in wiki.get('others', []):
+                lines.append(f"Yana: {other['title']} — {other['text'][:300]}")
+                sources.append(other['url'])
         lines.append('Manbalar:')
-        lines.extend(f"{index}. {item['url']}" for index, item in enumerate(results, start=1))
+        lines.extend(f'{index}. {url}' for index, url in enumerate(sources, start=1))
         return '\n'.join(lines)
 
     try:
@@ -479,8 +860,8 @@ def _internet_search_reply(query):
             suffix = f'\nManba:\n{source}' if source else ''
             return f"{related['Text'][:900]}{suffix}"
         return (
-            'Qidiruv natijasi topilmadi. To‘g‘ridan-to‘g‘ri ko‘rish: '
-            f'https://duckduckgo.com/?q={quote_plus(query)}'
+            'Aniq natija topilmadi. Savolni aniqroq yozing yoki o‘zingiz qidiring: '
+            f'https://www.google.com/search?q={quote_plus(query)}'
         )
     except (requests.RequestException, ValueError, TypeError):
         logger.warning('Liza internet search fallback failed', exc_info=True)
@@ -625,7 +1006,15 @@ def synthesize_madina(text):
             raise RuntimeError('Madina TTS audio was empty')
         return b''.join(audio_chunks)
 
-    return asyncio.run(synthesize())
+    last_error = None
+    for attempt in range(TTS_MAX_ATTEMPTS):
+        try:
+            return asyncio.run(synthesize())
+        except Exception as exc:
+            last_error = exc
+            logger.warning('Liza Madina TTS attempt %s failed: %s', attempt + 1, exc)
+            time.sleep(0.4 * (attempt + 1))
+    raise last_error
 
 
 class TranscriptionUnavailable(Exception):

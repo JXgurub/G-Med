@@ -1,0 +1,435 @@
+/* PaymentCheckout Component Styles */
+
+.checkoutContainer {
+  max-width: 500px;
+  margin: 0 auto;
+  padding: 2rem;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+/* Header */
+.header {
+  text-align: center;
+  margin-bottom: 2rem;
+  border-bottom: 2px solid #f0f0f0;
+  padding-bottom: 1rem;
+}
+
+.header h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.5rem;
+  color: #1a1a1a;
+  font-weight: 600;
+}
+
+.subtitle {
+  margin: 0;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+/* Amount Section */
+.amountSection {
+  text-align: center;
+  margin: 2rem 0;
+  padding: 1.5rem;
+  background: #f9f9f9;
+  border-radius: 8px;
+}
+
+.amountLabel {
+  color: #666;
+  font-size: 0.85rem;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.amount {
+  font-size: 2rem;
+  font-weight: 700;
+  color: #007bff;
+  margin: 0;
+}
+
+/* Alerts */
+.alert {
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border-radius: 8px;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.alertIcon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.alertTitle {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.alertMessage {
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.alertError {
+  background: #fee;
+  border: 1px solid #fcc;
+  color: #c33;
+}
+
+.alertInfo {
+  background: #eff;
+  border: 1px solid #cff;
+  color: #008;
+}
+
+.alertSuccess {
+  background: #efe;
+  border: 1px solid #cfc;
+  color: #080;
+}
+
+/* Payment Method Section */
+.methodSection {
+  margin: 1.5rem 0;
+  padding: 1.5rem;
+  background: #f9f9f9;
+  border-radius: 8px;
+}
+
+.methodLabel {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: #1a1a1a;
+}
+
+.methodOptions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.radioLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  padding: 0.75rem;
+  border-radius: 6px;
+  transition: background-color 0.2s;
+}
+
+.radioLabel:hover {
+  background-color: #eee;
+}
+
+.radioLabel input[type="radio"] {
+  cursor: pointer;
+  margin: 0;
+}
+
+.radioText {
+  font-size: 0.95rem;
+  color: #333;
+}
+
+/* Details Section */
+.detailsSection {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  background: #f9f9f9;
+  border-radius: 8px;
+}
+
+.detailsSection h4 {
+  margin: 0 0 1rem;
+  font-size: 0.95rem;
+  color: #1a1a1a;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detailRow {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #eee;
+}
+
+.detailRow:last-child {
+  border-bottom: none;
+}
+
+.detailRow span:first-child {
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.detailRow span:last-child {
+  font-weight: 500;
+  color: #1a1a1a;
+}
+
+.statusBadge {
+  display: inline-block;
+  padding: 0.25rem 0.75rem;
+  background: #e3f2fd;
+  color: #1976d2;
+  border-radius: 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+/* Details Toggle */
+.detailsToggle {
+  width: 100%;
+  padding: 0.75rem;
+  margin: 1rem 0;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  color: #007bff;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.detailsToggle:hover {
+  background: #f9f9f9;
+  border-color: #007bff;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 2rem 0 1.5rem;
+}
+
+.button {
+  padding: 1rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.75rem;
+  transition: all 0.3s;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.buttonPrimary {
+  background: linear-gradient(135deg, #007bff 0%, #0056b3 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(0, 123, 255, 0.3);
+}
+
+.buttonPrimary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 123, 255, 0.4);
+}
+
+.buttonPrimary:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.buttonSecondary {
+  background: white;
+  color: #666;
+  border: 1px solid #ddd;
+}
+
+.buttonSecondary:hover:not(:disabled) {
+  background: #f9f9f9;
+  border-color: #999;
+}
+
+.buttonSecondary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.buttonSuccess {
+  background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(40, 167, 69, 0.3);
+}
+
+.buttonSuccess:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(40, 167, 69, 0.4);
+}
+
+/* Spinner */
+.spinner {
+  display: inline-block;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: white;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Security Notice */
+.security {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: #f0f8ff;
+  border-radius: 8px;
+  border: 1px solid #cce7ff;
+  margin-bottom: 1rem;
+}
+
+.securityIcon {
+  font-size: 1.2rem;
+}
+
+.securityText {
+  font-size: 0.85rem;
+  color: #0056b3;
+}
+
+/* Help Text */
+.helpText {
+  font-size: 0.85rem;
+  color: #666;
+  background: #f9f9f9;
+  padding: 1rem;
+  border-radius: 8px;
+  margin-top: 1.5rem;
+}
+
+.helpText p {
+  margin: 0 0 0.75rem;
+  font-weight: 600;
+}
+
+.helpText ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.helpText li {
+  margin-bottom: 0.5rem;
+  line-height: 1.5;
+}
+
+/* Responsive */
+@media (max-width: 640px) {
+  .checkoutContainer {
+    padding: 1.5rem;
+    margin: 1rem;
+  }
+
+  .header h2 {
+    font-size: 1.25rem;
+  }
+
+  .amount {
+    font-size: 1.75rem;
+  }
+
+  .button {
+    padding: 0.875rem;
+    font-size: 0.95rem;
+  }
+
+  .methodOptions {
+    gap: 0.5rem;
+  }
+
+  .radioLabel {
+    padding: 0.5rem;
+  }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+  .checkoutContainer {
+    background: #1a1a1a;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .header {
+    border-bottom-color: #333;
+  }
+
+  .header h2 {
+    color: #fff;
+  }
+
+  .subtitle,
+  .amountLabel,
+  .methodLabel,
+  .radioText,
+  .securityText,
+  .helpText {
+    color: #aaa;
+  }
+
+  .amountSection,
+  .methodSection,
+  .detailsSection,
+  .helpText {
+    background: #222;
+  }
+
+  .radioLabel:hover {
+    background-color: #333;
+  }
+
+  .detailRow {
+    border-bottom-color: #333;
+  }
+
+  .detailsToggle {
+    background: #222;
+    border-color: #444;
+  }
+
+  .detailsToggle:hover {
+    background: #333;
+    border-color: #007bff;
+  }
+
+  .buttonSecondary {
+    background: #222;
+    color: #aaa;
+    border-color: #444;
+  }
+
+  .buttonSecondary:hover:not(:disabled) {
+    background: #333;
+    border-color: #999;
+  }
+
+  .security {
+    background: #0a2847;
+    border-color: #1a5a99;
+  }
+}

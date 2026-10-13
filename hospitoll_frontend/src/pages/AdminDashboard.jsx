@@ -126,7 +126,9 @@ const AdminDashboard = () => {
   const [broadcastSending, setBroadcastSending] = useState(false)
   const [broadcastError, setBroadcastError] = useState('')
   const [broadcastNotice, setBroadcastNotice] = useState('')
-  const [broadcastForm, setBroadcastForm] = useState({ title: '', message: '', channels: ['site', 'telegram'] })
+  const [broadcastForm, setBroadcastForm] = useState({
+    title: '', message: '', category: 'general', priority: 'normal', target_url: '/', channels: ['site', 'telegram'],
+  })
 
   const loadSystemAlerts = useCallback(async ({ silent = false } = {}) => {
     try {
@@ -1304,6 +1306,20 @@ const AdminDashboard = () => {
                 <p className="stat-number">{Number(broadcastStats.push_devices || 0).toLocaleString('uz-UZ')}</p>
               </div>
             </div>
+            <div className="stat-card paid">
+              <div className="stat-icon">✓</div>
+              <div className="stat-info">
+                <p className="stat-label">O‘qilgan bildirishnomalar</p>
+                <p className="stat-number">{Number(broadcastStats.notifications_read || 0).toLocaleString('uz-UZ')}</p>
+              </div>
+            </div>
+            <div className="stat-card active">
+              <div className="stat-icon">…</div>
+              <div className="stat-info">
+                <p className="stat-label">Hali o‘qilmagan bildirishnomalar</p>
+                <p className="stat-number">{Number(broadcastStats.notifications_unread || 0).toLocaleString('uz-UZ')}</p>
+              </div>
+            </div>
           </div>
 
           {broadcastError ? <p className="child-safety-admin-message error" role="alert">{broadcastError}</p> : null}
@@ -1331,6 +1347,42 @@ const AdminDashboard = () => {
                 onChange={(event) => setBroadcastForm({ ...broadcastForm, message: event.target.value })}
                 required
               />
+            </div>
+            <div className="admin-broadcast-options">
+              <div className="form-group">
+                <label htmlFor="broadcast-category">Xabar turi</label>
+                <select
+                  id="broadcast-category"
+                  value={broadcastForm.category}
+                  onChange={(event) => setBroadcastForm({ ...broadcastForm, category: event.target.value })}
+                >
+                  <option value="general">Umumiy</option>
+                  <option value="important">Muhim</option>
+                  <option value="service">Xizmat xabari</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label htmlFor="broadcast-priority">Muhimlik</label>
+                <select
+                  id="broadcast-priority"
+                  value={broadcastForm.priority}
+                  onChange={(event) => setBroadcastForm({ ...broadcastForm, priority: event.target.value })}
+                >
+                  <option value="normal">Oddiy</option>
+                  <option value="high">Yuqori</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label htmlFor="broadcast-target-url">Bosilganda ochiladigan sahifa</label>
+                <input
+                  id="broadcast-target-url"
+                  type="text"
+                  maxLength={500}
+                  placeholder="/patient yoki /clinic-dashboard"
+                  value={broadcastForm.target_url}
+                  onChange={(event) => setBroadcastForm({ ...broadcastForm, target_url: event.target.value })}
+                />
+              </div>
             </div>
             <fieldset className="admin-broadcast-channels">
               <legend>Yuborish kanallari</legend>

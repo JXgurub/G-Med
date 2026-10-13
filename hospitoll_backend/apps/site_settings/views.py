@@ -5,8 +5,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.conf import settings
 from django.utils import timezone
+from django.db.models import Q
 from django.core.cache import cache
 from django.contrib.auth import get_user_model
+from datetime import timedelta
 import hashlib
 import logging
 
@@ -286,6 +288,7 @@ class AdminBroadcastView(APIView):
         return chat_ids
 
     def get(self, request):
+        site_notifications = BroadcastNotification.objects.exclude(user__role='admin')
         return Response({
             'site_users': self._site_users().count(),
             'telegram_users': len(self._telegram_chat_ids()),
@@ -293,14 +296,25 @@ class AdminBroadcastView(APIView):
                 is_active=True,
                 user__is_active=True,
             ).exclude(user__role='admin').count(),
+            'notifications_read': site_notifications.filter(read_at__isnull=False).count(),
+            'notifications_unread': site_notifications.filter(read_at__isnull=True).count(),
         }, status=status.HTTP_200_OK)
 
     def post(self, request):
         title = str(request.data.get('title') or '').strip()
         message = str(request.data.get('message') or '').strip()
+        category = str(request.data.get('category') or 'general').strip()
+        priority = str(request.data.get('priority') or 'normal').strip()
+        target_url = str(request.data.get('target_url') or '/').strip()
         channels = request.data.get('channels')
         if not title or not message:
             return Response({'detail': 'Sarlavha va xabar matnini kiriting.'}, status=status.HTTP_400_BAD_REQUEST)
+        if category not in {'general', 'important', 'service'}:
+            return Response({'detail': 'Bildirishnoma turi noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+        if priority not in {'normal', 'high'}:
+            return Response({'detail': 'Bildirishnoma muhimligi noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not target_url.startswith('/') or target_url.startswith('//') or len(target_url) > 500:
+            return Response({'detail': 'Manzil saytdagi ichki sahifa bo‘lishi kerak.'}, status=status.HTTP_400_BAD_REQUEST)
         if not isinstance(channels, list) or not channels or any(channel not in {'site', 'telegram'} for channel in channels):
             return Response({'detail': 'Kamida bitta yuborish kanalini tanlang.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -320,7 +334,12 @@ class AdminBroadcastView(APIView):
             users = list(self._site_users().values_list('id', flat=True))
             result['site_total'] = len(users)
             notifications = BroadcastNotification.objects.bulk_create([
-                BroadcastNotification(user_id=user_id, title=title, message=message)
+                BroadcastNotification(
+                    user_id=user_id,
+                    title=title,
+                    message=message,
+                    data={'category': category, 'priority': priority, 'url': target_url},
+                )
                 for user_id in users
             ])
             result['site_sent'] = len(notifications)
@@ -332,6 +351,9 @@ class AdminBroadcastView(APIView):
                         'notification_id': str(notification.id),
                         'title': notification.title,
                         'message': notification.message,
+                        'category': category,
+                        'priority': priority,
+                        'url': target_url,
                     },
                 )
             push_subscriptions = WebPushSubscription.objects.filter(
@@ -416,20 +438,37 @@ class BroadcastNotificationInboxView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        notifications = BroadcastNotification.objects.filter(
-            user=request.user,
-            read_at__isnull=True,
-        )[:50]
+        cutoff = timezone.now() - timedelta(days=2)
+        notifications = BroadcastNotification.objects.filter(user=request.user).filter(
+            Q(read_at__isnull=True) | Q(read_at__gte=cutoff)
+        )
+        if request.query_params.get('unread', 'true').lower() not in {'false', '0', 'no'}:
+            notifications = notifications.filter(read_at__isnull=True)
+        try:
+            limit = max(1, min(int(request.query_params.get('limit', 50)), 100))
+        except (TypeError, ValueError):
+            limit = 50
+        notifications = notifications[:limit]
         return Response([
             {
                 'id': str(notification.id),
                 'title': notification.title,
                 'message': notification.message,
-                'data': notification.data,
                 'created_at': notification.created_at,
+                'read_at': notification.read_at,
+                'category': notification.data.get('category', 'general'),
+                'priority': notification.data.get('priority', 'normal'),
+                'url': notification.data.get('url', '/'),
             }
             for notification in notifications
         ], status=status.HTTP_200_OK)
+
+    def post(self, request):
+        updated = BroadcastNotification.objects.filter(
+            user=request.user,
+            read_at__isnull=True,
+        ).update(read_at=timezone.now())
+        return Response({'updated': updated}, status=status.HTTP_200_OK)
 
     def patch(self, request, pk):
         notification = BroadcastNotification.objects.filter(user=request.user, pk=pk).first()

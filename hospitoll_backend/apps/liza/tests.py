@@ -15,7 +15,13 @@ from apps.medical.models import Appointment
 from apps.patients.models import Patient
 from apps.users.models import CustomUser
 
-from .services import get_command_action, get_command_action_data, handle_command
+from . import services
+from .services import (
+    get_command_action,
+    get_command_action_data,
+    handle_command,
+    synthesize_madina,
+)
 from .views import CommandView, SpeechView, VoiceView, WakeView
 
 
@@ -240,6 +246,7 @@ class LizaCommandTests(SimpleTestCase):
         self.assertIn('Beruniyda hozir asosan ochiq', reply)
         self.assertEqual(get_mock.call_args_list[0].kwargs['params']['name'], 'beruniy')
 
+    @patch('apps.liza.services._enrich_internet_results', return_value=(None, []))
     @patch('apps.liza.services.cache.set')
     @patch('apps.liza.services.cache.get', return_value=None)
     @patch('apps.liza.services.requests.get')
@@ -248,6 +255,7 @@ class LizaCommandTests(SimpleTestCase):
         get_mock,
         _cache_get_mock,
         _cache_set_mock,
+        _enrich_mock,
     ):
         response = Mock()
         response.text = (
@@ -449,8 +457,55 @@ class LizaCommandTests(SimpleTestCase):
         self.assertEqual(action['video_id'], 'abcdefghijk')
         youtube_search_mock.assert_called_once_with('yulduz usmonova')
 
+    @patch('apps.liza.services._internet_search_results', return_value=[
+        {'title': 'Toshkent', 'snippet': 'Poytaxt.', 'url': 'https://example.com/tashkent'},
+    ])
+    @patch('apps.liza.services._enrich_internet_results', return_value=(
+        {'text': 'Toshkent — O‘zbekiston poytaxti.', 'url': 'https://uz.wikipedia.org/wiki/Toshkent'},
+        ['Toshkent shahri tarixi qadimga borib taqaladi.'],
+    ))
+    def test_internet_search_includes_wikipedia_summary_and_page_excerpts(self, _enrich_mock, _search_mock):
+        user = SimpleNamespace(role='patient', pk='search-rich-user')
+        reply = handle_command(user=user, message='Internetda Toshkent haqida qidir')
+
+        self.assertIn('Qisqacha: Toshkent — O‘zbekiston poytaxti.', reply)
+        self.assertIn('Batafsil: Toshkent shahri tarixi', reply)
+        self.assertIn('https://uz.wikipedia.org/wiki/Toshkent', reply)
+
+    @patch('apps.liza.services.time.sleep')
+    @patch('apps.liza.services.asyncio.run', side_effect=[RuntimeError('403'), RuntimeError('403'), b'audio'])
+    def test_madina_tts_retries_transient_failures(self, _run_mock, _sleep_mock):
+        self.assertEqual(synthesize_madina('Salom'), b'audio')
+
+    @patch('apps.liza.services._enrich_internet_results', return_value=(None, []))
+    @patch('apps.liza.services.cache.set')
+    @patch('apps.liza.services.cache.get', return_value=None)
+    @patch('apps.liza.services._duckduckgo_search_results', return_value=[])
     @patch('apps.liza.services.requests.get')
-    def test_internet_search_returns_external_summary(self, get_mock):
+    def test_internet_search_falls_back_to_bing_when_duckduckgo_is_blocked(
+        self,
+        get_mock,
+        _ddg_mock,
+        _cache_get_mock,
+        _cache_set_mock,
+        _enrich_mock,
+    ):
+        response = Mock()
+        response.text = (
+            '<li class="b_algo"><h2><a href="https://www.bing.com/ck/a?u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS90YXNoa2VudA">'
+            'Toshkent tarixi</a></h2><p>Shahar tarixi haqida.</p></li>'
+        )
+        get_mock.return_value = response
+
+        reply = services._internet_search_reply('Toshkent tarixi')
+
+        self.assertIn('Toshkent tarixi — Shahar tarixi haqida.', reply)
+        self.assertIn('https://example.com/tashkent', reply)
+
+    @patch('apps.liza.services._enrich_internet_results', return_value=(None, []))
+    @patch('apps.liza.services._bing_search_results', return_value=[])
+    @patch('apps.liza.services.requests.get')
+    def test_internet_search_returns_external_summary(self, get_mock, _bing_mock, _enrich_mock):
         html_response = Mock()
         html_response.text = ''
         response = Mock()
