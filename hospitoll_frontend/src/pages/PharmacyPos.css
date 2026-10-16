@@ -1,0 +1,931 @@
+.pharmacy-pos-page {
+  min-height: 100vh;
+  padding: 24px;
+  background: #f3f7f8;
+  color: #172b3a;
+  font-family: Arial, sans-serif;
+}
+
+.pharmacy-pos-page-embedded {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.pharmacy-pos-screen {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 1360px;
+  margin: 0 auto;
+}
+
+.pharmacy-pos-header { order: 0; }
+.pharmacy-pos-message { order: 1; }
+.pharmacy-pos-sync-strip { order: 2; }
+.pharmacy-pos-layout { order: 3; }
+.pharmacy-pos-device-panel { order: 4; }
+.pharmacy-pos-activation-panel { order: 5; }
+.pharmacy-pos-printer-panel { order: 6; }
+
+.pharmacy-pos-loading {
+  min-height: 100vh;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: #334155;
+}
+
+.pharmacy-pos-page:not(.pharmacy-pos-page-embedded) {
+  padding: clamp(16px, 3vw, 36px);
+  background:
+    radial-gradient(ellipse at 6% 0%, rgb(20 184 166 / 8%), transparent 35%),
+    #f3f7f8;
+}
+
+.pharmacy-pos-loading button,
+.pharmacy-pos-header-actions button,
+.pharmacy-pos-inline-form button,
+.pharmacy-pos-generated-code button,
+.pharmacy-pos-device-list button,
+.pharmacy-pos-sync-strip button,
+.pharmacy-pos-pharmacy-info button {
+  border: 0;
+  border-radius: 8px;
+  padding: 11px 16px;
+  background: #0f766e;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pharmacy-pos-loading button:disabled,
+.pharmacy-pos-header-actions button:disabled,
+.pharmacy-pos-inline-form button:disabled,
+.pharmacy-pos-device-list button:disabled,
+.pharmacy-pos-sync-strip button:disabled,
+.pharmacy-pos-pharmacy-info button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.pharmacy-pos-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: clamp(20px, 3vw, 30px);
+  border: 1px solid rgb(226 232 240 / 85%);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 14px 34px rgb(15 23 42 / 7%);
+}
+
+.pharmacy-pos-page-embedded .pharmacy-pos-header {
+  padding: 14px 18px;
+}
+
+.pharmacy-pos-dashboard-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+  color: #172b3a;
+}
+
+.pharmacy-pos-dashboard-status > strong {
+  font-size: 16px;
+}
+
+.pharmacy-pos-header h1 {
+  margin: 3px 0;
+  color: #102a43;
+  font-size: clamp(22px, 2.4vw, 30px);
+  letter-spacing: -0.025em;
+}
+
+.pharmacy-pos-header p {
+  margin: 4px 0 0;
+  color: #64748b;
+}
+
+.pharmacy-pos-kicker {
+  color: #0f766e !important;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.pharmacy-pos-header-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.pharmacy-pos-inventory-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  padding: 9px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+  color: #0f766e;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.pharmacy-pos-inventory-link:hover {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.pharmacy-pos-header-actions button,
+.pharmacy-pos-header-actions a,
+.pharmacy-pos-sync-strip button,
+.pharmacy-pos-panel button,
+.pharmacy-pos-inline-form button,
+.pharmacy-pos-generated-code button {
+  transition: transform 160ms ease, box-shadow 160ms ease, background-color 160ms ease, opacity 160ms ease;
+}
+
+.pharmacy-pos-header-actions button:hover:not(:disabled),
+.pharmacy-pos-header-actions a:hover,
+.pharmacy-pos-sync-strip button:hover:not(:disabled),
+.pharmacy-pos-panel button:hover:not(:disabled),
+.pharmacy-pos-inline-form button:hover:not(:disabled),
+.pharmacy-pos-generated-code button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 12px rgb(15 118 110 / 18%);
+}
+
+.pharmacy-pos-page button:focus-visible,
+.pharmacy-pos-page input:focus-visible {
+  outline: 3px solid rgb(20 184 166 / 28%);
+  outline-offset: 2px;
+}
+
+.pharmacy-pos-network {
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pharmacy-pos-network.is-online {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pharmacy-pos-network.is-offline {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pharmacy-pos-message {
+  margin: 16px 0;
+  border-radius: 10px;
+  padding: 12px 16px;
+  font-weight: 600;
+}
+
+.pharmacy-pos-message.info {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.pharmacy-pos-message.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pharmacy-pos-message.warning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pharmacy-pos-message.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.pharmacy-pos-sync-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin: 18px 0;
+  border: 1px solid #dce7eb;
+  border-radius: 14px;
+  padding: 13px 17px;
+  background: rgb(255 255 255 / 92%);
+  color: #475569;
+  font-size: 13px;
+  box-shadow: 0 5px 18px rgb(15 23 42 / 4%);
+}
+
+.pharmacy-pos-sync-strip button {
+  padding: 8px 12px;
+}
+
+.pharmacy-pos-panel,
+.pharmacy-pos-products,
+.pharmacy-pos-cart {
+  border: 1px solid #e1e9ef;
+  border-radius: 18px;
+  padding: clamp(18px, 2.2vw, 26px);
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(15 23 42 / 5%);
+}
+
+.pharmacy-pos-panel {
+  margin: 16px 0;
+}
+
+.pharmacy-pos-panel h2,
+.pharmacy-pos-cart h2 {
+  margin: 0 0 7px;
+  color: #102a43;
+  font-size: 19px;
+  letter-spacing: -0.015em;
+}
+
+.pharmacy-pos-panel p {
+  margin-top: 7px;
+  color: #64748b;
+  line-height: 1.6;
+}
+
+.pharmacy-pos-pharmacy-info,
+.pharmacy-pos-device-panel,
+.pharmacy-pos-activation-panel,
+.pharmacy-pos-printer-panel {
+  overflow: hidden;
+  border-color: #dce7eb;
+}
+
+.pharmacy-pos-pharmacy-info .pharmacy-pos-panel-title,
+.pharmacy-pos-device-panel .pharmacy-pos-panel-title,
+.pharmacy-pos-printer-panel .pharmacy-pos-panel-title {
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.pharmacy-pos-pharmacy-info .pharmacy-pos-panel-title h2,
+.pharmacy-pos-device-panel .pharmacy-pos-panel-title h2,
+.pharmacy-pos-printer-panel .pharmacy-pos-panel-title h2 {
+  margin-bottom: 0;
+}
+
+.pharmacy-pos-printer-panel > button {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #0f766e;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pharmacy-pos-pharmacy-info .pharmacy-pos-panel-title > button {
+  flex-shrink: 0;
+}
+
+.pharmacy-pos-printer-panel > button:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+.pharmacy-pos-printer-ready,
+.pharmacy-pos-printer-offline {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 7px 11px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pharmacy-pos-printer-ready {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.pharmacy-pos-printer-offline {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.pharmacy-pos-printer-setup {
+  margin-top: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 14px;
+  background: #f8fafc;
+}
+
+.pharmacy-pos-printer-setup p {
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.pharmacy-pos-printer-setup pre {
+  overflow-x: auto;
+  margin: 8px 0 0;
+  border-radius: 8px;
+  padding: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+}
+
+.pharmacy-pos-inline-form {
+  display: flex;
+  align-items: stretch;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.pharmacy-pos-inline-form input,
+.pharmacy-pos-products > input {
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 12px 14px;
+  color: #172b3a;
+  font: inherit;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.pharmacy-pos-inline-form input:hover,
+.pharmacy-pos-pharmacy-info-form input:hover,
+.pharmacy-pos-products > input:hover {
+  border-color: #94a3b8;
+}
+
+.pharmacy-pos-inline-form input:focus,
+.pharmacy-pos-pharmacy-info-form input:focus,
+.pharmacy-pos-products > input:focus {
+  border-color: #0f9b8e;
+  box-shadow: 0 0 0 4px rgb(15 155 142 / 10%);
+  outline: none;
+}
+
+.pharmacy-pos-inline-form input {
+  flex: 1;
+}
+
+.pharmacy-pos-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(340px, .9fr);
+  align-items: start;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.pharmacy-pos-products > label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 700;
+}
+
+.pharmacy-pos-products > input {
+  box-sizing: border-box;
+  width: 100%;
+  font-size: 16px;
+}
+
+.pharmacy-pos-offline-hint {
+  margin: 9px 0 0;
+  color: #a16207;
+  font-size: 13px;
+}
+
+.pharmacy-pos-product-list {
+  display: grid;
+  gap: 8px;
+  max-height: 64vh;
+  overflow: auto;
+  margin-top: 14px;
+}
+
+.pharmacy-pos-product {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  border: 1px solid #e2e8f0;
+  border-radius: 9px;
+  padding: 12px;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pharmacy-pos-product:hover:not(:disabled) {
+  border-color: #0f766e;
+  background: #f0fdfa;
+}
+
+.pharmacy-pos-product:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+.pharmacy-pos-product > span,
+.pharmacy-pos-price,
+.pharmacy-pos-cart-line > div:first-child,
+.pharmacy-pos-device-list li > span {
+  display: grid;
+  gap: 4px;
+}
+
+.pharmacy-pos-product small,
+.pharmacy-pos-cart-line small,
+.pharmacy-pos-device-list small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.pharmacy-pos-price {
+  justify-items: end;
+  white-space: nowrap;
+}
+
+.pharmacy-pos-empty {
+  padding: 24px 8px;
+  color: #64748b;
+  text-align: center;
+}
+
+.pharmacy-pos-cart {
+  position: sticky;
+  top: 16px;
+}
+
+.pharmacy-pos-cart-heading,
+.pharmacy-pos-panel-title,
+.pharmacy-pos-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pharmacy-pos-cart-heading > span,
+.pharmacy-pos-panel-title > span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.pharmacy-pos-pharmacy-info-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.pharmacy-pos-pharmacy-info-form label {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-weight: 700;
+}
+
+.pharmacy-pos-pharmacy-info-form input {
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 11px 12px;
+  color: #172b3a;
+  font: inherit;
+}
+
+.pharmacy-pos-receipt-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 0 0 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 14px;
+}
+
+.pharmacy-pos-receipt-settings legend {
+  padding: 0 6px;
+  color: #172b3a;
+  font-weight: 800;
+}
+
+.pharmacy-pos-receipt-settings > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.pharmacy-pos-receipt-settings > label:not(.pharmacy-pos-receipt-settings-url) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #475569;
+  font-weight: 600;
+}
+
+.pharmacy-pos-receipt-settings input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  min-width: 17px;
+  border: 0;
+  padding: 0;
+  accent-color: #0f766e;
+}
+
+.pharmacy-pos-pharmacy-info-form .pharmacy-pos-receipt-settings-url {
+  grid-column: 1 / -1;
+}
+
+.pharmacy-pos-pharmacy-info-details {
+  display: grid;
+  gap: 12px;
+}
+
+.pharmacy-pos-pharmacy-info-details > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.pharmacy-pos-pharmacy-info-details > div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.pharmacy-pos-pharmacy-info-details span {
+  color: #64748b;
+}
+
+.pharmacy-pos-cart-lines {
+  display: grid;
+  gap: 8px;
+  max-height: 46vh;
+  overflow: auto;
+  margin: 12px 0;
+}
+
+.pharmacy-pos-cart-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #edf2f4;
+  padding: 11px 0;
+}
+
+.pharmacy-pos-cart-line strong {
+  font-size: 14px;
+}
+
+.pharmacy-pos-stock-warning {
+  max-width: 260px;
+  color: #b45309 !important;
+  line-height: 1.4;
+}
+
+.pharmacy-pos-quantity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pharmacy-pos-quantity button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #f8fafc;
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.pharmacy-pos-quantity span {
+  min-width: 18px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.pharmacy-pos-total {
+  border-top: 1px solid #e2e8f0;
+  padding: 15px 0;
+  font-size: 16px;
+}
+
+.pharmacy-pos-total strong {
+  color: #0f766e;
+  font-size: 21px;
+}
+
+.pharmacy-pos-checkout {
+  width: 100%;
+  border: 0;
+  border-radius: 9px;
+  padding: 15px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pharmacy-pos-checkout:disabled {
+  background: #94a3b8;
+  cursor: not-allowed;
+}
+
+.pharmacy-pos-device-panel {
+  margin-top: 18px;
+}
+
+.pharmacy-pos-panel-title p {
+  margin: 3px 0 0;
+  max-width: 900px;
+}
+
+.pharmacy-pos-generated-code {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+  border-radius: 9px;
+  padding: 12px;
+  background: #f0fdfa;
+}
+
+.pharmacy-pos-generated-code > span {
+  color: #475569;
+  font-size: 13px;
+}
+
+.pharmacy-pos-generated-code > p {
+  flex-basis: 100%;
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.pharmacy-pos-generated-code button,
+.pharmacy-pos-printer-setup > button {
+  border: 0;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #0f766e;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pharmacy-pos-setup-steps {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+  padding-left: 22px;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.pharmacy-pos-separate-pharmacy-note {
+  margin-bottom: 0;
+  border-left: 3px solid #0f766e;
+  padding: 8px 12px;
+  background: #f0fdfa;
+  color: #334155 !important;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pharmacy-pos-printer-setup ol {
+  display: grid;
+  gap: 7px;
+  padding-left: 22px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pharmacy-pos-generated-code code {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.pharmacy-pos-device-list {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pharmacy-pos-device-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid #edf2f4;
+  padding: 13px 0;
+}
+
+.pharmacy-pos-device-list button {
+  flex-shrink: 0;
+  border: 1px solid #fecaca;
+  border-radius: 9px;
+  padding: 9px 12px;
+  background: #b91c1c;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pharmacy-pos-receipt {
+  display: none;
+}
+
+@media (max-width: 850px) {
+  .pharmacy-pos-page {
+    padding: 12px;
+  }
+
+  .pharmacy-pos-header {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 20px;
+  }
+
+  .pharmacy-pos-header-actions {
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .pharmacy-pos-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .pharmacy-pos-cart {
+    position: static;
+  }
+
+  .pharmacy-pos-product-list {
+    max-height: 48vh;
+  }
+
+  .pharmacy-pos-inline-form {
+    flex-direction: column;
+  }
+
+  .pharmacy-pos-pharmacy-info-form {
+    grid-template-columns: 1fr;
+  }
+
+  .pharmacy-pos-receipt-settings {
+    grid-template-columns: 1fr;
+  }
+
+  .pharmacy-pos-receipt-settings > p,
+  .pharmacy-pos-pharmacy-info-form .pharmacy-pos-receipt-settings-url {
+    grid-column: auto;
+  }
+
+  .pharmacy-pos-page:not(.pharmacy-pos-page-embedded) {
+    padding: 12px;
+  }
+
+  .pharmacy-pos-sync-strip {
+    align-items: stretch;
+  }
+
+  .pharmacy-pos-sync-strip > span {
+    flex: 1 1 200px;
+  }
+
+  .pharmacy-pos-sync-strip button,
+  .pharmacy-pos-printer-panel > button,
+  .pharmacy-pos-pharmacy-info form > button,
+  .pharmacy-pos-inline-form button {
+    min-height: 44px;
+  }
+}
+
+@media (max-width: 520px) {
+  .pharmacy-pos-page:not(.pharmacy-pos-page-embedded) {
+    padding: 10px;
+  }
+
+  .pharmacy-pos-header {
+    border-radius: 15px;
+    padding: 17px;
+  }
+
+  .pharmacy-pos-header-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pharmacy-pos-header-actions > * {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .pharmacy-pos-panel,
+  .pharmacy-pos-products,
+  .pharmacy-pos-cart {
+    border-radius: 14px;
+    padding: 16px;
+  }
+
+  .pharmacy-pos-panel-title {
+    align-items: flex-start;
+  }
+
+  .pharmacy-pos-device-list li {
+    align-items: flex-start;
+  }
+
+  .pharmacy-pos-pharmacy-info-details > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+}
+
+@media print {
+  @page {
+    size: auto;
+    margin: 4mm;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .pharmacy-pos-receipt,
+  .pharmacy-pos-receipt * {
+    visibility: visible !important;
+  }
+
+  .pharmacy-pos-receipt {
+    position: absolute;
+    inset: 0 auto auto 0;
+    display: block;
+    width: 100%;
+    max-width: 72mm;
+    color: #000;
+    font: 11px/1.35 Arial, sans-serif;
+  }
+
+  .pharmacy-pos-receipt h2,
+  .pharmacy-pos-receipt p {
+    margin: 3px 0;
+    text-align: center;
+  }
+
+  .pharmacy-pos-receipt hr {
+    border: 0;
+    border-top: 1px dashed #000;
+    margin: 7px 0;
+  }
+
+  .pharmacy-pos-receipt table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10px;
+  }
+
+  .pharmacy-pos-receipt th,
+  .pharmacy-pos-receipt td {
+    padding: 3px 1px;
+    text-align: right;
+    vertical-align: top;
+  }
+
+  .pharmacy-pos-receipt th:first-child,
+  .pharmacy-pos-receipt td:first-child {
+    text-align: left;
+  }
+
+  .pharmacy-pos-receipt > strong {
+    display: block;
+    text-align: right;
+  }
+}

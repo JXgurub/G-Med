@@ -75,4 +75,14 @@ if [[ ! -f "${SSL_DIR}/cert.pem" || ! -f "${SSL_DIR}/key.pem" ]]; then
     exit 1
 fi
 
+LIZA_VOSK_MODEL_HOST_PATH="${LIZA_VOSK_MODEL_HOST_PATH:-${ROOT_DIR}/jx.group_ovozli_yordamchi/engine/vosk-model-small-uz-0.22}"
+if [[ "$LIZA_VOSK_MODEL_HOST_PATH" != /* ]]; then
+    LIZA_VOSK_MODEL_HOST_PATH="${ROOT_DIR}/${LIZA_VOSK_MODEL_HOST_PATH}"
+fi
+if [[ ! -f "${LIZA_VOSK_MODEL_HOST_PATH}/conf/model.conf" ]]; then
+    echo "ERROR: Uzbek Vosk model is missing or incomplete at ${LIZA_VOSK_MODEL_HOST_PATH}." >&2
+    echo "Set LIZA_VOSK_MODEL_HOST_PATH in .env.production to a directory containing conf/model.conf." >&2
+    exit 1
+fi
+
 echo "Preflight checks passed."

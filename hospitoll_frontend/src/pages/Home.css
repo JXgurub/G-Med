@@ -842,6 +842,43 @@
     grid-template-columns: 1fr;
   }
 
+  .pharmacy-prescription-panel {
+    gap: 0.75rem;
+    padding: 0.9rem;
+    border-radius: 1rem;
+  }
+
+  .pharmacy-prescription-main h3 {
+    font-size: 1.1rem;
+  }
+
+  .pharmacy-prescription-main p {
+    font-size: 0.9rem;
+    line-height: 1.45;
+  }
+
+  .pharmacy-prescription-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .pharmacy-prescription-metric:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .pharmacy-prescription-metric {
+    padding: 0.7rem;
+    border-radius: 0.75rem;
+  }
+
+  .pharmacy-prescription-metric span {
+    font-size: 0.75rem;
+  }
+
+  .pharmacy-prescription-metric strong {
+    font-size: 0.95rem;
+  }
+
   .pharmacy-grid {
     grid-template-columns: 1fr;
     gap: 1rem;

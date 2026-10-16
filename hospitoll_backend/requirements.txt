@@ -38,6 +38,8 @@ django-ratelimit==4.1.0
 # HTTP requests
 requests==2.31.0
 pywebpush==2.3.0
+edge-tts==7.3.1
+vosk==0.3.45
 
 # Email support
 django-anymail==10.2

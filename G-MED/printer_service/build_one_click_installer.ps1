@@ -1,14 +1,24 @@
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$pythonCmd = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python' }
+$repoRoot = Resolve-Path (Join-Path $scriptDir '..\..')
+$backendPython = Join-Path $repoRoot 'hospitoll_backend\.venv312\Scripts\python.exe'
+if (Test-Path $backendPython) {
+    $pythonCmd = $backendPython
+}
+elseif (Get-Command py -ErrorAction SilentlyContinue) {
+    $pythonCmd = 'py'
+}
+else {
+    $pythonCmd = 'python'
+}
 
 $distDir = Join-Path $scriptDir 'dist_installer'
 $buildDir = Join-Path $scriptDir 'build_installer'
 $serviceDistDir = Join-Path $scriptDir 'service_build_dist'
 $serviceBuildDir = Join-Path $scriptDir 'service_build'
 
-if (Get-Process -Name 'GMedPrinterInstaller' -ErrorAction SilentlyContinue) {
-    Stop-Process -Name 'GMedPrinterInstaller' -Force -ErrorAction SilentlyContinue
+Get-Process -Name 'GMedPrinterInstaller' -ErrorAction SilentlyContinue | ForEach-Object {
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
 }
 
 if (Test-Path $distDir) {
@@ -34,8 +44,11 @@ if (Test-Path $buildDir) {
 if (Test-Path $serviceDistDir) { Remove-Item $serviceDistDir -Recurse -Force }
 if (Test-Path $serviceBuildDir) { Remove-Item $serviceBuildDir -Recurse -Force }
 
-Write-Host 'Ensuring PyInstaller is installed...'
-& $pythonCmd -m pip install --upgrade pyinstaller
+Write-Host 'Checking Windows installer build dependencies...'
+& $pythonCmd -c 'import PyInstaller, win32serviceutil, requests'
+if ($LASTEXITCODE -ne 0) {
+    & $pythonCmd -m pip install pyinstaller pywin32 requests
+}
 
 Write-Host 'Building the Windows printer service executable...'
 & $pythonCmd -m PyInstaller --onefile --noconsole --name GMedPrinterService `

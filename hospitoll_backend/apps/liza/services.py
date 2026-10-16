@@ -24,7 +24,7 @@ from django.db.models import F, Q
 from django.utils import timezone
 
 from apps.doctors.models import Doctor
-from apps.medical.models import Appointment
+from apps.medical.models import Appointment, MedicalRecord
 from apps.patients.serializers import PatientSerializer
 from apps.patients.models import Patient
 
@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 PROFILE_CONFIRM_TTL_SECONDS = 120
 SPECIALTY_BOOKING_TTL_SECONDS = 180
+PRESCRIPTION_CODE_TTL_SECONDS = 180
 SPECIALTY_SYMPTOM_RULES = (
     ('LOR', ('quloq', 'qulog', 'burun', 'tomoq', 'lor', 'ent', 'otit', 'eshitish'), ('lor', 'ent', 'otorinolaring')),
     ('stomatologiya', ('tish', 'stomat', 'dentist', 'dent'), ('stomat', 'dent')),
@@ -803,6 +804,9 @@ def _enrich_internet_results(query, results):
 
 
 def _internet_search_reply(query):
+    if not settings.LIZA_INTERNET_SEARCH_ENABLED:
+        return 'Liza internetdan qidirishni vaqtincha to‘xtatdi. Keyinroq qayta urinib ko‘ring.'
+
     query = _safe_external_query(query)
     if not query:
         return 'Shaxsiy ma’lumotlarni qidiruvga yubormadim. Savolni shaxsiy ma’lumotlarsiz qayta yozing.'
@@ -1013,6 +1017,8 @@ def synthesize_madina(text):
         except Exception as exc:
             last_error = exc
             logger.warning('Liza Madina TTS attempt %s failed: %s', attempt + 1, exc)
+            if getattr(exc, 'status', None) == 403:
+                break
             time.sleep(0.4 * (attempt + 1))
     raise last_error
 
@@ -1056,6 +1062,120 @@ def transcribe_audio(*, user, audio_file):
 def _normalize_command(message):
     normalized = str(message or '').casefold().strip()
     return re.sub(r'[‘’ʻ`]', "'", normalized)
+
+
+_PRESCRIPTION_DIGIT_WORDS = {
+    'nol': '0',
+    'noil': '0',
+    'nival': '0',
+    'bir': '1',
+    'bar': '1',
+    'ikki': '2',
+    'uch': '3',
+    "to'rt": '4',
+    'tort': '4',
+    'besh': '5',
+    'olti': '6',
+    'yetti': '7',
+    'sakkiz': '8',
+    "to'qqiz": '9',
+    'toqqiz': '9',
+}
+_PRESCRIPTION_DIGIT_VARIANTS = {
+    'yakka': ('1', '2'),
+}
+
+
+def _is_prescription_lookup_request(normalized):
+    words = set(normalized.split())
+    prescription_mentioned = any(word.startswith(('retsept', 'resept')) for word in words)
+    lookup_requested = any(
+        word.startswith(('raqam', 'kod', 'qidir', 'dorixona'))
+        for word in words
+    )
+    medicine_search_requested = (
+        any(word.startswith('dori') for word in words)
+        and lookup_requested
+    )
+    return (prescription_mentioned and lookup_requested) or medicine_search_requested
+
+
+def _is_latest_prescription_request(normalized):
+    words = set(normalized.split())
+    latest_requested = any(
+        word.startswith(('oxirgi', 'songgi', "so'ngi"))
+        for word in words
+    )
+    prescription_mentioned = any(word.startswith(('retsept', 'resept')) for word in words)
+    medicine_search_requested = any(word.startswith('dori') for word in words) and any(
+        word.startswith(('qidir', 'dorixona'))
+        for word in words
+    )
+    return latest_requested and prescription_mentioned and medicine_search_requested
+
+
+def _latest_prescription_code(user):
+    if getattr(user, 'role', '') != 'patient' or getattr(user, 'pk', None) is None:
+        return None
+    return (
+        MedicalRecord.objects
+        .filter(patient__user=user)
+        .exclude(plan='')
+        .order_by('-created_at', '-pk')
+        .values_list('prescription_code', flat=True)
+        .first()
+    )
+
+
+def _extract_prescription_code(message, *, user=None):
+    normalized = _normalize_command(message)
+    digit_match = re.search(r'(?<!\d)(?:\d[\s-]*){8}(?!\d)', normalized)
+    if digit_match and not re.search(r'\d[\s-]*$', normalized[:digit_match.start()]):
+        return re.sub(r'\D', '', digit_match.group(0))
+
+    tokens = re.findall(r"[a-z0-9']+", normalized)
+    digit_runs = ['']
+    candidates = []
+    invalid_digit_run = False
+    for token in tokens:
+        if len(token) == 1 and token.isdigit():
+            options = (token,)
+        elif token in _PRESCRIPTION_DIGIT_VARIANTS:
+            options = _PRESCRIPTION_DIGIT_VARIANTS[token]
+        elif token in _PRESCRIPTION_DIGIT_WORDS:
+            options = (_PRESCRIPTION_DIGIT_WORDS[token],)
+        else:
+            options = ()
+
+        if options:
+            if invalid_digit_run:
+                continue
+            if len(digit_runs[0]) == 8:
+                digit_runs = []
+                invalid_digit_run = True
+                continue
+            digit_runs = [run + digit for run in digit_runs for digit in options]
+        else:
+            if not invalid_digit_run:
+                candidates.extend(run for run in digit_runs if len(run) == 8)
+            digit_runs = ['']
+            invalid_digit_run = False
+
+    if not invalid_digit_run:
+        candidates.extend(run for run in digit_runs if len(run) == 8)
+    candidates = list(dict.fromkeys(candidates))
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1 and getattr(user, 'role', '') == 'patient' and getattr(user, 'pk', None):
+        matching_codes = list(
+            MedicalRecord.objects.filter(
+                patient__user=user,
+                prescription_code__in=candidates,
+            ).values_list('prescription_code', flat=True).distinct()[:2]
+        )
+        if len(matching_codes) == 1:
+            return matching_codes[0]
+    return None
 
 
 def _is_analysis_read_request(normalized):
@@ -1199,6 +1319,20 @@ def get_command_action(*, user, message):
         return 'open_profile'
     if _is_stop_listening_request(normalized):
         return 'stop_listening'
+    prescription_code_pending = (
+        getattr(user, 'pk', None) is not None
+        and cache.get(_prescription_code_cache_key(user))
+    )
+    if _is_latest_prescription_request(normalized):
+        return 'search_prescription' if _latest_prescription_code(user) else None
+    prescription_lookup_requested = _is_prescription_lookup_request(normalized)
+    prescription_code = _extract_prescription_code(message, user=user)
+    is_patient = getattr(user, 'role', '') == 'patient'
+    if prescription_lookup_requested or (prescription_code_pending and prescription_code) or (is_patient and prescription_code):
+        if prescription_code:
+            return 'search_prescription'
+        if prescription_lookup_requested:
+            return 'prescription_code_required'
     if _is_analysis_read_request(normalized):
         return 'read_analysis'
     pending = cache.get(_booking_cache_key(user))
@@ -1217,6 +1351,15 @@ def get_command_action_data(*, user, message):
     action = get_command_action(user=user, message=message)
     result = {'action': action}
     normalized = ' '.join(_normalize_command(message).split())
+    if _is_latest_prescription_request(normalized):
+        prescription_code = _latest_prescription_code(user)
+        if prescription_code:
+            result.update({'action': 'search_prescription', 'prescription_code': prescription_code})
+    elif action == 'search_prescription':
+        prescription_code = _extract_prescription_code(message, user=user)
+        result['prescription_code'] = prescription_code
+        if prescription_code and getattr(user, 'pk', None) is not None:
+            cache.delete(_prescription_code_cache_key(user))
     control = _youtube_control_intent(normalized)
     is_patient = getattr(user, 'role', '') == 'patient' and getattr(user, 'pk', None) is not None
     queue = cache.get(_youtube_queue_key(user)) if is_patient else None
@@ -1413,6 +1556,10 @@ def _profile_cache_key(user):
 
 def _booking_cache_key(user):
     return f'liza:patient-specialty-booking:{user.pk}'
+
+
+def _prescription_code_cache_key(user):
+    return f'liza:prescription-code-request:{user.pk}'
 
 
 def _specialty_candidates(normalized):
@@ -1740,7 +1887,8 @@ def handle_command(*, user, message, internet_search_enabled=False):
     if normalized in {'salom', 'assalomu alaykum', 'liza', 'yordam'} or 'nima qila olasan' in normalized:
         return (
             "Men G-MED yordamchisiman. Qabulingiz, navbat raqamingiz, klinika va doktor ish vaqti "
-            "hamda profilingiz bo‘yicha yordam beraman. Internetdan qidirish, ob-havo va YouTube bo‘yicha ham yordam beraman."
+            "hamda profilingiz bo‘yicha yordam beraman. Internetdan qidirish vaqtincha o‘chirilgan; "
+            "ob-havo va YouTube bo‘yicha esa yordam bera olaman."
         )
 
     youtube_control = _youtube_control_intent(normalized)
@@ -1750,6 +1898,26 @@ def handle_command(*, user, message, internet_search_enabled=False):
         return 'Liza suhbatni to‘xtatdi. Qayta ishlatish uchun Liza tugmasini bosing.'
     if youtube_control:
         return _handle_youtube_control(user=user, control=youtube_control)
+
+    prescription_lookup_requested = is_patient and _is_prescription_lookup_request(normalized)
+    latest_prescription_requested = is_patient and _is_latest_prescription_request(normalized)
+    if latest_prescription_requested:
+        prescription_code = _latest_prescription_code(user)
+        if prescription_code:
+            return 'Oxirgi retseptingizni tekshirib, undagi dorilarni dorixonalardan qidiryapman.'
+        return 'Oxirgi retseptingizda dorilar ro‘yxati topilmadi.'
+
+    prescription_code_pending = (
+        is_patient
+        and getattr(user, 'pk', None) is not None
+        and cache.get(_prescription_code_cache_key(user))
+    )
+    prescription_code = _extract_prescription_code(message, user=user)
+    if prescription_lookup_requested or (prescription_code_pending and prescription_code) or (is_patient and prescription_code):
+        if prescription_code:
+            return 'Retsept raqamini tekshirib, undagi dorilarni dorixonalardan qidiryapman.'
+        cache.set(_prescription_code_cache_key(user), True, PRESCRIPTION_CODE_TTL_SECONDS)
+        return 'Dorilarni qidirish uchun retseptning 8 xonali raqamini ayting. Raqamlarni bittalab talaffuz qiling.'
 
     external_reply = _internet_reply(
         normalized,

@@ -75,6 +75,10 @@ services:
       WEB_PUSH_VAPID_PUBLIC_KEY: ${WEB_PUSH_VAPID_PUBLIC_KEY:-}
       WEB_PUSH_VAPID_PRIVATE_KEY_B64: ${WEB_PUSH_VAPID_PRIVATE_KEY_B64:-}
       WEB_PUSH_VAPID_SUBJECT: ${WEB_PUSH_VAPID_SUBJECT:-mailto:mailer@g-med.uz}
+      LIZA_TRANSCRIBE_HANDLER: ${LIZA_TRANSCRIBE_HANDLER:-apps.liza.services.transcribe_audio}
+      LIZA_VOSK_MODEL_PATH: /app/engine/vosk-model-small-uz-0.22
+      LIZA_TTS_VOICE: ${LIZA_TTS_VOICE:-uz-UZ-MadinaNeural}
+      LIZA_TTS_RATE: ${LIZA_TTS_RATE:--15%}
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY}
       DB_ENGINE: postgresql
       DB_NAME: ${DB_NAME}
@@ -121,6 +125,7 @@ services:
       - static_volume:/app/staticfiles
       - media_volume:/app/media
       - logs_volume:/app/logs
+      - ${LIZA_VOSK_MODEL_HOST_PATH:-./jx.group_ovozli_yordamchi/engine/vosk-model-small-uz-0.22}:/app/engine/vosk-model-small-uz-0.22:ro
     depends_on:
       db:
         condition: service_healthy

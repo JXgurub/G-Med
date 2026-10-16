@@ -38,6 +38,7 @@ const SubscriptionBlockedPage = lazy(() => import('./pages/SubscriptionBlockedPa
 const PaymentSuccess = lazy(() => import('./pages/PaymentSuccess'))
 const PaymentHistory = lazy(() => import('./components/PaymentHistory'))
 import PwaStatusWidget from './components/PwaStatusWidget'
+const LizaAssistant = lazy(() => import('./components/LizaAssistant'))
 const Contact = lazy(() => import('./pages/Contact'))
 
 const RouteLoader = () => <div style={{ padding: '2rem', textAlign: 'center' }}>Yuklanmoqda...</div>
@@ -360,8 +361,10 @@ const BroadcastNotificationListener = () => {
             aria-expanded={inboxOpen}
             onClick={() => setInboxOpen((open) => !open)}
           >
-            <span aria-hidden="true">🔔</span>
-            <span>Bildirishnomalar</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" />
+            </svg>
+            <span className="notification-center-label">Bildirishnomalar</span>
             {unreadCount ? <span className="notification-center-count">{unreadCount > 99 ? '99+' : unreadCount}</span> : null}
           </button>
         </div>
@@ -387,6 +390,9 @@ function App() {
                 <Router>
                 <PwaStatusWidget />
                 <BroadcastNotificationListener />
+                <Suspense fallback={null}>
+                  <LizaAssistant />
+                </Suspense>
                 <Suspense fallback={<RouteLoader />}>
                   <Routes>
                     <Route path="/" element={<Layout />}>
@@ -415,7 +421,8 @@ function App() {
                     <Route path="/pharmacy-search" element={<Navigate to="/" replace />} />
                     <Route path="/pharmacy-owner-login" element={<PharmacyOwnerLogin />} />
                     <Route path="/pharmacy-owner-forgot-password" element={<PharmacyOwnerForgotPassword />} />
-                    <Route path="/pharmacy-owner-dashboard" element={<PharmacyOwnerDashboard />} />
+                    <Route path="/pharmacy-owner-dashboard/*" element={<PharmacyOwnerDashboard />} />
+                    <Route path="/pharmacy-pos" element={<Navigate to="/pharmacy-owner-dashboard" replace />} />
                     <Route path="/reception-login" element={<ReceptionLogin />} />
                     <Route path="/reception-dashboard" element={<ReceptionDashboard />} />
                     <Route path="/payment" element={<PaymentPage />} />

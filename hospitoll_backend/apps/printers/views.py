@@ -9,6 +9,7 @@ from rest_framework.decorators import action, api_view, permission_classes, thro
 from rest_framework.response import Response
 
 from apps.clinics.models import Clinic, ClinicDepartment, ReceptionStaff
+from apps.pharmacies.models import Pharmacy
 from apps.medical.models import Appointment
 from .models import PrinterDevice, PrintJob
 
@@ -20,6 +21,7 @@ class PrinterHeartbeatSerializer(serializers.Serializer):
     printer_status = serializers.CharField(required=False, allow_blank=True, default='offline')
     device_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     clinic_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    pharmacy_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     reception_room_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     last_seen = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     service_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -30,6 +32,7 @@ class PrinterJobStatusSerializer(serializers.Serializer):
     error_message = serializers.CharField(required=False, allow_blank=True, allow_null=True, default='')
     device_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     clinic_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    pharmacy_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     reception_room_id = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     device_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     printed_at = serializers.CharField(required=False, allow_blank=True, allow_null=True)
@@ -50,6 +53,10 @@ class PrinterDeviceViewSet(viewsets.ModelViewSet):
             clinic = getattr(user, 'clinic', None)
             if clinic:
                 return PrinterDevice.objects.filter(clinic=clinic).select_related('clinic', 'reception_room')
+        if getattr(user, 'role', None) == 'pharmacy':
+            pharmacy = Pharmacy.objects.filter(owner=user).first()
+            if pharmacy:
+                return PrinterDevice.objects.filter(pharmacy=pharmacy).select_related('pharmacy', 'pos_device')
         return PrinterDevice.objects.none()
 
     @staticmethod
@@ -245,6 +252,12 @@ class PrintJobViewSet(viewsets.ModelViewSet):
             clinic = getattr(user, 'clinic', None)
             if clinic:
                 return PrintJob.objects.filter(clinic=clinic).select_related('clinic', 'reception_room', 'printer_device', 'appointment', 'created_by')
+        if getattr(user, 'role', None) == 'pharmacy':
+            pharmacy = Pharmacy.objects.filter(owner=user).first()
+            if pharmacy:
+                return PrintJob.objects.filter(pharmacy=pharmacy).select_related(
+                    'pharmacy', 'printer_device', 'sale', 'created_by',
+                )
         return PrintJob.objects.none()
 
     @action(detail=False, methods=['get'], permission_classes=[permissions.AllowAny], url_path='pending', throttle_classes=[])
@@ -252,26 +265,34 @@ class PrintJobViewSet(viewsets.ModelViewSet):
         device_token = str(request.query_params.get('device_token', '') or '').strip()
         clinic_id = str(request.query_params.get('clinic_id', '') or '').strip()
         reception_room_id = str(request.query_params.get('reception_room_id', '') or '').strip()
+        pharmacy_id = str(request.query_params.get('pharmacy_id', '') or '').strip()
 
         if not device_token:
             return Response({'detail': 'Device token kerak.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        qs = PrintJob.objects.filter(status='pending')
-        if clinic_id:
-            qs = qs.filter(clinic_id=clinic_id)
-        if reception_room_id:
-            qs = qs.filter(reception_room_id=reception_room_id)
-
         device = get_object_or_404(PrinterDevice, device_token=device_token)
-        qs = qs.filter(clinic_id=device.clinic_id)
-        if device.reception_room_id:
-            qs = qs.filter(reception_room_id=device.reception_room_id)
+        qs = PrintJob.objects.filter(status='pending')
+        if device.pharmacy_id:
+            if pharmacy_id != str(device.pharmacy_id) or clinic_id or reception_room_id:
+                return Response({'detail': 'Dorixona printeri konfiguratsiyasi mos emas.'}, status=status.HTTP_403_FORBIDDEN)
+            qs = qs.filter(pharmacy_id=device.pharmacy_id, printer_device=device)
+        else:
+            if not device.clinic_id or pharmacy_id:
+                return Response({'detail': 'Printer egasi topilmadi.'}, status=status.HTTP_403_FORBIDDEN)
+            if clinic_id:
+                qs = qs.filter(clinic_id=clinic_id)
+            if reception_room_id:
+                qs = qs.filter(reception_room_id=reception_room_id)
+            qs = qs.filter(clinic_id=device.clinic_id)
+            if device.reception_room_id:
+                qs = qs.filter(reception_room_id=device.reception_room_id)
 
         jobs = []
         for job in qs.order_by('created_at')[:20]:
             jobs.append({
                 'id': str(job.id),
-                'clinic_id': str(job.clinic_id),
+                'clinic_id': str(job.clinic_id) if job.clinic_id else None,
+                'pharmacy_id': str(job.pharmacy_id) if job.pharmacy_id else None,
                 'reception_room_id': str(job.reception_room_id) if job.reception_room_id else None,
                 'printer_device_id': str(job.printer_device_id) if job.printer_device_id else None,
                 'appointment_id': str(job.appointment_id) if job.appointment_id else None,
@@ -290,18 +311,23 @@ class PrintJobViewSet(viewsets.ModelViewSet):
         if not device_token:
             return Response({'detail': 'Device token kerak.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        device = PrinterDevice.objects.select_related('clinic', 'reception_room').filter(device_token=device_token).first()
+        device = PrinterDevice.objects.select_related('clinic', 'pharmacy', 'reception_room').filter(device_token=device_token).first()
         if not device:
             return Response({'detail': 'Qurilma topilmadi.'}, status=status.HTTP_403_FORBIDDEN)
 
-        job = PrintJob.objects.select_related('clinic', 'reception_room', 'printer_device').filter(pk=pk).first()
+        job = PrintJob.objects.select_related('clinic', 'pharmacy', 'reception_room', 'printer_device').filter(pk=pk).first()
         if not job:
             return Response({'detail': 'Job topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if job.clinic_id != device.clinic_id:
+        if device.pharmacy_id:
+            if job.pharmacy_id != device.pharmacy_id or str(data.get('pharmacy_id') or '') != str(device.pharmacy_id):
+                return Response({'detail': 'Qurilma dorixonaga mos emas.'}, status=status.HTTP_403_FORBIDDEN)
+            if job.printer_device_id and job.printer_device_id != device.id:
+                return Response({'detail': 'Chek boshqa printer navbatiga tegishli.'}, status=status.HTTP_403_FORBIDDEN)
+        elif not device.clinic_id or job.clinic_id != device.clinic_id:
             return Response({'detail': 'Qurilma klinikaga mos emas.'}, status=status.HTTP_403_FORBIDDEN)
 
-        if device.reception_room_id and job.reception_room_id and job.reception_room_id != device.reception_room_id:
+        if not device.pharmacy_id and device.reception_room_id and job.reception_room_id and job.reception_room_id != device.reception_room_id:
             return Response({'detail': 'Qurilma qabulxona bilan mos emas.'}, status=status.HTTP_403_FORBIDDEN)
 
         if data['status'] == 'completed':
@@ -316,26 +342,33 @@ class PrintJobViewSet(viewsets.ModelViewSet):
             job.status = data['status']
 
         job.printer_device = device
-        job.clinic_id = device.clinic_id
-        if device.reception_room_id:
+        if device.clinic_id:
+            job.clinic_id = device.clinic_id
+        if device.pharmacy_id:
+            job.pharmacy_id = device.pharmacy_id
+        if device.reception_room_id and not device.pharmacy_id:
             job.reception_room_id = device.reception_room_id
 
-        job.save(update_fields=['status', 'error_message', 'printer_device', 'clinic', 'reception_room', 'printed_at'])
+        job.save(update_fields=['status', 'error_message', 'printer_device', 'clinic', 'pharmacy', 'reception_room', 'printed_at'])
         return Response({'detail': 'Print job status updated', 'status': job.status})
 
     @action(detail=True, methods=['post'], permission_classes=[permissions.AllowAny], url_path='retry')
     def retry(self, request, pk=None):
         user = request.user
         clinic = None
+        pharmacy = None
         if getattr(user, 'is_authenticated', False):
-            clinic = getattr(user, 'clinic', None) or Clinic.objects.filter(owner=user).first()
+            clinic = self._get_clinic_from_request()
+            if getattr(user, 'role', None) == 'pharmacy':
+                pharmacy = Pharmacy.objects.filter(owner=user).first()
 
-        job = PrintJob.objects.select_related('clinic').filter(pk=pk).first()
+        job = PrintJob.objects.select_related('clinic', 'pharmacy').filter(pk=pk).first()
         if not job:
             return Response({'detail': 'Job topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
         if clinic and job.clinic_id != clinic.id:
             return Response({'detail': 'Klinika bilan mos kelmaydi.'}, status=status.HTTP_403_FORBIDDEN)
-
+        if pharmacy and job.pharmacy_id != pharmacy.id:
+            return Response({'detail': 'Dorixona bilan mos kelmaydi.'}, status=status.HTTP_403_FORBIDDEN)
         if job.status != 'failed':
             return Response({'detail': 'Faqat failed holatidagi jobni qayta chop etish mumkin.', 'status': job.status}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -402,8 +435,11 @@ def printer_heartbeat(request):
 
     clinic_id = data.get('clinic_id')
     reception_room_id = data.get('reception_room_id')
+    pharmacy_id = data.get('pharmacy_id')
     device = PrinterDevice.objects.filter(device_token=device_token).first()
     if not device:
+        if pharmacy_id:
+            return Response({'detail': 'Dorixona printeri avval POS orqali ro‘yxatdan o‘tkazilishi kerak.'}, status=status.HTTP_403_FORBIDDEN)
         if not clinic_id:
             return Response({'detail': 'Clinic ID kerak.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -419,15 +455,20 @@ def printer_heartbeat(request):
             device_token=device_token,
             status='offline',
         )
+    elif device.pharmacy_id:
+        if str(pharmacy_id or '') != str(device.pharmacy_id) or clinic_id or reception_room_id:
+            return Response({'detail': 'Dorixona printeri konfiguratsiyasi mos emas.'}, status=status.HTTP_403_FORBIDDEN)
+    elif pharmacy_id:
+        return Response({'detail': 'Printer tokeni dorixonaga tegishli emas.'}, status=status.HTTP_403_FORBIDDEN)
 
     service_online = bool(data.get('service_online', True))
     printer_connected = bool(data.get('printer_connected', False))
     device.printer_name = data.get('printer_name') or device.printer_name
     device.status = 'ready' if service_online and printer_connected else 'offline' if not service_online else 'disconnected'
     device.last_seen = timezone.now()
-    if clinic_id:
+    if clinic_id and device.clinic_id:
         device.clinic_id = clinic_id
-    if reception_room_id:
+    if reception_room_id and not device.pharmacy_id:
         device.reception_room_id = reception_room_id
     device.save(update_fields=['printer_name', 'status', 'last_seen', 'clinic', 'reception_room'])
 

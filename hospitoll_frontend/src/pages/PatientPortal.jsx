@@ -361,6 +361,16 @@ const PatientPortal = () => {
     }
   }
 
+  const handleCopyPrescriptionCode = async (code) => {
+    try {
+      const copied = await copyTextToClipboard(code)
+      if (!copied) throw new Error('copy_failed')
+      alert('Retsept raqami nusxalandi ✅')
+    } catch (error) {
+      alert('Retsept raqamini nusxalab bo‘lmadi')
+    }
+  }
+
   const handleSendMedicinesToPharmacy = (entry) => {
     if (!entry.medications || entry.medications.length === 0) {
       alert('Bu yozuvda dorilar ro\'yxati yo\'q')
@@ -370,6 +380,7 @@ const PatientPortal = () => {
     try {
       localStorage.setItem(PHARMACY_PRESCRIPTION_KEY, JSON.stringify({
         medicines: entry.medications,
+        prescriptionCode: entry.prescriptionCode,
         diagnosis: entry.diagnosis,
         complaint: entry.complaint,
         date: entry.date,
@@ -456,6 +467,20 @@ const PatientPortal = () => {
                   <span className="history-date">{formatHistoryDate(entry.date)}</span>
                   <span className="history-pill">{entry.medications?.length || 0} ta dori</span>
                 </div>
+                {entry.prescriptionCode ? (
+                  <div className="history-prescription-code">
+                    <p className="history-medication-hint">
+                      Retsept raqami: <strong>{entry.prescriptionCode}</strong>
+                    </p>
+                    <button
+                      type="button"
+                      className="history-prescription-copy"
+                      onClick={() => handleCopyPrescriptionCode(entry.prescriptionCode)}
+                    >
+                      Nusxa olish
+                    </button>
+                  </div>
+                ) : null}
 
                 <div className="history-title-block">
                   <h3 className="history-diagnosis">{entry.diagnosis}</h3>

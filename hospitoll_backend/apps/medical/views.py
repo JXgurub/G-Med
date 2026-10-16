@@ -153,34 +153,45 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             clinic_print_name = str(getattr(clinic, 'queue_ticket_clinic_name', '') or '').strip() or clinic.name
             clinic_print_address = str(getattr(clinic, 'queue_ticket_clinic_address', '') or '').strip() or clinic.address
             clinic_print_contact = str(getattr(clinic, 'queue_ticket_contact_url', '') or '').strip() or str(clinic.website or '').strip()
+            show_ticket_address = bool(getattr(clinic, 'queue_ticket_show_address', True))
+            show_ticket_phone = bool(getattr(clinic, 'queue_ticket_show_phone', False))
+            show_ticket_contact = bool(getattr(clinic, 'queue_ticket_show_contact', True))
             doctor_name = ''
             if getattr(doctor, 'user', None):
                 doctor_name = doctor.user.get_full_name() or doctor.user.username
             doctor_name = doctor_name or 'Doktor'
 
+            ticket_lines = [
+                '================================',
+                f'{clinic_print_name}',
+                '         NAVBAT TALONI',
+                '================================',
+                f'Bemor: {patient_name}',
+                f'Bemor ID: {patient_number}',
+                f"Davolash yo\'nalishlari: {directions_text}",
+                f'Doktor: {doctor_name}',
+                'NAVBAT RAQAMI',
+                str(ticket_number),
+                f"Jami to\'lov: {fee_text} so\'m",
+                f'Sana: {timezone.localtime(appointment.scheduled_date).strftime("%d.%m.%Y")}',
+                f'Vaqt: {timezone.localtime(appointment.scheduled_date).strftime("%H:%M")}',
+            ]
+            if show_ticket_address and clinic_print_address:
+                ticket_lines.append(f'Manzil: {clinic_print_address}')
+            if show_ticket_phone and clinic.phone_number:
+                ticket_lines.append(f'Telefon: {clinic.phone_number}')
+            if show_ticket_contact and clinic_print_contact:
+                ticket_lines.append(f'Aloqa: {clinic_print_contact}')
+            ticket_lines.extend([
+                '',
+                'Xizmatdan foydalanganingiz uchun rahmat!',
+                '================================',
+            ])
+
             payload = {
                 'queue_number': str(ticket_number),
                 'queue_number_size': str(getattr(clinic, 'queue_ticket_number_size', 'large') or 'large'),
-                'lines': [
-                    '================================',
-                    f'{clinic_print_name}',
-                    '         NAVBAT TALONI',
-                    '================================',
-                    f'Bemor: {patient_name}',
-                    f'Bemor ID: {patient_number}',
-                    f"Davolash yo\'nalishlari: {directions_text}",
-                    f'Doktor: {doctor_name}',
-                    'NAVBAT RAQAMI',
-                    str(ticket_number),
-                    f"Jami to\'lov: {fee_text} so\'m",
-                    f'Sana: {timezone.localtime(appointment.scheduled_date).strftime("%d.%m.%Y")}',
-                    f'Vaqt: {timezone.localtime(appointment.scheduled_date).strftime("%H:%M")}',
-                    f'Manzil: {clinic_print_address}',
-                    f'Aloqa: {clinic_print_contact}' if clinic_print_contact else '',
-                    '',
-                    'Xizmatdan foydalanganingiz uchun rahmat!',
-                    '================================',
-                ]
+                'lines': ticket_lines,
             }
 
             PrintJob.objects.create(
@@ -2059,6 +2070,48 @@ class MedicalRecordViewSet(viewsets.ModelViewSet):
         if user.is_clinic:
             return queryset.filter(clinic__owner=user)
         return queryset.none()
+
+    @action(detail=False, methods=['get'], url_path='prescription-lookup')
+    def prescription_lookup(self, request):
+        if not request.user.is_patient:
+            raise PermissionDenied('Retsept raqami orqali qidiruv bemorlar uchun mavjud.')
+
+        code = str(request.query_params.get('code', '')).strip()
+        if not re.fullmatch(r'\d{8}', code):
+            return Response(
+                {'error': 'Retsept raqami 8 ta raqamdan iborat bo‘lishi kerak.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        record = self.get_queryset().filter(prescription_code=code).first()
+        if record is None:
+            return Response(
+                {'error': 'Bu retsept raqami bo‘yicha yozuv topilmadi.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        medicines = [
+            item
+            for item in (
+                re.sub(r'^[-•\d.)\s]+', '', name).strip()
+                for name in re.split(r'[\n,;]+', record.plan or '')
+            )
+            if item
+        ]
+        return Response({
+            'id': str(record.pk),
+            'prescription_code': record.prescription_code,
+            'medicines': medicines,
+            'diagnosis': record.assessment or '',
+            'complaint': record.chief_complaint or '',
+            'date': record.created_at.date().isoformat(),
+            'doctorName': record.doctor_name or (
+                record.doctor.user.get_full_name() if record.doctor_id and record.doctor.user_id else ''
+            ),
+            'clinic': record.clinic_name or (
+                record.clinic.name if record.clinic_id else ''
+            ),
+        })
 
     @staticmethod
     def _is_administrator(user):

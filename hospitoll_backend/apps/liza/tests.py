@@ -4,14 +4,15 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from django.conf import settings
 from django.core.cache import cache
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIRequestFactory, force_authenticate
 
 from apps.clinics.models import Clinic, ClinicDepartment
 from apps.doctors.models import Doctor, DoctorSpecialization, Specialization
-from apps.medical.models import Appointment
+from apps.medical.models import Appointment, MedicalRecord
 from apps.patients.models import Patient
 from apps.users.models import CustomUser
 
@@ -26,6 +27,13 @@ from .views import CommandView, SpeechView, VoiceView, WakeView
 
 
 class LizaCommandTests(SimpleTestCase):
+    def test_all_liza_throttle_scopes_have_configured_rates(self):
+        rates = settings.REST_FRAMEWORK['DEFAULT_THROTTLE_RATES']
+
+        for scope in ('liza_command', 'liza_voice', 'liza_wake', 'liza_speech'):
+            with self.subTest(scope=scope):
+                self.assertIn(scope, rates)
+
     def test_command_endpoint_requires_authentication(self):
         request = APIRequestFactory().post(
             '/api/v1/liza/command/',
@@ -96,6 +104,70 @@ class LizaCommandTests(SimpleTestCase):
         self.assertIsNone(get_command_action(user=doctor, message="Profilimga o't"))
         self.assertIsNone(get_command_action(user=patient, message='Vaznimni 72 ga o‘zgartir'))
 
+    def test_patient_can_request_pharmacy_search_by_spoken_prescription_code(self):
+        patient = SimpleNamespace(role='patient', pk='patient-user')
+
+        self.assertEqual(
+            get_command_action(user=patient, message='Retsept raqami 12345678 bo‘yicha dorilarni qidir'),
+            'search_prescription',
+        )
+        self.assertEqual(
+            get_command_action_data(
+                user=patient,
+                message='Retsept raqamini bir ikki uch to‘rt besh olti yetti sakkiz deb qidir',
+            )['prescription_code'],
+            '12345678',
+        )
+
+    def test_spoken_prescription_code_alone_starts_search(self):
+        patient = SimpleNamespace(role='patient', pk='patient-spoken-code')
+        spoken_code = "bar nol to'qqiz besh ikki nol besh bir"
+
+        self.assertEqual(
+            get_command_action(user=patient, message=spoken_code),
+            'search_prescription',
+        )
+        self.assertEqual(
+            get_command_action_data(user=patient, message=spoken_code)['prescription_code'],
+            '10952051',
+        )
+        self.assertEqual(
+            get_command_action(user=patient, message='Retsept raqamini aytib dorixonadan qidir'),
+            'prescription_code_required',
+        )
+
+    def test_spoken_prescription_search_requires_exactly_eight_digits(self):
+        patient = SimpleNamespace(role='patient', pk='patient-overlong-code')
+
+        self.assertEqual(
+            get_command_action(
+                user=patient,
+                message='Retsept raqami bir ikki uch to‘rt besh olti yetti sakkiz to‘qqiz',
+            ),
+            'prescription_code_required',
+        )
+        self.assertEqual(
+            get_command_action(
+                user=patient,
+                message='Retsept raqami 1 2 3 4 5 6 7 8 9',
+            ),
+            'prescription_code_required',
+        )
+
+    def test_patient_can_say_prescription_code_in_followup_utterance(self):
+        patient = SimpleNamespace(role='patient', pk='patient-followup-prescription')
+
+        prompt = handle_command(user=patient, message='Retsept dorilarini dorixonadan qidir')
+        self.assertIn('8 xonali raqamini ayting', prompt)
+
+        followup = 'bir ikki uch to‘rt besh olti yetti sakkiz'
+        reply = handle_command(user=patient, message=followup)
+        action = get_command_action_data(user=patient, message=followup)
+
+        self.assertIn('tekshirib', reply)
+        self.assertEqual(action['action'], 'search_prescription')
+        self.assertEqual(action['prescription_code'], '12345678')
+
     def test_patient_can_stop_liza_but_other_roles_cannot(self):
         patient = SimpleNamespace(role='patient', pk='patient-user')
         doctor = SimpleNamespace(role='doctor', pk='doctor-user')
@@ -161,6 +233,34 @@ class LizaCommandTests(SimpleTestCase):
             message='Python yangiliklari',
             internet_search_enabled=True,
         )
+
+    @patch('apps.liza.views.handle_command', return_value='Retsept raqamini tekshiryapman.')
+    @patch('apps.liza.views.import_string')
+    def test_voice_endpoint_extracts_spoken_prescription_code(
+        self,
+        import_string_mock,
+        _handle_command_mock,
+    ):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        import_string_mock.return_value = Mock(
+            return_value='Retsept raqami bir ikki uch to‘rt besh olti yetti sakkiz bo‘yicha qidir'
+        )
+        user = SimpleNamespace(is_authenticated=True, pk='voice-prescription-user', role='patient')
+        request = APIRequestFactory().post(
+            '/api/v1/liza/voice/',
+            {
+                'audio': SimpleUploadedFile('command.wav', b'audio', content_type='audio/wav'),
+            },
+            format='multipart',
+        )
+        force_authenticate(request, user=user)
+
+        response = VoiceView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['action'], 'search_prescription')
+        self.assertEqual(response.data['prescription_code'], '12345678')
 
     @patch('apps.liza.services.Appointment.objects.filter')
     def test_doctor_command_only_queries_own_appointments(self, filter_appointments):
@@ -246,6 +346,7 @@ class LizaCommandTests(SimpleTestCase):
         self.assertIn('Beruniyda hozir asosan ochiq', reply)
         self.assertEqual(get_mock.call_args_list[0].kwargs['params']['name'], 'beruniy')
 
+    @override_settings(LIZA_INTERNET_SEARCH_ENABLED=True)
     @patch('apps.liza.services._enrich_internet_results', return_value=(None, []))
     @patch('apps.liza.services.cache.set')
     @patch('apps.liza.services.cache.get', return_value=None)
@@ -283,6 +384,20 @@ class LizaCommandTests(SimpleTestCase):
         self.assertNotIn('user@example.com', query)
         self.assertNotIn('998', query)
         self.assertEqual(get_mock.call_args.args[0], 'https://html.duckduckgo.com/html/')
+
+    @override_settings(LIZA_INTERNET_SEARCH_ENABLED=False)
+    @patch('apps.liza.services.requests.get')
+    def test_internet_search_is_disabled_without_making_external_requests(self, get_mock):
+        user = SimpleNamespace(role='patient', pk='internet-search-disabled-user')
+
+        reply = handle_command(
+            user=user,
+            message='Internetda Python haqida qidir',
+            internet_search_enabled=True,
+        )
+
+        self.assertIn('vaqtincha to‘xtatdi', reply)
+        get_mock.assert_not_called()
 
     @patch('apps.liza.services.requests.get')
     def test_internet_search_mode_keeps_profile_navigation_local(self, get_mock):
@@ -457,6 +572,7 @@ class LizaCommandTests(SimpleTestCase):
         self.assertEqual(action['video_id'], 'abcdefghijk')
         youtube_search_mock.assert_called_once_with('yulduz usmonova')
 
+    @override_settings(LIZA_INTERNET_SEARCH_ENABLED=True)
     @patch('apps.liza.services._internet_search_results', return_value=[
         {'title': 'Toshkent', 'snippet': 'Poytaxt.', 'url': 'https://example.com/tashkent'},
     ])
@@ -477,6 +593,20 @@ class LizaCommandTests(SimpleTestCase):
     def test_madina_tts_retries_transient_failures(self, _run_mock, _sleep_mock):
         self.assertEqual(synthesize_madina('Salom'), b'audio')
 
+    @patch('apps.liza.services.time.sleep')
+    @patch('apps.liza.services.asyncio.run')
+    def test_madina_tts_does_not_retry_for_forbidden_voice_service(self, run_mock, sleep_mock):
+        error = RuntimeError('Forbidden')
+        error.status = 403
+        run_mock.side_effect = error
+
+        with self.assertRaisesRegex(RuntimeError, 'Forbidden'):
+            synthesize_madina('Salom')
+
+        run_mock.assert_called_once()
+        sleep_mock.assert_not_called()
+
+    @override_settings(LIZA_INTERNET_SEARCH_ENABLED=True)
     @patch('apps.liza.services._enrich_internet_results', return_value=(None, []))
     @patch('apps.liza.services.cache.set')
     @patch('apps.liza.services.cache.get', return_value=None)
@@ -502,6 +632,7 @@ class LizaCommandTests(SimpleTestCase):
         self.assertIn('Toshkent tarixi — Shahar tarixi haqida.', reply)
         self.assertIn('https://example.com/tashkent', reply)
 
+    @override_settings(LIZA_INTERNET_SEARCH_ENABLED=True)
     @patch('apps.liza.services._enrich_internet_results', return_value=(None, []))
     @patch('apps.liza.services._bing_search_results', return_value=[])
     @patch('apps.liza.services.requests.get')
@@ -591,6 +722,75 @@ class LizaPatientFunctionsTests(TestCase):
             queue_position=queue_position,
             scheduled_date=timezone.now() + timedelta(minutes=minutes),
         )
+
+    def test_prescription_code_uses_patient_record_to_resolve_vosk_digit_variants(self):
+        MedicalRecord.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            prescription_code='10952051',
+            plan='Amoksitsillin 500 mg',
+        )
+        prompt = handle_command(
+            user=self.patient_user,
+            message='Retsept bo‘yicha dorilarni qidir',
+        )
+        transcript = "bir noil to'qqiz besh yakka nival besh bir"
+
+        reply = handle_command(user=self.patient_user, message=transcript)
+        action = get_command_action_data(user=self.patient_user, message=transcript)
+
+        self.assertIn('tekshirib', prompt + reply)
+        self.assertEqual(action['action'], 'search_prescription')
+        self.assertEqual(action['prescription_code'], '10952051')
+
+    def test_medicine_search_phrases_wait_for_a_prescription_code(self):
+        for message in (
+            'Dorilarimni qidir',
+            'Dorixonalardan dorilarimni qidir',
+            'Retsept bo‘yicha dorilarimni qidir',
+        ):
+            with self.subTest(message=message):
+                reply = handle_command(user=self.patient_user, message=message)
+                self.assertIn('8 xonali raqamini ayting', reply)
+
+                action = get_command_action_data(user=self.patient_user, message=message)
+                self.assertEqual(action['action'], 'prescription_code_required')
+
+        followup = "bar nol to'qqiz besh ikki nol besh bir"
+        reply = handle_command(user=self.patient_user, message=followup)
+        action = get_command_action_data(user=self.patient_user, message=followup)
+
+        self.assertIn('tekshirib', reply)
+        self.assertEqual(action['action'], 'search_prescription')
+        self.assertEqual(action['prescription_code'], '10952051')
+
+    def test_latest_prescription_search_uses_latest_patient_record(self):
+        older_record = MedicalRecord.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            prescription_code='12345678',
+            plan='Older medicine',
+        )
+        latest_record = MedicalRecord.objects.create(
+            patient=self.patient,
+            doctor=self.doctor,
+            clinic=self.clinic,
+            prescription_code='87654321',
+            plan='Latest medicine',
+        )
+        MedicalRecord.objects.filter(pk=older_record.pk).update(
+            created_at=timezone.now() - timedelta(days=1),
+        )
+
+        message = 'Oxirgi retsept bo‘yicha dorilarimni qidir'
+        reply = handle_command(user=self.patient_user, message=message)
+        action = get_command_action_data(user=self.patient_user, message=message)
+
+        self.assertIn('Oxirgi retseptingizni tekshirib', reply)
+        self.assertEqual(action['action'], 'search_prescription')
+        self.assertEqual(action['prescription_code'], latest_record.prescription_code)
 
     def test_patient_queue_uses_dashboard_order_and_only_its_doctor_day(self):
         self.make_appointment(self.other_patient, 5, queue_position=1)

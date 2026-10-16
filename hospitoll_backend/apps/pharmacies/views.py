@@ -1,14 +1,28 @@
 from django.shortcuts import get_object_or_404
 from django.db import transaction, models
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.parsers import JSONParser, MultiPartParser, FormParser
+from decimal import Decimal, InvalidOperation
+import hashlib
+import secrets
+import textwrap
+import uuid
+from datetime import timedelta
 
 from apps.site_settings.models import SystemAlert
 from core.websocket_service import WebSocketService
-from .models import Pharmacy, Medicine, PharmacyMarchandise
+from .models import (
+    Pharmacy,
+    Medicine,
+    PharmacyMarchandise,
+    PharmacyPosDevice,
+    PharmacySale,
+    PharmacySaleLine,
+)
 from .serializers import (
     PharmacySerializer,
     PharmacyCreateSerializer,
@@ -20,6 +34,601 @@ from .serializers import (
 
 MEDICINE_NAME_ALERT_TYPE = 'medicine_name_verification'
 MEDICINE_NAME_ALERT_MESSAGE = "Bu dori O'zbekiston ichida bormi yoki nomi to'g'ri yozilganmi?"
+POS_ACTIVATION_CODE_LIFETIME = timedelta(minutes=30)
+
+
+def _get_pos_pharmacy(request):
+    if not getattr(request.user, 'is_pharmacy', False):
+        return None
+    return Pharmacy.objects.filter(owner=request.user).first()
+
+
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_pos_snapshot(request):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+    inventory = PharmacyMarchandise.objects.filter(
+        pharmacy=pharmacy,
+    ).select_related('medicine').order_by('medicine__name', 'expiry_date')
+    return Response({
+        'pharmacy': {
+            'id': str(pharmacy.id),
+            'name': pharmacy.name,
+            'address': pharmacy.address,
+            'phone_number': pharmacy.phone_number,
+            'website': pharmacy.website or '',
+            'receipt_show_address': pharmacy.receipt_show_address,
+            'receipt_show_phone': pharmacy.receipt_show_phone,
+            'receipt_show_website': pharmacy.receipt_show_website,
+            'receipt_instagram_url': pharmacy.receipt_instagram_url,
+            'receipt_show_instagram': pharmacy.receipt_show_instagram,
+        },
+        'medicines': MedicineSerializer(
+            Medicine.objects.filter(is_active=True).order_by('name'),
+            many=True,
+        ).data,
+        'inventory': PharmacyMarchandiseSerializer(inventory, many=True).data,
+        'snapshot_at': timezone.now().isoformat(),
+    })
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_pos_printer(request):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        client_uuid = uuid.UUID(str(
+            request.data.get('client_id') if request.method == 'POST'
+            else request.query_params.get('client_id')
+        ))
+    except (TypeError, ValueError, AttributeError):
+        return Response({'client_id': 'Noto‘g‘ri kassir kompyuteri.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    pos_device = PharmacyPosDevice.objects.filter(
+        pharmacy=pharmacy,
+        client_id=client_uuid,
+        is_active=True,
+    ).first()
+    from apps.printers.models import PrinterDevice
+
+    printer_device = None
+    if pos_device is not None:
+        printer_device = PrinterDevice.objects.filter(
+            pharmacy=pharmacy,
+            pos_device=pos_device,
+        ).first()
+    shared_printer = PrinterDevice.objects.filter(
+        pharmacy=pharmacy,
+        pos_device__isnull=True,
+    ).order_by('-updated_at').first()
+    if printer_device is None:
+        printer_device = shared_printer
+    if request.method == 'GET':
+        now = timezone.now()
+        linked_printer_online = bool(
+            printer_device
+            and printer_device.last_seen
+            and 0 <= (now - printer_device.last_seen).total_seconds() <= 90
+            and printer_device.status == 'ready'
+        )
+        shared_printer_online = bool(
+            shared_printer
+            and shared_printer.last_seen
+            and 0 <= (now - shared_printer.last_seen).total_seconds() <= 90
+            and shared_printer.status == 'ready'
+        )
+        if not linked_printer_online and shared_printer_online:
+            printer_device = shared_printer
+        service_online = bool(
+            printer_device
+            and printer_device.last_seen
+            and 0 <= (now - printer_device.last_seen).total_seconds() <= 90
+        )
+        return Response({
+            'device': {
+                'id': str(printer_device.id),
+                'device_name': printer_device.device_name,
+                'printer_name': printer_device.printer_name,
+                'status': printer_device.status,
+                'service_online': service_online,
+                'printer_ready': service_online and printer_device.status == 'ready',
+                'last_seen': printer_device.last_seen.isoformat() if printer_device.last_seen else None,
+            } if printer_device else None,
+        })
+
+    if pos_device is None:
+        return Response({'detail': 'Faol kassir kompyuteri topilmadi.'}, status=status.HTTP_403_FORBIDDEN)
+
+    if not printer_device:
+        printer_device = PrinterDevice.objects.create(
+            clinic=None,
+            pharmacy=pharmacy,
+            pos_device=pos_device,
+            device_name=pos_device.name,
+            device_token=f'gmed-pharmacy-{uuid.uuid4().hex}',
+            status='offline',
+        )
+        response_status = status.HTTP_201_CREATED
+    else:
+        response_status = status.HTTP_200_OK
+
+    return Response({
+        'detail': 'Dorixona printeri sozlandi. Printer Service konfiguratsiyasiga ushbu qiymatlarni kiriting.',
+        'device_id': str(printer_device.id),
+        'device_token': printer_device.device_token,
+        'device_name': printer_device.device_name,
+        'pharmacy_id': str(pharmacy.id),
+        'pos_device_id': str(pos_device.id),
+        'status': printer_device.status,
+    }, status=response_status)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_printer_service_register(request):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona egasi akkaunti topilmadi.'}, status=status.HTTP_403_FORBIDDEN)
+
+    from apps.printers.models import PrinterDevice
+
+    device_name = str(request.data.get('device_name') or '').strip() or 'G-MED Dorixona Printeri'
+    if len(device_name) > 120:
+        return Response({'device_name': 'Printer nomi 120 belgidan oshmasin.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    printer_device = PrinterDevice.objects.filter(
+        pharmacy=pharmacy,
+        pos_device__isnull=True,
+    ).order_by('-updated_at').first()
+    created = printer_device is None
+    if created:
+        printer_device = PrinterDevice.objects.create(
+            clinic=None,
+            pharmacy=pharmacy,
+            pos_device=None,
+            device_name=device_name,
+            device_token=f'gmed-pharmacy-{uuid.uuid4().hex}',
+            status='offline',
+        )
+    else:
+        printer_device.device_name = device_name
+        printer_device.save(update_fields=['device_name', 'updated_at'])
+
+    return Response({
+        'detail': 'Dorixona printeri ro‘yxatdan o‘tdi.',
+        'device_id': str(printer_device.id),
+        'device_token': printer_device.device_token,
+        'device_name': printer_device.device_name,
+        'pharmacy_id': str(pharmacy.id),
+        'status': printer_device.status,
+    }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_pos_print_sale(request):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        sale_uuid = uuid.UUID(str(request.data.get('sale_id')))
+        client_uuid = uuid.UUID(str(request.data.get('client_id')))
+    except (TypeError, ValueError, AttributeError):
+        return Response({'detail': 'Sotuv yoki kassir identifikatori noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    pos_device = PharmacyPosDevice.objects.filter(
+        pharmacy=pharmacy,
+        client_id=client_uuid,
+        is_active=True,
+    ).first()
+    if pos_device is None:
+        return Response({'detail': 'Faol kassir kompyuteri topilmadi.'}, status=status.HTTP_403_FORBIDDEN)
+
+    sale = PharmacySale.objects.filter(
+        pk=sale_uuid,
+        pharmacy=pharmacy,
+        device=pos_device,
+    ).first()
+    if sale is None:
+        return Response({'detail': 'Sinxronlangan sotuv topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+    from apps.printers.models import PrintJob, PrinterDevice
+
+    printer_device = PrinterDevice.objects.filter(
+        pharmacy=pharmacy,
+        pos_device=pos_device,
+    ).first()
+    now = timezone.now()
+    device_is_ready = bool(
+        printer_device
+        and printer_device.last_seen
+        and 0 <= (now - printer_device.last_seen).total_seconds() <= 90
+        and printer_device.status == 'ready'
+    )
+    if not device_is_ready:
+        shared_printer = PrinterDevice.objects.filter(
+            pharmacy=pharmacy,
+            pos_device__isnull=True,
+            status='ready',
+            last_seen__gte=now - timedelta(seconds=90),
+        ).order_by('-last_seen').first()
+        if shared_printer:
+            printer_device = shared_printer
+    service_online = bool(
+        printer_device
+        and printer_device.last_seen
+        and 0 <= (now - printer_device.last_seen).total_seconds() <= 90
+    )
+    if not service_online or printer_device.status != 'ready':
+        return Response({'detail': 'Dorixona printeri tayyor emas.'}, status=status.HTTP_409_CONFLICT)
+
+    if not sale.lines.exists():
+        return Response({'detail': 'Chekda chop etiladigan mahsulot yo‘q.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    def format_receipt_amount(value):
+        amount = Decimal(value)
+        return f'{int(amount):,}'.replace(',', ' ') if amount == amount.to_integral_value() else f'{amount:.2f}'
+
+    receipt_width = 32
+
+    def wrap_receipt_line(value):
+        return textwrap.wrap(
+            str(value),
+            width=receipt_width,
+            break_long_words=True,
+            break_on_hyphens=False,
+        ) or ['']
+
+    pharmacy_name_lines = wrap_receipt_line(pharmacy.name)
+    lines = [
+        *pharmacy_name_lines,
+        'SOTUV CHEKI',
+        '-' * receipt_width,
+        f'Chek: {str(sale.id).split("-")[0].upper()}',
+        f'Sana: {timezone.localtime(sale.sold_at).strftime("%d.%m.%Y %H:%M")}',
+    ]
+    if pharmacy.receipt_show_address and pharmacy.address:
+        lines.extend(wrap_receipt_line(f'Manzil: {pharmacy.address}'))
+    if pharmacy.receipt_show_phone and pharmacy.phone_number:
+        lines.extend(wrap_receipt_line(f'Telefon: {pharmacy.phone_number}'))
+    if pharmacy.receipt_show_website and pharmacy.website:
+        lines.extend(wrap_receipt_line(f'Sayt: {pharmacy.website}'))
+    if pharmacy.receipt_show_instagram and pharmacy.receipt_instagram_url:
+        lines.extend(wrap_receipt_line(f'Instagram: {pharmacy.receipt_instagram_url}'))
+    lines.append('')
+    for line in sale.lines.all():
+        lines.extend([
+            *wrap_receipt_line(line.medicine_name),
+            *wrap_receipt_line(
+                f'{line.quantity} x {format_receipt_amount(line.unit_price)}'
+                f' = {format_receipt_amount(line.line_total)} so\'m'
+            ),
+        ])
+    lines.extend([
+        '',
+        '-' * receipt_width,
+        f"Jami: {format_receipt_amount(sale.total)} so'm",
+        '',
+        'Xaridingiz uchun rahmat!',
+    ])
+
+    job, created = PrintJob.objects.get_or_create(
+        sale=sale,
+        defaults={
+            'clinic': None,
+            'pharmacy': pharmacy,
+            'printer_device': printer_device,
+            'created_by': request.user,
+            'status': 'pending',
+            'payload': {
+                'receipt_type': 'pharmacy',
+                'header_line_count': len(pharmacy_name_lines) + 1,
+                'receipt_width': receipt_width,
+                'lines': lines,
+            },
+        },
+    )
+    return Response({
+        'detail': 'Chek dorixona printeri navbatiga yuborildi.' if created else 'Chek avval printer navbatiga yuborilgan.',
+        'job_id': str(job.id),
+        'status': job.status,
+    }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+@api_view(['GET', 'POST'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_pos_devices(request):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+    if request.method == 'GET':
+        return Response([
+            {
+                'id': str(device.id),
+                'name': device.name,
+                'is_active': device.is_active,
+                'client_id': str(device.client_id) if device.client_id else None,
+                'created_at': device.created_at.isoformat(),
+                'activated_at': device.activated_at.isoformat() if device.activated_at else None,
+                'last_seen_at': device.last_seen_at.isoformat() if device.last_seen_at else None,
+                'is_pending': not bool(device.client_id and device.activation_code_hash == ''),
+                'stock_discrepancy_count': device.stock_discrepancy_count,
+            }
+            for device in pharmacy.pos_devices.annotate(
+                stock_discrepancy_count=models.Count(
+                    'sales',
+                    filter=models.Q(sales__has_stock_discrepancy=True),
+                )
+            )
+        ])
+
+    name = str(request.data.get('name') or '').strip()
+    if not name:
+        return Response({'name': 'Kompyuter nomini kiriting.'}, status=status.HTTP_400_BAD_REQUEST)
+    if len(name) > 120:
+        return Response({'name': 'Kompyuter nomi 120 belgidan oshmasin.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    activation_code = secrets.token_urlsafe(9)
+    device = PharmacyPosDevice.objects.create(
+        pharmacy=pharmacy,
+        name=name,
+        activation_code_hash=hashlib.sha256(activation_code.encode('utf-8')).hexdigest(),
+        activation_code_created_at=timezone.now(),
+    )
+    return Response({
+        'id': str(device.id),
+        'name': device.name,
+        'activation_code': activation_code,
+        'expires_at': (device.activation_code_created_at + POS_ACTIVATION_CODE_LIFETIME).isoformat(),
+    }, status=status.HTTP_201_CREATED)
+
+
+@api_view(['PATCH', 'DELETE'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_pos_device_detail(request, device_id):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+    device = get_object_or_404(PharmacyPosDevice, pk=device_id, pharmacy=pharmacy)
+    if device.client_id is None:
+        device.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+    device.is_active = False
+    device.activation_code_hash = ''
+    device.save(update_fields=['is_active', 'activation_code_hash'])
+    return Response({'id': str(device.id), 'is_active': False}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_pos_activate_device(request):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+    activation_code = str(request.data.get('activation_code') or '').strip()
+    client_id = request.data.get('client_id')
+    name = str(request.data.get('name') or '').strip()
+    if not activation_code or not name:
+        return Response(
+            {'detail': 'Faollashtirish kodi va kompyuter nomi kerak.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    try:
+        client_uuid = uuid.UUID(str(client_id))
+    except (TypeError, ValueError, AttributeError):
+        return Response({'client_id': 'Noto‘g‘ri kompyuter identifikatori.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    code_hash = hashlib.sha256(activation_code.encode('utf-8')).hexdigest()
+    with transaction.atomic():
+        device = PharmacyPosDevice.objects.select_for_update().filter(
+            pharmacy=pharmacy,
+            activation_code_hash=code_hash,
+            client_id__isnull=True,
+        ).first()
+        if device is None:
+            return Response({'detail': 'Kod noto‘g‘ri yoki ishlatilgan.'}, status=status.HTTP_400_BAD_REQUEST)
+        if (
+            device.activation_code_created_at is None
+            or timezone.now() - device.activation_code_created_at > POS_ACTIVATION_CODE_LIFETIME
+        ):
+            return Response({'detail': 'Faollashtirish kodi muddati tugagan.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if PharmacyPosDevice.objects.filter(client_id=client_uuid).exists():
+            return Response({'detail': 'Bu kompyuter oldin ro‘yxatdan o‘tgan.'}, status=status.HTTP_409_CONFLICT)
+
+        device.client_id = client_uuid
+        device.name = name[:120]
+        device.is_active = True
+        device.activated_at = timezone.now()
+        device.last_seen_at = timezone.now()
+        device.activation_code_hash = ''
+        device.save(update_fields=[
+            'client_id',
+            'name',
+            'is_active',
+            'activated_at',
+            'last_seen_at',
+            'activation_code_hash',
+        ])
+    return Response({
+        'id': str(device.id),
+        'client_id': str(device.client_id),
+        'name': device.name,
+        'is_active': device.is_active,
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def pharmacy_pos_sync_sale(request):
+    pharmacy = _get_pos_pharmacy(request)
+    if pharmacy is None:
+        return Response({'detail': 'Dorixona topilmadi.'}, status=status.HTTP_404_NOT_FOUND)
+
+    try:
+        sale_id = uuid.UUID(str(request.data.get('id')))
+    except (TypeError, ValueError, AttributeError):
+        return Response({'id': 'Noto‘g‘ri sotuv identifikatori.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        client_uuid = uuid.UUID(str(request.data.get('client_id')))
+    except (TypeError, ValueError, AttributeError):
+        return Response({'client_id': 'Noto‘g‘ri kompyuter identifikatori.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    device = PharmacyPosDevice.objects.filter(
+        pharmacy=pharmacy,
+        client_id=client_uuid,
+        is_active=True,
+    ).first()
+    if device is None:
+        return Response({'detail': 'Kompyuter ro‘yxatdan o‘tmagan yoki o‘chirilgan.'}, status=status.HTTP_403_FORBIDDEN)
+
+    existing_sale = PharmacySale.objects.filter(pk=sale_id).first()
+    if existing_sale:
+        if existing_sale.pharmacy_id != pharmacy.id or existing_sale.device_id != device.id:
+            return Response({'detail': 'Sotuv identifikatori boshqa yozuvda ishlatilgan.'}, status=status.HTTP_409_CONFLICT)
+        return Response({
+            'id': str(existing_sale.id),
+            'synced': True,
+            'has_stock_discrepancy': existing_sale.has_stock_discrepancy,
+            'already_synced': True,
+        })
+
+    lines_data = request.data.get('lines')
+    sold_at = parse_datetime(str(request.data.get('sold_at') or ''))
+    if not isinstance(lines_data, list) or not lines_data or sold_at is None:
+        return Response({'detail': 'Sotuv vaqti hamda dori qatorlari kerak.'}, status=status.HTTP_400_BAD_REQUEST)
+    if timezone.is_naive(sold_at):
+        sold_at = timezone.make_aware(sold_at, timezone.get_current_timezone())
+
+    try:
+        sale_total = Decimal(str(request.data.get('total')))
+        if (
+            not sale_total.is_finite()
+            or sale_total < 0
+            or sale_total > Decimal('9999999999.99')
+            or sale_total != sale_total.quantize(Decimal('0.01'))
+            or len(lines_data) > 500
+        ):
+            raise ValueError
+        parsed_lines = []
+        for line in lines_data:
+            quantity = int(line.get('quantity'))
+            unit_price = Decimal(str(line.get('unit_price')))
+            line_total = Decimal(str(line.get('line_total')))
+            medicine_name = str(line.get('medicine_name') or '').strip()
+            inventory_id = line.get('inventory_id')
+            cached_stock_before_sale = line.get('cached_stock_before_sale')
+            if cached_stock_before_sale is not None:
+                cached_stock_before_sale = int(cached_stock_before_sale)
+                if cached_stock_before_sale < 0 or cached_stock_before_sale > 2147483647:
+                    raise ValueError
+            if inventory_id:
+                inventory_id = uuid.UUID(str(inventory_id))
+            if (
+                quantity < 1
+                or quantity > 2147483647
+                or not unit_price.is_finite()
+                or unit_price < 0
+                or unit_price > Decimal('99999999.99')
+                or unit_price != unit_price.quantize(Decimal('0.01'))
+                or not line_total.is_finite()
+                or line_total != unit_price * quantity
+                or line_total > Decimal('9999999999.99')
+                or not medicine_name
+                or len(medicine_name) > 255
+            ):
+                raise ValueError
+            parsed_lines.append((
+                inventory_id,
+                medicine_name,
+                quantity,
+                unit_price,
+                line_total,
+                cached_stock_before_sale,
+            ))
+        if sum((line[4] for line in parsed_lines), Decimal('0')) != sale_total:
+            raise ValueError
+    except (AttributeError, TypeError, ValueError, InvalidOperation):
+        return Response({'detail': 'Sotuvdagi miqdor yoki narx noto‘g‘ri.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    with transaction.atomic():
+        sale, created = PharmacySale.objects.get_or_create(
+            id=sale_id,
+            defaults={
+                'pharmacy': pharmacy,
+                'device': device,
+                'sold_at': sold_at,
+                'total': sale_total,
+            },
+        )
+        if not created:
+            if sale.pharmacy_id != pharmacy.id or sale.device_id != device.id:
+                return Response({'detail': 'Sotuv identifikatori boshqa yozuvda ishlatilgan.'}, status=status.HTTP_409_CONFLICT)
+            return Response({
+                'id': str(sale.id),
+                'synced': True,
+                'has_stock_discrepancy': sale.has_stock_discrepancy,
+                'already_synced': True,
+            })
+        has_stock_discrepancy = False
+        for inventory_id, medicine_name, quantity, unit_price, line_total, cached_stock_before_sale in parsed_lines:
+            inventory = None
+            if inventory_id:
+                inventory = PharmacyMarchandise.objects.select_for_update().filter(
+                    pk=inventory_id,
+                    pharmacy=pharmacy,
+                ).first()
+                medicine = inventory.medicine if inventory else None
+
+            available = inventory.quantity_in_stock if inventory and inventory.is_available else 0
+            shortfall = max(0, quantity - available)
+            if inventory and inventory.is_available:
+                inventory.quantity_in_stock = max(0, available - quantity)
+                inventory.save(update_fields=['quantity_in_stock', 'updated_at'])
+            resulting_stock = inventory.quantity_in_stock if inventory else None
+            stock_mismatch = shortfall > 0 or (
+                cached_stock_before_sale is not None
+                and (
+                    resulting_stock is None
+                    or resulting_stock != max(0, cached_stock_before_sale - quantity)
+                )
+            )
+            if stock_mismatch:
+                has_stock_discrepancy = True
+
+            PharmacySaleLine.objects.create(
+                sale=sale,
+                inventory=inventory,
+                medicine=medicine,
+                medicine_name=medicine_name,
+                quantity=quantity,
+                unit_price=unit_price,
+                line_total=line_total,
+                stock_shortfall=shortfall,
+                stock_mismatch=stock_mismatch,
+            )
+
+        sale.has_stock_discrepancy = has_stock_discrepancy
+        sale.save(update_fields=['has_stock_discrepancy'])
+        device.last_seen_at = timezone.now()
+        device.save(update_fields=['last_seen_at'])
+
+    return Response({
+        'id': str(sale.id),
+        'synced': True,
+        'has_stock_discrepancy': sale.has_stock_discrepancy,
+        'already_synced': False,
+    }, status=status.HTTP_201_CREATED)
 
 
 class PharmacyViewSet(viewsets.ModelViewSet):
@@ -593,6 +1202,13 @@ class PharmacyMarchandiseViewSet(viewsets.ModelViewSet):
     queryset = PharmacyMarchandise.objects.select_related('pharmacy', 'medicine').all()
     serializer_class = PharmacyMarchandiseSerializer
     filterset_fields = ['pharmacy', 'medicine', 'is_available']
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+        if user.is_authenticated and getattr(user, 'is_pharmacy', False):
+            return queryset.filter(pharmacy__owner=user)
+        return queryset
 
     def get_permissions(self):
         if self.action in ['list', 'retrieve']:

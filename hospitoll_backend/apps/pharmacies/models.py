@@ -77,6 +77,33 @@ class Pharmacy(models.Model):
         null=True,
         validators=[URLValidator()]
     )
+    receipt_show_address = models.BooleanField(
+        _('show address on receipt'),
+        default=True,
+        help_text=_('Dorixona chekida manzilni chiqarish')
+    )
+    receipt_show_phone = models.BooleanField(
+        _('show phone on receipt'),
+        default=True,
+        help_text=_('Dorixona chekida telefon raqamini chiqarish')
+    )
+    receipt_show_website = models.BooleanField(
+        _('show website on receipt'),
+        default=False,
+        help_text=_('Dorixona chekida sayt havolasini chiqarish')
+    )
+    receipt_instagram_url = models.CharField(
+        _('receipt Instagram URL'),
+        max_length=255,
+        blank=True,
+        default='',
+        help_text=_('Chekda chiqariladigan Instagram manzili yoki nomi')
+    )
+    receipt_show_instagram = models.BooleanField(
+        _('show Instagram on receipt'),
+        default=False,
+        help_text=_('Dorixona chekida Instagram manzilini chiqarish')
+    )
     logo = models.ImageField(
         _('logo'),
         upload_to='pharmacy_logos/%Y/%m/%d/',
@@ -311,3 +338,79 @@ class PharmacyMarchandise(models.Model):
     
     def __str__(self):
         return f"{self.pharmacy.name} - {self.medicine.name}"
+
+
+class PharmacyPosDevice(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    pharmacy = models.ForeignKey(
+        Pharmacy,
+        on_delete=models.CASCADE,
+        related_name='pos_devices',
+    )
+    name = models.CharField(max_length=120)
+    activation_code_hash = models.CharField(max_length=64, blank=True)
+    activation_code_created_at = models.DateTimeField(null=True, blank=True)
+    client_id = models.UUIDField(null=True, blank=True, unique=True)
+    is_active = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    activated_at = models.DateTimeField(null=True, blank=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.pharmacy.name} - {self.name}"
+
+
+class PharmacySale(models.Model):
+    id = models.UUIDField(primary_key=True, editable=False)
+    pharmacy = models.ForeignKey(
+        Pharmacy,
+        on_delete=models.CASCADE,
+        related_name='pos_sales',
+    )
+    device = models.ForeignKey(
+        PharmacyPosDevice,
+        on_delete=models.PROTECT,
+        related_name='sales',
+    )
+    sold_at = models.DateTimeField()
+    total = models.DecimalField(max_digits=12, decimal_places=2)
+    synced_at = models.DateTimeField(auto_now_add=True)
+    has_stock_discrepancy = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ['-sold_at']
+        indexes = [
+            models.Index(fields=['pharmacy', 'sold_at']),
+            models.Index(fields=['device', 'sold_at']),
+        ]
+
+
+class PharmacySaleLine(models.Model):
+    sale = models.ForeignKey(
+        PharmacySale,
+        on_delete=models.CASCADE,
+        related_name='lines',
+    )
+    inventory = models.ForeignKey(
+        PharmacyMarchandise,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pos_sale_lines',
+    )
+    medicine = models.ForeignKey(
+        Medicine,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='pos_sale_lines',
+    )
+    medicine_name = models.CharField(max_length=255)
+    quantity = models.PositiveIntegerField()
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2)
+    line_total = models.DecimalField(max_digits=12, decimal_places=2)
+    stock_shortfall = models.PositiveIntegerField(default=0)
+    stock_mismatch = models.BooleanField(default=False)

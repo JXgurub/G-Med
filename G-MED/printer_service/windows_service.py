@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import threading
@@ -23,6 +24,15 @@ def _service_base_dir():
     return os.path.dirname(os.path.abspath(executable))
 
 
+def _configured_service_name():
+    config_path = os.path.join(_service_base_dir(), 'config.json')
+    try:
+        with open(config_path, 'r', encoding='utf-8') as config_file:
+            return str(json.load(config_file).get('service_name') or 'GMedPrinterService')
+    except (OSError, ValueError, TypeError):
+        return 'GMedPrinterService'
+
+
 def _write_startup_error(message):
     try:
         with open(os.path.join(_service_base_dir(), 'service_startup.log'), 'a', encoding='utf-8') as log_file:
@@ -32,8 +42,8 @@ def _write_startup_error(message):
 
 
 class GMedPrinterWindowsService(win32serviceutil.ServiceFramework if win32serviceutil else object):
-    _svc_name_ = 'GMedPrinterService'
-    _svc_display_name_ = 'G-MED Printer Service'
+    _svc_name_ = _configured_service_name()
+    _svc_display_name_ = 'G-MED Dorixona Printer Service' if _svc_name_ == 'GMedPharmacyPrinterService' else 'G-MED Printer Service'
     _svc_description_ = 'Local Windows service for printing reception queue tickets on Xprinter thermal printers.'
 
     def __init__(self, args):

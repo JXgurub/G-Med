@@ -216,6 +216,13 @@ const ClinicOwnerDashboard = () => {
     attendance_enabled: false,
     diagnosis_entry_enabled: false,
     reception_room_enabled: false,
+    queue_ticket_clinic_name: '',
+    queue_ticket_clinic_address: '',
+    queue_ticket_show_address: true,
+    queue_ticket_show_phone: false,
+    queue_ticket_contact_url: '',
+    queue_ticket_show_contact: true,
+    queue_ticket_number_size: 'large',
     owner_password: ''
   })
 
@@ -437,6 +444,13 @@ const ClinicOwnerDashboard = () => {
       attendance_enabled: Boolean(clinicOwner.attendance_enabled),
       diagnosis_entry_enabled: Boolean(clinicOwner.diagnosis_entry_enabled),
       reception_room_enabled: Boolean(clinicOwner.reception_room_enabled),
+      queue_ticket_clinic_name: clinicOwner.queue_ticket_clinic_name || '',
+      queue_ticket_clinic_address: clinicOwner.queue_ticket_clinic_address || '',
+      queue_ticket_show_address: clinicOwner.queue_ticket_show_address !== false,
+      queue_ticket_show_phone: Boolean(clinicOwner.queue_ticket_show_phone),
+      queue_ticket_contact_url: clinicOwner.queue_ticket_contact_url || '',
+      queue_ticket_show_contact: clinicOwner.queue_ticket_show_contact !== false,
+      queue_ticket_number_size: clinicOwner.queue_ticket_number_size || 'large',
       owner_password: ''
     }))
     setSettingsWorkingHoursRange(parseWorkingHoursRange(clinicOwner.working_hours || '09:00 - 18:00'))
@@ -562,6 +576,13 @@ const ClinicOwnerDashboard = () => {
         attendance_enabled: settingsForm.attendance_enabled,
         diagnosis_entry_enabled: settingsForm.diagnosis_entry_enabled,
         reception_room_enabled: settingsForm.reception_room_enabled,
+        queue_ticket_clinic_name: settingsForm.queue_ticket_clinic_name,
+        queue_ticket_clinic_address: settingsForm.queue_ticket_clinic_address,
+        queue_ticket_show_address: settingsForm.queue_ticket_show_address,
+        queue_ticket_show_phone: settingsForm.queue_ticket_show_phone,
+        queue_ticket_contact_url: settingsForm.queue_ticket_contact_url,
+        queue_ticket_show_contact: settingsForm.queue_ticket_show_contact,
+        queue_ticket_number_size: settingsForm.queue_ticket_number_size,
         ...(settingsForm.owner_password ? { owner_password: settingsForm.owner_password } : {})
       }
       const updatedClinic = await updateClinicProfile(payload)
@@ -1933,19 +1954,104 @@ const ClinicOwnerDashboard = () => {
                         disabled={settingsSaving}
                       />
                     </div>
+                  </div>
 
-                    <div className="form-group full-width">
-                      <label>Tavsif (ixtiyoriy)</label>
-                      <textarea
-                        rows="4"
-                        value={settingsForm.description}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, description: e.target.value })}
+                  <section className="settings-feature-toggles settings-panel queue-ticket-settings">
+                    <div className="settings-section-heading">
+                      <h3>Navbat taloni</h3>
+                      <p className="settings-help-text">
+                        Qabulxonada chop etiladigan talon ko‘rinishini sozlang. Nom, manzil yoki havola bo‘sh qolsa, klinika profilidagi ma’lumot ishlatiladi.
+                      </p>
+                    </div>
+                    <label className="settings-ticket-field">
+                      Talonda ko‘rsatiladigan klinika nomi
+                      <input
+                        type="text"
+                        value={settingsForm.queue_ticket_clinic_name}
+                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, queue_ticket_clinic_name: e.target.value }))}
+                        placeholder={settingsForm.name || 'Klinika nomi'}
                         disabled={settingsSaving}
                       />
+                    </label>
+                    <label className="settings-toggle-row settings-ticket-size">
+                      <span>Navbat raqami o‘lchami</span>
+                      <select
+                        value={settingsForm.queue_ticket_number_size}
+                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, queue_ticket_number_size: e.target.value }))}
+                        disabled={settingsSaving}
+                      >
+                        <option value="large">Katta</option>
+                        <option value="medium">O‘rtacha</option>
+                        <option value="small">Kichik</option>
+                      </select>
+                    </label>
+                    <div className="settings-toggle-grid">
+                      <label className="settings-toggle-row">
+                        <span>Manzilni chiqarish</span>
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.queue_ticket_show_address}
+                          onChange={(e) => setSettingsForm((prev) => ({ ...prev, queue_ticket_show_address: e.target.checked }))}
+                          disabled={settingsSaving}
+                        />
+                      </label>
+                      <label className="settings-toggle-row">
+                        <span>Telefonni chiqarish</span>
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.queue_ticket_show_phone}
+                          onChange={(e) => setSettingsForm((prev) => ({ ...prev, queue_ticket_show_phone: e.target.checked }))}
+                          disabled={settingsSaving}
+                        />
+                      </label>
+                      <label className="settings-toggle-row">
+                        <span>Instagram yoki sayt havolasini chiqarish</span>
+                        <input
+                          type="checkbox"
+                          checked={settingsForm.queue_ticket_show_contact}
+                          onChange={(e) => setSettingsForm((prev) => ({ ...prev, queue_ticket_show_contact: e.target.checked }))}
+                          disabled={settingsSaving}
+                        />
+                      </label>
                     </div>
+                    <label className="settings-ticket-field">
+                      Talondagi manzil (ixtiyoriy)
+                      <input
+                        type="text"
+                        value={settingsForm.queue_ticket_clinic_address}
+                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, queue_ticket_clinic_address: e.target.value }))}
+                        placeholder={settingsForm.address || 'Klinika manzili'}
+                        disabled={settingsSaving}
+                      />
+                    </label>
+                    <label className="settings-ticket-field">
+                      Instagram yoki sayt havolasi (ixtiyoriy)
+                      <input
+                        type="text"
+                        value={settingsForm.queue_ticket_contact_url}
+                        onChange={(e) => setSettingsForm((prev) => ({ ...prev, queue_ticket_contact_url: e.target.value }))}
+                        placeholder={settingsForm.website || '@instagram'}
+                        disabled={settingsSaving}
+                      />
+                    </label>
+                  </section>
 
-                    <div className="settings-feature-toggles form-group full-width">
-                      <label>Doktorlar uchun funksiyalar</label>
+                  <div className="form-group settings-description-field">
+                    <label>Klinika haqida qisqacha ma’lumot (ixtiyoriy)</label>
+                    <textarea
+                      rows="3"
+                      value={settingsForm.description}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, description: e.target.value })}
+                      disabled={settingsSaving}
+                    />
+                  </div>
+
+                  <section className="settings-feature-toggles settings-panel">
+                    <div className="settings-section-heading">
+                      <h3>Doktorlar uchun funksiyalar</h3>
+                      <p className="settings-help-text">Klinika dashboardida ishlatiladigan imkoniyatlarni yoqing yoki o‘chiring.</p>
+                    </div>
+                    <div className="settings-toggle-grid">
                       <label className="settings-toggle-row">
                         <span>Doktor ishga kelgan/ketganini belgilashi</span>
                         <input
@@ -1974,16 +2080,16 @@ const ClinicOwnerDashboard = () => {
                         />
                       </label>
                     </div>
+                  </section>
 
-                    <div className="form-group full-width">
-                      <label>Yangi parol (ixtiyoriy)</label>
-                      <PasswordInput
-                        value={settingsForm.owner_password}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, owner_password: e.target.value })}
-                        placeholder="Yangi parol"
-                        disabled={settingsSaving}
-                      />
-                    </div>
+                  <div className="form-group settings-password-field">
+                    <label>Yangi parol (o‘zgartirish kerak bo‘lsa)</label>
+                    <PasswordInput
+                      value={settingsForm.owner_password}
+                      onChange={(e) => setSettingsForm({ ...settingsForm, owner_password: e.target.value })}
+                      placeholder="Yangi parol"
+                      disabled={settingsSaving}
+                    />
                   </div>
 
                   {settingsMessage && (

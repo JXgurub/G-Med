@@ -264,7 +264,8 @@ export const api = {
     } catch (error) {
       console.error('[API] Request error:', endpoint, error)
 
-      if (shouldReportApiError(endpoint, error?.response?.status)) {
+      const browserIsOffline = typeof navigator !== 'undefined' && !navigator.onLine
+      if (!browserIsOffline && shouldReportApiError(endpoint, error?.response?.status)) {
         void api.reportClientError({
           alert_type: 'frontend_network_error',
           message: error?.message || 'Network/API request failed',
@@ -503,6 +504,10 @@ export const patientsApi = {
   update: (id, data) => api.patch(`/patients/${id}/`, data),
   setPassword: (id, data) => api.post(`/patients/${id}/set_password/`, data),
   delete: (id) => api.delete(`/patients/${id}/`),
+  getMedicationReminders: () => api.get('/patients/medication-reminders/'),
+  createMedicationReminder: (data) => api.post('/patients/medication-reminders/', data),
+  updateMedicationReminder: (id, data) => api.patch(`/patients/medication-reminders/${id}/`, data),
+  deleteMedicationReminder: (id) => api.delete(`/patients/medication-reminders/${id}/`),
 }
 
 // Pharmacy API endpoints
@@ -521,7 +526,6 @@ export const medicinesApi = {
   create: (data) => api.post('/pharmacies/medicines/', data),
   update: (id, data) => api.patch(`/pharmacies/medicines/${id}/`, data),
   delete: (id) => api.delete(`/pharmacies/medicines/${id}/`),
-  clearAll: () => api.delete('/pharmacies/medicines/clear-all/'),
   getNameAlerts: () => api.get('/pharmacies/medicines/name-alerts/'),
   confirmNameAlert: (id) => api.patch(`/pharmacies/medicines/name-alerts/${id}/confirm/`, {}),
   confirmAllNameAlerts: () => api.patch('/pharmacies/medicines/name-alerts/confirm-all/', {}),
@@ -534,7 +538,21 @@ export const pharmacyInventoryApi = {
   create: (data) => api.post('/pharmacies/inventory/', data),
   update: (id, data) => api.patch(`/pharmacies/inventory/${id}/`, data),
   delete: (id) => api.delete(`/pharmacies/inventory/${id}/`),
-  clearAll: () => api.delete('/pharmacies/inventory/clear-all/'),
+}
+
+export const pharmacyPosApi = {
+  getSnapshot: () => api.get('/pharmacies/pos/snapshot/'),
+  getDevices: () => api.get('/pharmacies/pos/devices/'),
+  createDevice: (name) => api.post('/pharmacies/pos/devices/', { name }),
+  deactivateDevice: (id) => api.delete(`/pharmacies/pos/devices/${id}/`),
+  activateDevice: (data) => api.post('/pharmacies/pos/devices/activate/', data),
+  syncSale: (sale) => api.post('/pharmacies/pos/sales/sync/', sale),
+  getPrinter: (clientId) => api.get('/pharmacies/pos/printer/', { client_id: clientId }),
+  registerPrinter: (clientId) => api.post('/pharmacies/pos/printer/', { client_id: clientId }),
+  printSale: (saleId, clientId) => api.post('/pharmacies/pos/printer/print-sale/', {
+    sale_id: saleId,
+    client_id: clientId,
+  }),
 }
 
 // Medical API endpoints
@@ -591,6 +609,7 @@ export const printersApi = {
 export const medicalRecordsApi = {
   getAll: (params) => api.get('/medical/records/', params),
   getById: (id) => api.get(`/medical/records/${id}/`),
+  lookupPrescription: (code) => api.get('/medical/records/prescription-lookup/', { code }),
   create: (data) => api.post('/medical/records/', data),
   createForm: (formData) => api.postForm('/medical/records/', formData),
   update: (id, data) => api.patch(`/medical/records/${id}/`, data),
@@ -651,4 +670,3 @@ export const paymentsApi = {
 }
 
 export default api
-

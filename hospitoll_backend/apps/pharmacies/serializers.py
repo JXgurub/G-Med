@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.utils.text import slugify
+from django.utils import timezone
 from django.db import transaction
 
 from apps.users.models import CustomUser
@@ -64,6 +65,11 @@ class PharmacySerializer(serializers.ModelSerializer):
             'phone_number',
             'email',
             'website',
+            'receipt_show_address',
+            'receipt_show_phone',
+            'receipt_show_website',
+            'receipt_instagram_url',
+            'receipt_show_instagram',
             'logo',
             'status',
             'is_verified',
@@ -85,7 +91,11 @@ class PharmacySerializer(serializers.ModelSerializer):
         return obj.owner.get_full_name() if obj.owner else ''
 
     def get_medicines(self, obj):
-        medicines = obj.medicines.select_related('medicine').filter(is_available=True)
+        medicines = obj.medicines.select_related('medicine').filter(
+            is_available=True,
+            quantity_in_stock__gt=0,
+            expiry_date__gte=timezone.localdate(),
+        )
         return PharmacyMarchandiseListSerializer(medicines, many=True).data
     
     def get_subscription(self, obj):
@@ -108,6 +118,7 @@ class PharmacySerializer(serializers.ModelSerializer):
 class PharmacyMarchandiseListSerializer(serializers.ModelSerializer):
     """Serializer for medicines list in pharmacy detail"""
     name = serializers.CharField(source='medicine.name', read_only=True)
+    generic_name = serializers.CharField(source='medicine.generic_name', read_only=True)
     category = serializers.CharField(source='medicine.category', read_only=True)
     strength = serializers.CharField(source='medicine.strength', read_only=True)
     dosage_form = serializers.CharField(source='medicine.dosage_form', read_only=True)
@@ -118,7 +129,18 @@ class PharmacyMarchandiseListSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PharmacyMarchandise
-        fields = ['id', 'name', 'category', 'strength', 'dosage_form', 'country_of_origin', 'expiry_date', 'stock', 'price']
+        fields = [
+            'id',
+            'name',
+            'generic_name',
+            'category',
+            'strength',
+            'dosage_form',
+            'country_of_origin',
+            'expiry_date',
+            'stock',
+            'price',
+        ]
 
 
 class PharmacyCreateSerializer(serializers.ModelSerializer):
@@ -353,6 +375,11 @@ class PharmacyUpdateSerializer(serializers.ModelSerializer):
             'phone_number',
             'email',
             'website',
+            'receipt_show_address',
+            'receipt_show_phone',
+            'receipt_show_website',
+            'receipt_instagram_url',
+            'receipt_show_instagram',
             'logo',
             'working_hours',
             'status',

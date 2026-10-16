@@ -63,6 +63,175 @@
   outline-offset: 2px;
 }
 
+.liza-prescription-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1600;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(11, 28, 23, 0.58);
+}
+
+.liza-prescription-dialog {
+  width: min(100%, 28rem);
+  padding: 1.25rem;
+  color: #183d32;
+  background: #fff;
+  border: 1px solid #bed8cf;
+  border-radius: 0.75rem;
+  box-shadow: 0 20px 60px rgba(10, 37, 29, 0.3);
+}
+
+.liza-prescription-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.liza-prescription-dialog-header h2 {
+  margin: 0;
+  color: #126a5f;
+  font-size: 1.15rem;
+  font-weight: 750;
+}
+
+.liza-prescription-dialog-header p {
+  margin: 0.35rem 0 0;
+  color: #526b62;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.liza-prescription-dialog-close {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 auto;
+  place-items: center;
+  color: #526b62;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.liza-prescription-dialog label {
+  display: block;
+  margin-bottom: 0.4rem;
+  color: #183d32;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.liza-prescription-dialog input {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.65rem 0.75rem;
+  color: #183d32;
+  background: #fff;
+  border: 1px solid #9bb9ae;
+  border-radius: 0.45rem;
+  font: inherit;
+  font-size: 1.1rem;
+  letter-spacing: 0.12em;
+}
+
+.liza-prescription-dialog input:focus {
+  border-color: #126a5f;
+  outline: 3px solid rgba(18, 106, 95, 0.18);
+}
+
+.liza-prescription-last-code {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  background: #f1f7f4;
+  border: 1px solid #d4e6dd;
+  border-radius: 0.45rem;
+}
+
+.liza-prescription-last-code span {
+  grid-column: 1 / -1;
+  color: #526b62;
+  font-size: 0.82rem;
+  font-weight: 650;
+}
+
+.liza-prescription-last-code strong {
+  font-size: 1.05rem;
+  letter-spacing: 0.08em;
+}
+
+.liza-prescription-last-code button {
+  padding: 0.4rem 0.55rem;
+  color: #126a5f;
+  background: #fff;
+  border: 1px solid #bed8cf;
+  border-radius: 0.35rem;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.liza-prescription-dialog-error {
+  margin: 0.45rem 0 0;
+  color: #a12e2e;
+  font-size: 0.85rem;
+}
+
+.liza-prescription-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.65rem;
+  margin-top: 1.25rem;
+}
+
+.liza-prescription-dialog-actions button {
+  min-height: 2.65rem;
+  padding: 0.55rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.liza-prescription-dialog-actions button:focus-visible,
+.liza-prescription-dialog-close:focus-visible {
+  outline: 2px solid #126a5f;
+  outline-offset: 2px;
+}
+
+.liza-prescription-dialog-actions button:disabled,
+.liza-prescription-dialog-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.liza-prescription-dialog-cancel {
+  color: #183d32;
+  background: #f1f7f4;
+  border-color: #bed8cf !important;
+}
+
+.liza-prescription-dialog-submit {
+  color: #fff;
+  background: #126a5f;
+}
+
+.liza-prescription-dialog-submit:hover:not(:disabled) {
+  background: #0e574f;
+}
+
 .liza-assistant-button {
   position: relative;
   display: inline-flex;
@@ -132,6 +301,22 @@
   .liza-assistant {
     right: 0.75rem;
     bottom: 5.5rem;
+  }
+
+  .liza-assistant-status {
+    max-height: 26dvh;
+    overflow-y: auto;
+  }
+
+  .liza-assistant-status-message {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .liza-assistant-last-reply {
+    display: none;
   }
 
   .liza-assistant-button {

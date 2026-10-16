@@ -1,13 +1,98 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { api } from '../services/api'
+import { usePatient } from '../context/PatientContext'
+import { api, medicalRecordsApi } from '../services/api'
 import './LizaAssistant.css'
 
 const ENABLED_KEY = 'gmed_liza_wake_enabled'
+const PHARMACY_PRESCRIPTION_KEY = 'gmed-pharmacy-prescription-search'
 const WAKE_SEGMENT_SECONDS = 2.5
 const COMMAND_MAX_MS = 12000
 const BOOKING_CONFIRMATION_MAX_MS = 6500
 const SILENCE_END_MS = 1300
+const WAKE_OVERLAP_SECONDS = 0.5
+const PRESCRIPTION_DIGIT_WORDS = Object.freeze({
+  nol: '0',
+  noil: '0',
+  nival: '0',
+  bir: '1',
+  bar: '1',
+  ikki: '2',
+  uch: '3',
+  tort: '4',
+  besh: '5',
+  olti: '6',
+  yetti: '7',
+  sakkiz: '8',
+  toqqiz: '9',
+})
+
+const extractPrescriptionCode = (text) => {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .replace(/[‘’ʻ`]/g, "'")
+    .replace(/to'qqiz/g, 'toqqiz')
+    .replace(/to'rt/g, 'tort')
+  const tokens = normalized.match(/\d+|[a-z']+/g) || []
+  const candidates = []
+  let digits = ''
+  let invalidRun = false
+
+  const finishRun = () => {
+    if (!invalidRun && digits.length === 8) candidates.push(digits)
+    digits = ''
+    invalidRun = false
+  }
+
+  tokens.forEach((token) => {
+    const isNumber = /^\d+$/.test(token)
+    const hasWordDigit = Object.prototype.hasOwnProperty.call(PRESCRIPTION_DIGIT_WORDS, token)
+    const tokenDigits = isNumber
+      ? token
+      : hasWordDigit
+        ? PRESCRIPTION_DIGIT_WORDS[token]
+        : undefined
+    if (tokenDigits !== undefined) {
+      if (invalidRun) return
+      digits += tokenDigits
+      if (digits.length > 8) {
+        digits = ''
+        invalidRun = true
+      }
+    } else {
+      finishRun()
+    }
+  })
+  finishRun()
+
+  const uniqueCandidates = [...new Set(candidates)]
+  return uniqueCandidates.length === 1 ? uniqueCandidates[0] : null
+}
+
+const resolvePrescriptionResult = (result, fallbackText = '') => {
+  const role = sessionStorage.getItem('user_role') || localStorage.getItem('user_role')
+  const prescriptionCode = extractPrescriptionCode(result?.transcript || fallbackText)
+  const canRecoverPrescriptionAction = !result.action
+    || result.action === 'prescription_code_required'
+    || (
+      result.action === 'search_prescription'
+      && !/^\d{8}$/.test(String(result.prescription_code || ''))
+    )
+  if (
+    !prescriptionCode
+    || role !== 'patient'
+    || !canRecoverPrescriptionAction
+  ) {
+    return result
+  }
+
+  return {
+    ...result,
+    action: 'search_prescription',
+    prescription_code: prescriptionCode,
+    reply: 'Retsept raqamini tekshirib, undagi dorilarni dorixonalardan qidiryapman.',
+  }
+}
 
 const getAccessToken = () => {
   const role = sessionStorage.getItem('user_role') || localStorage.getItem('user_role')
@@ -90,9 +175,48 @@ const splitSpeechText = (text, maxLength = 1700) => {
   return chunks
 }
 
+const speakWithBrowser = (text) => new Promise((resolve) => {
+  const speechSynthesis = window.speechSynthesis
+  if (!speechSynthesis || typeof window.SpeechSynthesisUtterance !== 'function') {
+    resolve(false)
+    return
+  }
+
+  const utterance = new window.SpeechSynthesisUtterance(text)
+  utterance.lang = 'uz-UZ'
+  utterance.rate = 1
+  utterance.volume = 1
+  const uzbekVoice = speechSynthesis.getVoices().find((voice) => voice.lang.toLowerCase().startsWith('uz'))
+  if (uzbekVoice) utterance.voice = uzbekVoice
+
+  let timeout
+  let finished = false
+  const finish = (played) => {
+    if (finished) return
+    finished = true
+    window.clearTimeout(timeout)
+    resolve(played)
+  }
+  utterance.onend = () => finish(true)
+  utterance.onerror = () => finish(false)
+  timeout = window.setTimeout(() => {
+    speechSynthesis.cancel()
+    finish(false)
+  }, Math.min(120000, Math.max(12000, text.length * 180)))
+
+  try {
+    speechSynthesis.cancel()
+    speechSynthesis.speak(utterance)
+  } catch {
+    finish(false)
+  }
+})
+
 const LizaAssistant = () => {
   const location = useLocation()
   const navigate = useNavigate()
+  const { patientData } = usePatient()
+  const lastPrescriptionCode = patientData.history.find((entry) => /^\d{8}$/.test(String(entry.prescriptionCode || '')))?.prescriptionCode
   const isAssistantAvailable = localStorage.getItem('user_role') === 'patient' && Boolean(getAccessToken())
   const currentPathRef = useRef(location.pathname)
   currentPathRef.current = location.pathname
@@ -103,6 +227,10 @@ const LizaAssistant = () => {
   const [lastReply, setLastReply] = useState('')
   const [lastTranscript, setLastTranscript] = useState('')
   const [lastWakeTranscript, setLastWakeTranscript] = useState('')
+  const [prescriptionDialogOpen, setPrescriptionDialogOpen] = useState(false)
+  const [prescriptionCodeInput, setPrescriptionCodeInput] = useState('')
+  const [prescriptionDialogError, setPrescriptionDialogError] = useState('')
+  const [prescriptionLookupLoading, setPrescriptionLookupLoading] = useState(false)
   const streamRef = useRef(null)
   const contextRef = useRef(null)
   const processorRef = useRef(null)
@@ -120,14 +248,53 @@ const LizaAssistant = () => {
   const wakeFramesRef = useRef([])
   const wakeCountRef = useRef(0)
   const wakeSegmentSamplesRef = useRef(40000)
+  const wakeHopSamplesRef = useRef(32000)
   const wakeHasVoiceRef = useRef(false)
   const wakeRequestRef = useRef(false)
+  const pendingWakeSegmentRef = useRef(null)
   const commandFramesRef = useRef([])
   const commandCountRef = useRef(0)
   const commandStartedRef = useRef(false)
   const commandLastVoiceRef = useRef(0)
   const commandStartedAtRef = useRef(0)
   const finishingCommandRef = useRef(false)
+  const prescriptionDialogCancelHandlerRef = useRef(null)
+
+  const lookupPrescriptionByCode = async (code) => {
+    if (!/^\d{8}$/.test(code)) {
+      throw new Error('Retsept raqami 8 ta raqamdan iborat bo‘lishi kerak.')
+    }
+    const prescription = await medicalRecordsApi.lookupPrescription(code)
+    if (!prescription.medicines?.length) {
+      throw new Error('Bu retsept raqamida dorilar ro‘yxati topilmadi.')
+    }
+    localStorage.setItem(PHARMACY_PRESCRIPTION_KEY, JSON.stringify(prescription))
+    setStatus('Retseptdagi dorilar dorixonalar bo‘yicha qidirilmoqda.')
+    navigate('/#pharmacy-section')
+  }
+
+  const submitPrescriptionCode = async (event) => {
+    event.preventDefault()
+    setPrescriptionDialogError('')
+    setPrescriptionLookupLoading(true)
+    try {
+      await lookupPrescriptionByCode(prescriptionCodeInput)
+      setPrescriptionDialogOpen(false)
+    } catch (error) {
+      setPrescriptionDialogError(
+        error?.response?.data?.error || error.message || 'Retsept bo‘yicha dorilarni topib bo‘lmadi.',
+      )
+    } finally {
+      setPrescriptionLookupLoading(false)
+    }
+  }
+
+  const closePrescriptionDialog = () => {
+    if (prescriptionLookupLoading) return
+    setPrescriptionDialogOpen(false)
+    setPrescriptionDialogError('')
+    prescriptionDialogCancelHandlerRef.current?.()
+  }
 
   useEffect(() => {
     const updateVisibility = () => setIsVisible(document.visibilityState === 'visible')
@@ -172,6 +339,7 @@ const LizaAssistant = () => {
       wakeFramesRef.current = []
       wakeCountRef.current = 0
       wakeHasVoiceRef.current = false
+      pendingWakeSegmentRef.current = null
       commandFramesRef.current = []
       commandCountRef.current = 0
     }
@@ -195,8 +363,10 @@ const LizaAssistant = () => {
       }
       setMode('wake', 'Liza tinglayapti. Uyg‘otish uchun “Liza” deng.')
     }
+    prescriptionDialogCancelHandlerRef.current = resumeWakeListening
     const speakMadina = async (text, onEnd) => {
       let failed = false
+      let browserFallback = false
       try {
         for (const chunk of splitSpeechText(text)) {
           let requestTimeout
@@ -252,8 +422,17 @@ const LizaAssistant = () => {
         failed = true
       }
       if (!activeRef.current || generationRef.current !== generation) return
+      if (failed) {
+        setStatus('Madina server ovozi ishlamadi. Qurilma ovozidan foydalanishga urinayapman.')
+        browserFallback = await speakWithBrowser(text).catch(() => false)
+      }
+      if (!activeRef.current || generationRef.current !== generation) return
       onEnd?.()
-      if (failed) setStatus('Madina ovozi hozir ijro etilmadi. Javob matni ekranda ko‘rsatilgan.')
+      if (failed) {
+        setStatus(browserFallback
+          ? 'Madina server ovozi ishlamadi; qurilma ovozidan foydalanildi.'
+          : 'Madina ovozi ijro etilmadi. Javob matni ekranda ko‘rsatilgan.')
+      }
     }
     const handleAnalysisReadout = (event) => {
       const text = String(event.detail?.text || '').trim()
@@ -334,7 +513,7 @@ const LizaAssistant = () => {
       }, waitSeconds * 1000)
       return true
     }
-    const handleCommandAction = (action, booking) => {
+    const handleCommandAction = async (action, booking, prescriptionCode) => {
       if (action === 'open_profile') {
         if (currentPathRef.current === '/patient') {
           window.dispatchEvent(new window.CustomEvent('gmed:liza-action', { detail: { action } }))
@@ -353,6 +532,14 @@ const LizaAssistant = () => {
         navigate(`/clinic/${booking.clinic_id}?${params.toString()}`)
       } else if (action === 'read_analysis') {
         window.dispatchEvent(new window.CustomEvent('gmed:liza-action', { detail: { action } }))
+      } else if (action === 'search_prescription') {
+        await lookupPrescriptionByCode(prescriptionCode)
+      } else if (action === 'prescription_code_required') {
+        sessionOpenRef.current = false
+        setPrescriptionCodeInput('')
+        setPrescriptionDialogError('')
+        setPrescriptionDialogOpen(true)
+        setMode('reply', 'Retsept raqamini kiriting.')
       }
     }
     const handleCommandText = async (message) => {
@@ -362,11 +549,21 @@ const LizaAssistant = () => {
       setLastTranscript(message)
       setStatus('Buyruq bajarilmoqda...')
       try {
-        const result = await api.post('/liza/command/', { message })
+        const response = await api.post('/liza/command/', { message })
+        const result = resolvePrescriptionResult(response, message)
         if (!activeRef.current || generationRef.current !== generation) return
         setLastReply(result.reply || '')
         setStatus(result.reply ? 'Javob tayyor.' : 'Buyruq bajarildi.')
-        handleCommandAction(result.action, result.booking)
+        await handleCommandAction(result.action, result.booking, result.prescription_code)
+        if (result.action === 'prescription_code_required') {
+          modeRef.current = 'reply'
+          setPhase('reply')
+          void speakMadina(result.reply || 'Retsept raqamini kiriting.', () => {
+            modeRef.current = 'reply'
+            setPhase('reply')
+          })
+          return
+        }
         if (result.action === 'stop_listening') {
           sessionOpenRef.current = false
           void speakMadina(result.reply || 'Liza suhbatni to‘xtatdi.', () => {
@@ -405,7 +602,11 @@ const LizaAssistant = () => {
       return wakeIndex < 0 ? '' : words.slice(wakeIndex + 1).join(' ').trim()
     }
     const checkWakeWord = async (samples, inputRate) => {
-      if (wakeRequestRef.current || !activeRef.current) return
+      if (!activeRef.current) return
+      if (wakeRequestRef.current) {
+        pendingWakeSegmentRef.current = { samples, inputRate }
+        return
+      }
       wakeRequestRef.current = true
       try {
         const result = await postAudio('/liza/wake/', samples, inputRate)
@@ -440,6 +641,11 @@ const LizaAssistant = () => {
         }
       } finally {
         wakeRequestRef.current = false
+        const pendingSegment = pendingWakeSegmentRef.current
+        pendingWakeSegmentRef.current = null
+        if (pendingSegment && activeRef.current && modeRef.current === 'wake') {
+          void checkWakeWord(pendingSegment.samples, pendingSegment.inputRate)
+        }
       }
     }
     const finishCommand = async (inputRate) => {
@@ -474,11 +680,21 @@ const LizaAssistant = () => {
       }
 
       try {
-        const result = await postAudio('/liza/voice/', samples, inputRate)
+        const response = await postAudio('/liza/voice/', samples, inputRate)
+        const result = resolvePrescriptionResult(response)
         setLastTranscript(result.transcript || '')
         setLastReply(result.reply || '')
         setStatus(result.reply ? 'Javob tayyor.' : 'Javob topilmadi.')
-        handleCommandAction(result.action, result.booking)
+        await handleCommandAction(result.action, result.booking, result.prescription_code)
+        if (result.action === 'prescription_code_required') {
+          modeRef.current = 'reply'
+          setPhase('reply')
+          void speakMadina(result.reply || 'Retsept raqamini kiriting.', () => {
+            modeRef.current = 'reply'
+            setPhase('reply')
+          })
+          return
+        }
         if (result.action === 'stop_listening') {
           sessionOpenRef.current = false
           void speakMadina(result.reply || 'Liza suhbatni to‘xtatdi.', () => {
@@ -560,6 +776,7 @@ const LizaAssistant = () => {
         await context.resume()
         if (cancelled || generationRef.current !== generation) return
         wakeSegmentSamplesRef.current = Math.round(context.sampleRate * WAKE_SEGMENT_SECONDS)
+        wakeHopSamplesRef.current = Math.round(context.sampleRate * (WAKE_SEGMENT_SECONDS - WAKE_OVERLAP_SECONDS))
         const source = context.createMediaStreamSource(stream)
         const processor = context.createScriptProcessor(4096, 1, 1)
         const silentOutput = context.createGain()
@@ -572,7 +789,7 @@ const LizaAssistant = () => {
           let energy = 0
           for (let index = 0; index < frame.length; index += 1) energy += frame[index] * frame[index]
           const mode = modeRef.current
-          const voiceThreshold = mode === 'confirmation' || mode === 'selection' ? 0.0035 : 0.008
+          const voiceThreshold = mode === 'confirmation' || mode === 'selection' ? 0.0035 : 0.0045
           const hasVoice = Math.sqrt(energy / frame.length) > voiceThreshold
 
           if (mode === 'wake') {
@@ -582,11 +799,16 @@ const LizaAssistant = () => {
             if (wakeCountRef.current >= wakeSegmentSamplesRef.current) {
               const combined = joinFrames(wakeFramesRef.current, wakeCountRef.current)
               const segment = combined.slice(0, wakeSegmentSamplesRef.current)
-              const remainder = combined.slice(wakeSegmentSamplesRef.current)
+              const remainder = combined.slice(wakeHopSamplesRef.current)
               const shouldCheck = wakeHasVoiceRef.current
               wakeFramesRef.current = remainder.length ? [remainder] : []
               wakeCountRef.current = remainder.length
-              wakeHasVoiceRef.current = false
+              let remainderEnergy = 0
+              for (let index = 0; index < remainder.length; index += 1) {
+                remainderEnergy += remainder[index] * remainder[index]
+              }
+              wakeHasVoiceRef.current = remainder.length > 0
+                && Math.sqrt(remainderEnergy / remainder.length) > voiceThreshold
               if (shouldCheck) void checkWakeWord(segment, context.sampleRate)
             }
           } else if (mode === 'command' || mode === 'confirmation' || mode === 'selection') {
@@ -631,6 +853,7 @@ const LizaAssistant = () => {
       modeRef.current = 'off'
       sessionOpenRef.current = false
       confirmationChoiceHandlerRef.current = null
+      prescriptionDialogCancelHandlerRef.current = null
       window.clearTimeout(rateLimitTimeoutRef.current)
       rateLimitTimeoutRef.current = null
       generationRef.current += 1
@@ -712,7 +935,7 @@ const LizaAssistant = () => {
       {status ? (
         <div className="liza-assistant-status" role="status" aria-live="polite">
           <span className="liza-assistant-status-title">{phase === 'wake' ? 'Liza tayyor' : 'Liza'}</span>
-          <span>{status}</span>
+          <span className="liza-assistant-status-message">{status}</span>
           {lastWakeTranscript && phase === 'wake' ? <span className="liza-assistant-last-reply">Oxirgi eshitilgan: {lastWakeTranscript}</span> : null}
           {lastTranscript ? <span className="liza-assistant-last-reply">Aniqlangan buyruq: {lastTranscript}</span> : null}
           {lastReply && phase !== 'wake' ? <span className="liza-assistant-last-reply">{lastReply}</span> : null}
@@ -722,6 +945,90 @@ const LizaAssistant = () => {
               <button type="button" onClick={() => confirmationChoiceHandlerRef.current?.('yo‘q')}>Yo‘q</button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {prescriptionDialogOpen ? (
+        <div
+          className="liza-prescription-dialog-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closePrescriptionDialog()
+          }}
+        >
+          <section
+            className="liza-prescription-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="liza-prescription-dialog-title"
+          >
+            <div className="liza-prescription-dialog-header">
+              <div>
+                <h2 id="liza-prescription-dialog-title">Retsept raqamini kiriting</h2>
+                <p>Dorilarni retsept raqami bo‘yicha dorixonalardan qidiramiz.</p>
+              </div>
+              <button
+                type="button"
+                className="liza-prescription-dialog-close"
+                aria-label="Oynani yopish"
+                onClick={closePrescriptionDialog}
+                disabled={prescriptionLookupLoading}
+              >
+                ×
+              </button>
+            </div>
+            <form onSubmit={submitPrescriptionCode}>
+              {lastPrescriptionCode ? (
+                <div className="liza-prescription-last-code">
+                  <span>Oxirgi retsept raqami</span>
+                  <strong>{lastPrescriptionCode}</strong>
+                  <button type="button" onClick={() => {
+                    setPrescriptionCodeInput(lastPrescriptionCode)
+                    setPrescriptionDialogError('')
+                  }}>
+                    Shu raqamni ishlatish
+                  </button>
+                </div>
+              ) : null}
+              <label htmlFor="liza-prescription-code">8 xonali retsept raqami</label>
+              <input
+                id="liza-prescription-code"
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                autoFocus
+                maxLength={8}
+                value={prescriptionCodeInput}
+                onChange={(event) => {
+                  setPrescriptionCodeInput(event.target.value.replace(/\D/g, '').slice(0, 8))
+                  setPrescriptionDialogError('')
+                }}
+                aria-invalid={Boolean(prescriptionDialogError)}
+                aria-describedby={prescriptionDialogError ? 'liza-prescription-code-error' : undefined}
+                placeholder="Masalan: 12345678"
+              />
+              {prescriptionDialogError ? (
+                <p className="liza-prescription-dialog-error" id="liza-prescription-code-error" role="alert">
+                  {prescriptionDialogError}
+                </p>
+              ) : null}
+              <div className="liza-prescription-dialog-actions">
+                <button
+                  type="button"
+                  className="liza-prescription-dialog-cancel"
+                  onClick={closePrescriptionDialog}
+                  disabled={prescriptionLookupLoading}
+                >
+                  Bekor qilish
+                </button>
+                <button
+                  type="submit"
+                  className="liza-prescription-dialog-submit"
+                  disabled={prescriptionLookupLoading || prescriptionCodeInput.length !== 8}
+                >
+                  {prescriptionLookupLoading ? 'Qidirilmoqda...' : 'Dorilarni qidirish'}
+                </button>
+              </div>
+            </form>
+          </section>
         </div>
       ) : null}
       <button

@@ -29,6 +29,17 @@ GEMINI_VISION_MODEL = config('GEMINI_VISION_MODEL', default='gemini-2.5-flash')
 WEB_PUSH_VAPID_PUBLIC_KEY = config('WEB_PUSH_VAPID_PUBLIC_KEY', default='')
 WEB_PUSH_VAPID_PRIVATE_KEY_B64 = config('WEB_PUSH_VAPID_PRIVATE_KEY_B64', default='')
 WEB_PUSH_VAPID_SUBJECT = config('WEB_PUSH_VAPID_SUBJECT', default='mailto:mailer@g-med.uz')
+LIZA_TRANSCRIBE_HANDLER = config(
+    'LIZA_TRANSCRIBE_HANDLER',
+    default='apps.liza.services.transcribe_audio',
+)
+LIZA_VOSK_MODEL_PATH = config(
+    'LIZA_VOSK_MODEL_PATH',
+    default=str(BASE_DIR.parent / 'jx.group_ovozli_yordamchi' / 'engine' / 'vosk-model-small-uz-0.22'),
+)
+LIZA_TTS_VOICE = config('LIZA_TTS_VOICE', default='uz-UZ-MadinaNeural')
+LIZA_TTS_RATE = config('LIZA_TTS_RATE', default='-15%')
+LIZA_INTERNET_SEARCH_ENABLED = config('LIZA_INTERNET_SEARCH_ENABLED', default=False, cast=bool)
 
 # Application definition
 INSTALLED_APPS = [
@@ -186,6 +197,10 @@ REST_FRAMEWORK = {
         'user': '6000/hour',
         'auth': '20/minute',
         'booking': '30/minute',
+        'liza_command': '60/minute',
+        'liza_voice': '30/minute',
+        'liza_wake': '90/minute',
+        'liza_speech': '60/minute',
         'password_reset': '5/hour',
         'password_reset_request': '5/hour',
         'password_reset_verify': '30/hour',

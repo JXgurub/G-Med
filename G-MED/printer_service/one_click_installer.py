@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import sys
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, ttk
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -31,10 +31,13 @@ WINDOWS_SERVICE_PATH = os.path.join(RUNTIME_DIR, "windows_service.py")
 PACKAGED_SERVICE_EXE = os.path.join(RUNTIME_DIR, "GMedPrinterService.exe")
 BUILD_DIR = os.path.join(APP_DIR, "build")
 DIST_DIR = os.path.join(APP_DIR, "dist")
+PHARMACY_SERVICE_DIR = os.path.join(APP_DIR, "pharmacy_service")
 INSTALLER_EXE_NAME = "GMedPrinterInstaller.exe"
 DEFAULT_API_BASE_URL = "https://g-med.uz"
 LOGIN_API_PATH = "/api/v1/clinics/reception-staff/login/"
 PRINTER_REGISTER_API_PATH = "/api/v1/printers/register/"
+PHARMACY_LOGIN_API_PATH = "/api/v1/users/token/"
+PHARMACY_PRINTER_REGISTER_API_PATH = "/api/v1/pharmacies/pos/printer/register-service/"
 
 
 def is_admin():
@@ -87,18 +90,19 @@ def write_config(config):
         f.write("\n")
 
 
-def build_service_exe():
+def build_service_exe(service_name):
     if not os.path.exists(PACKAGED_SERVICE_EXE):
         raise FileNotFoundError(
             "Bundled GMedPrinterService.exe topilmadi. Installer build scriptini qayta ishga tushiring."
         )
 
-    exe_path = os.path.join(DIST_DIR, "GMedPrinterService.exe")
-    os.makedirs(DIST_DIR, exist_ok=True)
+    service_dir = PHARMACY_SERVICE_DIR if service_name == "GMedPharmacyPrinterService" else DIST_DIR
+    exe_path = os.path.join(service_dir, "GMedPrinterService.exe")
+    os.makedirs(service_dir, exist_ok=True)
     shutil.copy2(PACKAGED_SERVICE_EXE, exe_path)
 
     if os.path.exists(CONFIG_PATH):
-        shutil.copy2(CONFIG_PATH, os.path.join(DIST_DIR, "config.json"))
+        shutil.copy2(CONFIG_PATH, os.path.join(service_dir, "config.json"))
     return exe_path
 
 
@@ -194,7 +198,51 @@ def register_printer(api_base_url, reception_token, clinic_id):
     return response.json()
 
 
-def install_service(exe_path):
+def login_pharmacy_to_backend(api_base_url, email, password):
+    if requests is None:
+        raise RuntimeError("Python requests library is not available.")
+    base_url = normalize_api_base_url(api_base_url)
+    try:
+        response = requests.post(
+            base_url + PHARMACY_LOGIN_API_PATH,
+            json={"email": email, "password": password},
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"G-MED serveriga ulanishda xatolik: {exc}") from exc
+
+    if response.status_code != 200:
+        raise RuntimeError(read_json_error(response) or f"Dorixona login xatosi: HTTP {response.status_code}")
+
+    payload = response.json()
+    user = payload.get("user") or {}
+    access_token = payload.get("access")
+    if not access_token:
+        raise RuntimeError("Serverdan kirish tokeni olinmadi.")
+    if user.get("role") != "pharmacy":
+        raise RuntimeError("Kiritilgan akkaunt dorixona egasi akkaunti emas. Dorixona login-emaili va parolini kiriting.")
+    return access_token
+
+
+def register_pharmacy_printer(api_base_url, access_token, device_name):
+    if requests is None:
+        raise RuntimeError("Python requests library is not available.")
+    base_url = normalize_api_base_url(api_base_url)
+    try:
+        response = requests.post(
+            base_url + PHARMACY_PRINTER_REGISTER_API_PATH,
+            headers={"Authorization": f"Bearer {access_token}"},
+            json={"device_name": device_name},
+            timeout=25,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Dorixona printerini ro‘yxatdan o‘tkazishda serverga ulanib bo‘lmadi: {exc}") from exc
+    if response.status_code not in {200, 201}:
+        raise RuntimeError(read_json_error(response) or f"Printer registration failed: HTTP {response.status_code}")
+    return response.json()
+
+
+def install_service(exe_path, service_name):
     if not os.path.exists(exe_path):
         raise FileNotFoundError(f"Service EXE not found: {exe_path}")
 
@@ -210,11 +258,11 @@ def install_service(exe_path):
 
     try:
         import win32serviceutil
-        win32serviceutil.StopService(SERVICE_NAME)
+        win32serviceutil.StopService(service_name)
     except Exception:
         pass
     try:
-        win32serviceutil.RemoveService(SERVICE_NAME)
+        win32serviceutil.RemoveService(service_name)
     except Exception:
         pass
 
@@ -227,8 +275,8 @@ def install_service(exe_path):
         try:
             service_handle = win32service.CreateService(
                 manager,
-                SERVICE_NAME,
-                DISPLAY_NAME,
+                service_name,
+                "G-MED Dorixona Printer Service" if service_name == "GMedPharmacyPrinterService" else DISPLAY_NAME,
                 win32service.SERVICE_ALL_ACCESS,
                 win32service.SERVICE_WIN32_OWN_PROCESS,
                 win32service.SERVICE_AUTO_START,
@@ -259,7 +307,7 @@ def install_service(exe_path):
         try:
             service_handle = win32service.OpenService(
                 service_manager,
-                SERVICE_NAME,
+                service_name,
                 win32service.SERVICE_START | win32service.SERVICE_QUERY_STATUS,
             )
             try:
@@ -278,12 +326,13 @@ class InstallerApp:
     def __init__(self, root):
         self.root = root
         root.title("G-MED Printer Service Setup")
-        root.geometry("620x400")
+        root.geometry("660x450")
         root.resizable(False, False)
 
         tk.Label(root, text="G-MED Printer Service", font=("Segoe UI", 16, "bold")).pack(pady=(18, 8))
-        tk.Label(root, text="Klinikada printer avtomatik o‘rnatiladi. G-MED login orqali nazorati amalga oshiriladi.", wraplength=560, justify="center").pack(padx=20, pady=(0, 8))
+        tk.Label(root, text="Tashkilot turini tanlang. Klinika printeri uchun avvalgi ulanish o‘zgarmagan.", wraplength=600, justify="center").pack(padx=20, pady=(0, 8))
 
+        self.account_type_var = tk.StringVar(value="Klinika")
         self.api_url_var = tk.StringVar(value=DEFAULT_API_BASE_URL)
         self.email_var = tk.StringVar(value="")
         self.password_var = tk.StringVar(value="")
@@ -291,14 +340,22 @@ class InstallerApp:
         form = tk.Frame(root, padx=18, pady=8)
         form.pack(fill="x")
 
-        tk.Label(form, text="G-MED asosiy host URL", anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
-        tk.Entry(form, textvariable=self.api_url_var, width=42).grid(row=0, column=1, sticky="ew", pady=6)
+        tk.Label(form, text="Tashkilot", anchor="w").grid(row=0, column=0, sticky="w", padx=(0, 10), pady=6)
+        ttk.Combobox(
+            form,
+            textvariable=self.account_type_var,
+            values=("Klinika", "Dorixona"),
+            state="readonly",
+        ).grid(row=0, column=1, sticky="ew", pady=6)
 
-        tk.Label(form, text="Email", anchor="w").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
-        tk.Entry(form, textvariable=self.email_var, width=42).grid(row=1, column=1, sticky="ew", pady=6)
+        tk.Label(form, text="G-MED asosiy host URL", anchor="w").grid(row=1, column=0, sticky="w", padx=(0, 10), pady=6)
+        tk.Entry(form, textvariable=self.api_url_var, width=42).grid(row=1, column=1, sticky="ew", pady=6)
 
-        tk.Label(form, text="Parol", anchor="w").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=6)
-        tk.Entry(form, textvariable=self.password_var, width=42, show="*").grid(row=2, column=1, sticky="ew", pady=6)
+        tk.Label(form, text="Login email", anchor="w").grid(row=2, column=0, sticky="w", padx=(0, 10), pady=6)
+        tk.Entry(form, textvariable=self.email_var, width=42).grid(row=2, column=1, sticky="ew", pady=6)
+
+        tk.Label(form, text="Parol", anchor="w").grid(row=3, column=0, sticky="w", padx=(0, 10), pady=6)
+        tk.Entry(form, textvariable=self.password_var, width=42, show="*").grid(row=3, column=1, sticky="ew", pady=6)
 
         form.columnconfigure(1, weight=1)
 
@@ -323,41 +380,68 @@ class InstallerApp:
             if not email or not password:
                 raise ValueError("Email va parolni kiriting.")
 
+            account_type = self.account_type_var.get()
             self.status.set("G-MED login tekshirilmoqda...")
             self.root.update()
-            self.status.set(f"Backend tekshirilmoqda: {build_login_api_url(api_base_url)}")
-            self.root.update()
-            reception_token, clinic_id, staff = login_to_backend(api_base_url, email, password)
-
-            self.status.set("Printer ro‘yxatdan o‘tkazilmoqda...")
-            self.root.update()
-            registration = register_printer(api_base_url, reception_token, clinic_id)
-            device_token = registration.get("device_token") or registration.get("deviceToken")
-            if not device_token:
-                raise RuntimeError("Server printer tokenini yaratmadi.")
-
-            config = {
-                "api_base_url": api_base_url,
-                "device_token": device_token,
-                "clinic_id": str(clinic_id),
-                "reception_room_id": str(registration.get("reception_room_id") or ""),
-                "service_name": SERVICE_NAME,
-                "heartbeat_interval_seconds": 20,
-                "poll_interval_seconds": 5,
-                "printer_name_contains": ["xp-80c", "xprinter", "xp-q200", "xp-q200ii", "xprinter xp", "thermal receipt"],
-                "preferred_printer_name": "XP-80C",
-                "allow_default_printer": True,
-                "log_file": os.path.join(DIST_DIR, "printer_service.log"),
-            }
+            if account_type == "Dorixona":
+                self.status.set(f"Dorixona akkaunti tekshirilmoqda: {api_base_url}{PHARMACY_LOGIN_API_PATH}")
+                self.root.update()
+                access_token = login_pharmacy_to_backend(api_base_url, email, password)
+                self.status.set("Dorixona printeri ro‘yxatdan o‘tkazilmoqda...")
+                self.root.update()
+                registration = register_pharmacy_printer(api_base_url, access_token, f"{os.environ.get('COMPUTERNAME', 'Windows')} Dorixona Printeri")
+                device_token = registration.get("device_token")
+                pharmacy_id = registration.get("pharmacy_id")
+                if not device_token or not pharmacy_id:
+                    raise RuntimeError("Server printer tokeni yoki dorixona identifikatorini qaytarmadi.")
+                service_name = "GMedPharmacyPrinterService"
+                config = {
+                    "api_base_url": api_base_url,
+                    "device_token": device_token,
+                    "clinic_id": "",
+                    "pharmacy_id": str(pharmacy_id),
+                    "reception_room_id": "",
+                    "service_name": service_name,
+                    "heartbeat_interval_seconds": 20,
+                    "poll_interval_seconds": 5,
+                    "printer_name_contains": ["xp-80c", "xprinter", "xp-q200", "xp-q200ii", "xprinter xp", "thermal receipt"],
+                    "preferred_printer_name": "XP-80C",
+                    "allow_default_printer": False,
+                    "log_file": os.path.join(PHARMACY_SERVICE_DIR, "printer_service.log"),
+                }
+            else:
+                self.status.set(f"Klinika login tekshirilmoqda: {build_login_api_url(api_base_url)}")
+                self.root.update()
+                reception_token, clinic_id, _staff = login_to_backend(api_base_url, email, password)
+                self.status.set("Klinika printeri ro‘yxatdan o‘tkazilmoqda...")
+                self.root.update()
+                registration = register_printer(api_base_url, reception_token, clinic_id)
+                device_token = registration.get("device_token") or registration.get("deviceToken")
+                if not device_token:
+                    raise RuntimeError("Server printer tokenini yaratmadi.")
+                service_name = SERVICE_NAME
+                config = {
+                    "api_base_url": api_base_url,
+                    "device_token": device_token,
+                    "clinic_id": str(clinic_id),
+                    "reception_room_id": str(registration.get("reception_room_id") or ""),
+                    "service_name": service_name,
+                    "heartbeat_interval_seconds": 20,
+                    "poll_interval_seconds": 5,
+                    "printer_name_contains": ["xp-80c", "xprinter", "xp-q200", "xp-q200ii", "xprinter xp", "thermal receipt"],
+                    "preferred_printer_name": "XP-80C",
+                    "allow_default_printer": True,
+                    "log_file": os.path.join(DIST_DIR, "printer_service.log"),
+                }
             write_config(config)
 
             self.status.set("Windows xizmatini yaratilmoqda...")
             self.root.update()
-            exe_path = build_service_exe()
+            exe_path = build_service_exe(service_name)
 
             self.status.set("Printer Service o‘rnatilmoqda...")
             self.root.update()
-            install_service(exe_path)
+            install_service(exe_path, service_name)
 
             self.status.set("Muvaffaqiyatli o‘rnatildi. Service ishlayapti.")
             self.root.update()
@@ -366,6 +450,7 @@ class InstallerApp:
                 "Printer Service o‘rnatildi.\n\n"
                 "- G-MED login muvaffaqiyatli tekshirildi\n"
                 "- Printer qurilmasi ro‘yxatdan o‘tkazildi\n"
+                f"- Turi: {'Dorixona' if account_type == 'Dorixona' else 'Klinika'}\n"
                 "- config.json avtomatik yozildi\n"
                 "- Service Automatic rejimida o‘rnatildi\n"
                 "- Tizim qayta ishga tushganda avtomatik start bo‘ladi",

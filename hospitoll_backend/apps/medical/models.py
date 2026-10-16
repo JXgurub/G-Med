@@ -3,6 +3,14 @@ from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator
 from uuid import uuid4
 from django.utils import timezone
+import secrets
+
+
+def generate_prescription_code():
+    code = f'{secrets.randbelow(90_000_000) + 10_000_000}'
+    while MedicalRecord.objects.filter(prescription_code=code).exists():
+        code = f'{secrets.randbelow(90_000_000) + 10_000_000}'
+    return code
 
 
 class Appointment(models.Model):
@@ -307,6 +315,14 @@ class MedicalRecord(models.Model):
         primary_key=True,
         default=uuid4,
         editable=False
+    )
+    prescription_code = models.CharField(
+        _('prescription code'),
+        max_length=8,
+        unique=True,
+        default=generate_prescription_code,
+        editable=False,
+        help_text=_('Bemor retsept dorilarini ovoz orqali qidirishi uchun qisqa kod')
     )
     patient = models.ForeignKey(
         'patients.Patient',

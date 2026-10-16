@@ -165,12 +165,27 @@ class Clinic(models.Model):
         default='',
         help_text=_("Navbat qog'ozida ko'rsatiladigan klinika manzili")
     )
+    queue_ticket_show_address = models.BooleanField(
+        _('show address on queue ticket'),
+        default=True,
+        help_text=_('Navbat qog‘ozida klinika manzilini chiqarish')
+    )
+    queue_ticket_show_phone = models.BooleanField(
+        _('show phone on queue ticket'),
+        default=False,
+        help_text=_('Navbat qog‘ozida klinika telefon raqamini chiqarish')
+    )
     queue_ticket_contact_url = models.CharField(
         _('queue ticket contact url'),
         max_length=255,
         blank=True,
         default='',
         help_text=_("Navbat qog'ozida ko'rsatiladigan Telegram/Instagram/yoki URL")
+    )
+    queue_ticket_show_contact = models.BooleanField(
+        _('show contact on queue ticket'),
+        default=True,
+        help_text=_('Navbat qog‘ozida ijtimoiy tarmoq yoki sayt havolasini chiqarish')
     )
     QUEUE_TICKET_NUMBER_SIZE_CHOICES = (
         ('small', _('Kichik')),

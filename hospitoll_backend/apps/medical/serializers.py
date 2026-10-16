@@ -147,6 +147,7 @@ class MedicalRecordSerializer(serializers.ModelSerializer):
         model = MedicalRecord
         fields = [
             'id',
+            'prescription_code',
             'patient',
             'doctor',
             'doctor_details',

@@ -1,0 +1,21 @@
+{
+  "api_base_url": "https://g-med.uz",
+  "device_token": "gmed-pharmacy-f6ca6a382efa45ceae89c018b77baf68",
+  "clinic_id": "",
+  "pharmacy_id": "81561b72-1111-40ae-a304-41d897807357",
+  "reception_room_id": "",
+  "service_name": "GMedPharmacyPrinterService",
+  "heartbeat_interval_seconds": 20,
+  "poll_interval_seconds": 5,
+  "printer_name_contains": [
+    "xp-80c",
+    "xprinter",
+    "xp-q200",
+    "xp-q200ii",
+    "xprinter xp",
+    "thermal receipt"
+  ],
+  "preferred_printer_name": "XP-80C",
+  "allow_default_printer": true,
+  "log_file": "C:\\Hospitoll\\G-MED\\printer_service\\dist_installer\\pharmacy_service\\printer_service.log"
+}

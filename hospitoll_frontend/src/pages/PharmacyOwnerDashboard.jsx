@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { usePharmacy } from '../context/PharmacyContext'
 import { useNotifications } from '../hooks/useWebSocket'
 import { pharmaciesApi, medicinesApi } from '../services/api'
+import { getPosSnapshot, savePosCatalog } from '../services/pharmacyPosStore'
 import useSmartAutoRefresh from '../hooks/useSmartAutoRefresh'
+import PharmacyPos from './PharmacyPos'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './PharmacyOwnerDashboard.css'
 
@@ -17,8 +19,22 @@ const DEFAULT_MEDICINE_FORM = {
   stock: '1'
 }
 
+const MEDICINES_PAGE_SIZE = 20
 const MEDICINE_APPEARANCE_OPTIONS = ['tabletka', 'sirop', 'kapsula', 'svecha', 'ampula', 'kukon']
 const MEDICINE_COUNTRY_OPTIONS = ["O'zbekiston", 'Rossiya', 'Vetnam', 'Boshqa']
+
+const getLocalDateKey = () => {
+  const now = new Date()
+  const pad = (value) => String(value).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+const isMedicineExpired = (medicine) => (
+  Boolean(medicine.expiryDate)
+  && String(medicine.expiryDate).slice(0, 10) < getLocalDateKey()
+)
+
+const isMedicineAvailable = (medicine) => Number(medicine.stock) > 0 && !isMedicineExpired(medicine)
 
 const downloadBlob = (content, filename, mimeType) => {
   const blob = new Blob([content], { type: mimeType })
@@ -139,6 +155,19 @@ const buildMedicineIdentityKey = (value = {}) => {
   const country = normalizeMedicineLabel(value.countryOfOrigin || value.country_of_origin)
   return `${name}__${dosageForm}__${category}__${country}`
 }
+
+const mapMedicineBaseItem = (item) => ({
+  id: item.id,
+  name: buildMedicineDisplayName(item.name || '', item.strength || ''),
+  strength: item.strength || '',
+  dosageForm: item.dosage_form || 'tabletka',
+  countryOfOrigin: normalizeCountryOption(item.country_of_origin || ''),
+  category: item.category || item.description || 'Boshqa',
+  genericName: item.generic_name || '',
+  atcCode: item.atc_code || '',
+  manufacturer: item.manufacturer || '',
+  description: item.description || '',
+})
 
 const formatMedicinePreviewLabel = (value) => String(value || '')
   .replace(/[_-]\d+$/g, '')
@@ -265,6 +294,7 @@ const toDelimitedText = (rows, delimiter = ',') => rows
 const PharmacyOwnerDashboard = () => {
   const DEFAULT_PHONE_PREFIX = '+998'
   const currentYear = new Date().getFullYear()
+  const location = useLocation()
   const navigate = useNavigate()
   const {
     currentPharmacy,
@@ -274,7 +304,6 @@ const PharmacyOwnerDashboard = () => {
     addMedicine,
     updateMedicine,
     deleteMedicine,
-    clearAllMedicines,
     uploadPharmacyLogo,
     removePharmacyLogo,
     refreshCurrentPharmacyData
@@ -287,10 +316,22 @@ const PharmacyOwnerDashboard = () => {
   const [pharmacyInfo, setPharmacyInfo] = useState({
     address: '',
     phone_number: DEFAULT_PHONE_PREFIX,
-    working_hours: ''
+    working_hours: '',
+    website: '',
+    receipt_show_address: true,
+    receipt_show_phone: true,
+    receipt_show_website: false,
+    receipt_instagram_url: '',
+    receipt_show_instagram: false,
   })
   const [updatingPharmacy, setUpdatingPharmacy] = useState(false)
   const [updateMessage, setUpdateMessage] = useState('')
+  const [posHeaderStatus, setPosHeaderStatus] = useState({
+    deviceName: 'Boshqaruv kompyuteri',
+    printerReady: false,
+    printerName: '',
+  })
+  const handlePosStatusChange = useCallback((status) => setPosHeaderStatus(status), [])
   const [salesStats, setSalesStats] = useState({
     todayRevenue: 0,
     monthRevenue: 0,
@@ -299,14 +340,19 @@ const PharmacyOwnerDashboard = () => {
   const [formData, setFormData] = useState({
     ...DEFAULT_MEDICINE_FORM
   })
+  const [medicineFormError, setMedicineFormError] = useState('')
+  const [medicineSaving, setMedicineSaving] = useState(false)
+  const [medicineActionMessage, setMedicineActionMessage] = useState('')
+  const [medicineActionType, setMedicineActionType] = useState('success')
   const [medicineBase, setMedicineBase] = useState([])
   const [medicineBaseLoading, setMedicineBaseLoading] = useState(false)
   const [medicineNameAlerts, setMedicineNameAlerts] = useState([])
   const [medicineNameAlertsLoading, setMedicineNameAlertsLoading] = useState(false)
   const [correctionDrafts, setCorrectionDrafts] = useState({})
   const [correctionSavingId, setCorrectionSavingId] = useState(null)
-  const [priceClearedOnFocus, setPriceClearedOnFocus] = useState(false)
   const [medicineSearch, setMedicineSearch] = useState('')
+  const [inventoryMedicineSearch, setInventoryMedicineSearch] = useState('')
+  const [visibleMedicineCount, setVisibleMedicineCount] = useState(MEDICINES_PAGE_SIZE)
   const [selectedLogoFile, setSelectedLogoFile] = useState(null)
   const [logoPreviewUrl, setLogoPreviewUrl] = useState('')
   const [logoSaving, setLogoSaving] = useState(false)
@@ -318,7 +364,6 @@ const PharmacyOwnerDashboard = () => {
   const [pendingImportFiles, setPendingImportFiles] = useState([])
   const [medicineTransferMeta, setMedicineTransferMeta] = useState(null)
   const [confirmingAllNameAlerts, setConfirmingAllNameAlerts] = useState(false)
-  const [bulkDeletingMedicines, setBulkDeletingMedicines] = useState(false)
   const [medicinesUpdatedAt, setMedicinesUpdatedAt] = useState(null)
   const logoInputRef = useRef(null)
   const logoActionWrapRef = useRef(null)
@@ -345,7 +390,13 @@ const PharmacyOwnerDashboard = () => {
     setPharmacyInfo({
       address: currentPharmacy.address || '',
       phone_number: currentPharmacy.phone_number || currentPharmacy.phone || DEFAULT_PHONE_PREFIX,
-      working_hours: currentPharmacy.working_hours || '09:00 - 20:00'
+      working_hours: currentPharmacy.working_hours || '09:00 - 20:00',
+      website: currentPharmacy.website || '',
+      receipt_show_address: currentPharmacy.receipt_show_address !== false,
+      receipt_show_phone: currentPharmacy.receipt_show_phone !== false,
+      receipt_show_website: Boolean(currentPharmacy.receipt_show_website),
+      receipt_instagram_url: currentPharmacy.receipt_instagram_url || '',
+      receipt_show_instagram: Boolean(currentPharmacy.receipt_show_instagram),
     })
   }, [currentPharmacy, loading, navigate, pharmacyMedicines])
 
@@ -360,46 +411,51 @@ const PharmacyOwnerDashboard = () => {
     const loadMedicineBase = async () => {
       setMedicineBaseLoading(true)
       try {
-        let page = 1
-        const all = []
+        const cachedSnapshot = await getPosSnapshot(currentPharmacy.id)
+        const cachedMedicines = Array.isArray(cachedSnapshot?.medicines) ? cachedSnapshot.medicines : []
+        const cacheIsFresh = cachedSnapshot?.snapshot_at
+          && Date.now() - new Date(cachedSnapshot.snapshot_at).getTime() < 24 * 60 * 60 * 1000
+        const canUseCache = cachedMedicines.length > 0 && (
+          cacheIsFresh || (typeof navigator !== 'undefined' && !navigator.onLine)
+        )
 
-        while (page <= 100) {
-          const response = await medicinesApi.getAll({ page })
+        let all = canUseCache ? cachedMedicines : []
+        if (!canUseCache) {
+          let page = 1
 
-          if (Array.isArray(response)) {
-            all.push(...response)
-            break
+          while (page <= 100) {
+            const response = await medicinesApi.getAll({ page })
+
+            if (Array.isArray(response)) {
+              all.push(...response)
+              break
+            }
+
+            const rows = Array.isArray(response?.results) ? response.results : []
+            all.push(...rows)
+
+            if (!response?.next || rows.length === 0) {
+              break
+            }
+
+            page += 1
           }
-
-          const rows = Array.isArray(response?.results) ? response.results : []
-          all.push(...rows)
-
-          if (!response?.next || rows.length === 0) {
-            break
-          }
-
-          page += 1
+          await savePosCatalog(currentPharmacy, all)
         }
 
         if (cancelled) return
 
-        const mapped = all.map((item) => ({
-          id: item.id,
-          name: buildMedicineDisplayName(item.name || '', item.strength || ''),
-          strength: item.strength || '',
-          dosageForm: item.dosage_form || 'tabletka',
-          countryOfOrigin: normalizeCountryOption(item.country_of_origin || ''),
-          category: item.category || item.description || 'Boshqa',
-          genericName: item.generic_name || '',
-          atcCode: item.atc_code || '',
-          manufacturer: item.manufacturer || '',
-          description: item.description || '',
-        }))
-
-        setMedicineBase(mapped)
+        setMedicineBase(all.map(mapMedicineBaseItem))
       } catch (error) {
+        console.warn('[Pharmacy dashboard] Medicine catalog network load failed:', error)
         if (!cancelled) {
-          setMedicineBase([])
+          try {
+            const fallback = await getPosSnapshot(currentPharmacy.id)
+            setMedicineBase((fallback?.medicines || []).map(mapMedicineBaseItem))
+          } catch (cacheError) {
+            console.error('[Pharmacy dashboard] Cached medicine catalog load failed:', cacheError)
+            setMedicineBase([])
+          }
         }
       } finally {
         if (!cancelled) {
@@ -612,6 +668,8 @@ const PharmacyOwnerDashboard = () => {
     return null
   }
 
+  const pointOfSaleRoute = location.pathname.replace(/\/+$/, '') === '/pharmacy-owner-dashboard/pos'
+
   const findMatchingMedicineBase = (medicineLike) => {
     const key = buildMedicineIdentityKey(medicineLike)
     if (!key || key.startsWith('___')) return null
@@ -651,55 +709,75 @@ const PharmacyOwnerDashboard = () => {
 
   const handleAddMedicine = async (e) => {
     e.preventDefault()
+    if (medicineSaving) return
+
+    const medicineName = formData.name.trim()
     const priceValue = parseCurrencyInput(formData.price)
     const expiryYear = normalizeExpiryDateValue(formData.expiryDate)
-    if (!formData.name || !formData.dosageForm || !expiryYear || !formData.countryOfOrigin || !priceValue) {
-      alert('Dori nomi, ko\'rinishi, yaroqlilik yili, ishlab chiqarilgan davlat va narxini kiriting')
+    const stockValue = Number(formData.stock)
+    if (
+      !medicineName
+      || !formData.dosageForm
+      || !expiryYear
+      || !formData.countryOfOrigin
+      || !Number.isSafeInteger(priceValue)
+      || priceValue <= 0
+      || !Number.isSafeInteger(stockValue)
+      || stockValue < 0
+    ) {
+      setMedicineFormError('Dori nomi, ko‘rinishi, yaroqlilik yili, ishlab chiqarilgan davlat, narx va miqdorni to‘g‘ri kiriting.')
       return
     }
 
+    setMedicineSaving(true)
+    setMedicineFormError('')
+    setMedicineActionMessage('')
     try {
       if (editingId) {
         await updateMedicine(currentPharmacy.id, editingId, {
-          name: formData.name,
+          name: medicineName,
           dosageForm: formData.dosageForm,
           countryOfOrigin: formData.countryOfOrigin,
           expiryDate: expiryYear,
           price: priceValue,
           category: formData.category,
-          stock: formData.stock === 'out' ? 0 : parseInt(formData.stock)
+          stock: stockValue
         })
         setEditingId(null)
-        alert('Dori yangilandi! ✅')
+        setMedicineActionMessage('Dori ma’lumotlari yangilandi.')
       } else {
         const matchedGlobalMedicine = findMatchingMedicineBase({
           ...formData,
+          name: medicineName,
           expiryDate: expiryYear,
         })
 
         const result = await addMedicine(currentPharmacy.id, {
           ...formData,
+          name: medicineName,
           expiryDate: expiryYear,
           price: priceValue,
-          stock: formData.stock === 'out' ? 0 : parseInt(formData.stock)
+          stock: stockValue
         }, {
           preferredMedicineId: matchedGlobalMedicine?.id || null,
         })
         if (result?.mode === 'updated_existing') {
-          alert('Bu dori allaqachon mavjud edi — mavjud yozuv yangilandi ✅')
+          setMedicineActionMessage('Bu dori oldin mavjud edi — mavjud yozuv yangilandi.')
         } else if (result?.nameVerificationAlertCreated) {
-          alert('Dori qo\'shildi. Nomi bazada topilmadi, boshqa dorixonalarga xabar yuborildi ✅')
+          setMedicineActionMessage('Dori qo‘shildi. Nomi bazada topilmadi, boshqa dorixonalarga tekshiruv xabari yuborildi.')
         } else {
-          alert('Dori qo\'shildi! ✅')
+          setMedicineActionMessage('Dori omborga qo‘shildi.')
         }
       }
 
+      setMedicineActionType('success')
       setFormData({ ...DEFAULT_MEDICINE_FORM })
-      setPriceClearedOnFocus(false)
       setShowAddForm(false)
     } catch (error) {
       console.error('Medicine operation error:', error)
-      alert('Xatolik: ' + (error.message || 'Dori qo\'shishda xatolik yuz berdi'))
+      setMedicineFormError(error.message || 'Dori saqlashda xatolik yuz berdi.')
+    } finally {
+      setMedicineSaving(false)
     }
   }
 
@@ -711,44 +789,23 @@ const PharmacyOwnerDashboard = () => {
       countryOfOrigin: normalizeCountryOption(medicine.countryOfOrigin) || '',
       price: formatCurrencyInput(medicine.price),
       category: medicine.category,
-      stock: medicine.stock === 0 ? 'out' : medicine.stock.toString()
+      stock: String(Math.max(0, Number(medicine.stock) || 0))
     })
-    setPriceClearedOnFocus(false)
+    setMedicineFormError('')
     setEditingId(medicine.id)
     setShowAddForm(true)
   }
 
-  const handleDelete = (medicineId) => {
-    if (window.confirm('Rostlik olib tashlamoqchisiz?')) {
-      deleteMedicine(currentPharmacy.id, medicineId)
-      alert('Dori o\'chirildi! ✅')
-    }
-  }
-
-  const handleDeleteAllMedicines = async () => {
-    if (!currentPharmacy?.id) return
-    if (medicines.length === 0) {
-      alert('O\'chirish uchun dori topilmadi')
-      return
-    }
-
-    const confirmed = window.confirm(
-      `Rostdan ham barcha dorilarni o\'chirmoqchimisiz?\nJami: ${medicines.length} ta dori.`
-    )
-    if (!confirmed) return
-
-    setBulkDeletingMedicines(true)
+  const handleDelete = async (medicineId) => {
+    if (!window.confirm('Rostdan ham ushbu dorini o‘chirmoqchimisiz?')) return
     try {
-      const result = await clearAllMedicines(currentPharmacy.id)
-      if (result.failedCount > 0) {
-        alert(`Qisman bajarildi: o\'chirildi ${result.deletedCount}, xatolik ${result.failedCount}.`)
-      } else {
-        alert(`Barcha dorilar o\'chirildi: ${result.deletedCount} ta ✅`)
-      }
+      await deleteMedicine(currentPharmacy.id, medicineId)
+      setMedicineActionType('success')
+      setMedicineActionMessage('Dori ombordan o‘chirildi.')
     } catch (error) {
-      alert('Barcha dorilarni o\'chirishda xatolik: ' + (error?.message || 'noma\'lum xatolik'))
-    } finally {
-      setBulkDeletingMedicines(false)
+      console.error('Medicine delete error:', error)
+      setMedicineActionType('error')
+      setMedicineActionMessage('Dorini o‘chirishda xatolik: ' + (error?.message || 'Noma’lum xatolik'))
     }
   }
 
@@ -757,7 +814,7 @@ const PharmacyOwnerDashboard = () => {
     navigate('/pharmacy-owner-login')
   }
 
-  const handleUpdatePharmacyInfo = async (e) => {
+  async function handleUpdatePharmacyInfo(e) {
     e.preventDefault()
     setUpdatingPharmacy(true)
     setUpdateMessage('')
@@ -766,7 +823,13 @@ const PharmacyOwnerDashboard = () => {
       await pharmaciesApi.update(currentPharmacy.id, {
         address: pharmacyInfo.address,
         phone_number: pharmacyInfo.phone_number,
-        working_hours: pharmacyInfo.working_hours
+        working_hours: pharmacyInfo.working_hours,
+        website: pharmacyInfo.website || null,
+        receipt_show_address: pharmacyInfo.receipt_show_address,
+        receipt_show_phone: pharmacyInfo.receipt_show_phone,
+        receipt_show_website: pharmacyInfo.receipt_show_website,
+        receipt_instagram_url: pharmacyInfo.receipt_instagram_url,
+        receipt_show_instagram: pharmacyInfo.receipt_show_instagram
       })
       
       setUpdateMessage('✅ Dorixona ma\'lumotlari yangilandi')
@@ -850,11 +913,16 @@ const PharmacyOwnerDashboard = () => {
   }
 
   const normalizedMedicineSearch = medicineSearch.trim().toLowerCase()
-  const filteredMedicines = normalizedMedicineSearch
+  const normalizedInventoryMedicineSearch = inventoryMedicineSearch.trim().toLowerCase()
+  const filteredMedicines = normalizedInventoryMedicineSearch
     ? medicines.filter((medicine) =>
-        `${buildMedicineDisplayName(medicine.name, medicine.strength)} ${medicine.dosageForm || medicine.appearance || ''} ${medicine.countryOfOrigin || ''} ${medicine.category}`.toLowerCase().includes(normalizedMedicineSearch)
+        `${buildMedicineDisplayName(medicine.name, medicine.strength)} ${medicine.dosageForm || medicine.appearance || ''} ${medicine.countryOfOrigin || ''} ${medicine.category || ''}`.toLowerCase().includes(normalizedInventoryMedicineSearch)
       )
     : medicines
+  const visibleMedicines = filteredMedicines.slice(0, visibleMedicineCount)
+  const uniqueMedicineCount = new Set(
+    medicines.map((medicine) => String(medicine.medicineId ?? medicine.id))
+  ).size
 
   const filteredMedicineBase = normalizedMedicineSearch
     ? medicineBase.filter((medicine) =>
@@ -1297,7 +1365,7 @@ const PharmacyOwnerDashboard = () => {
   }
 
   return (
-    <div className="pharmacy-owner-dashboard">
+    <div className={`pharmacy-owner-dashboard${pointOfSaleRoute ? ' pharmacy-owner-dashboard-inventory-route' : ''}`}>
       {/* Header */}
       <header className="dashboard-header">
         <div className="header-left">
@@ -1362,15 +1430,41 @@ const PharmacyOwnerDashboard = () => {
             <p className="header-detail">{currentPharmacy.address}</p>
           </div>
         </div>
-        <div>
+        <div className="dashboard-header-actions">
+          <div className="dashboard-status-indicators">
+            <div className="dashboard-status-card dashboard-register-status">
+              <span className="dashboard-status-icon" aria-hidden="true">▣</span>
+              <span>
+                <small>KASSA</small>
+                <strong>{posHeaderStatus.deviceName}</strong>
+              </span>
+            </div>
+            <div className={`dashboard-status-card ${posHeaderStatus.printerReady ? 'dashboard-printer-ready' : 'dashboard-printer-offline'}`}>
+              <span className="dashboard-status-icon" aria-hidden="true">▤</span>
+              <span>
+                <small>PRINTER</small>
+                <strong>
+                  {posHeaderStatus.printerReady
+                    ? posHeaderStatus.printerName || 'Tayyor'
+                    : 'Ulanmagan'}
+                </strong>
+              </span>
+              <span className="dashboard-status-dot" aria-hidden="true" />
+            </div>
+          </div>
           <button
-            className="btn-logout"
+            className="btn-logout dashboard-action-button dashboard-settings-button"
+            onClick={() => navigate('/pharmacy-owner-dashboard/pos')}
+          >
+            Sozlamalar
+          </button>
+          <button
+            className="btn-logout dashboard-action-button dashboard-subscription-button"
             onClick={() => navigate('/subscription-payment')}
-            style={{ marginRight: '8px' }}
           >
             Obuna to'lovi
           </button>
-          <button className="btn-logout" onClick={handleLogout}>
+          <button className="btn-logout dashboard-action-button" onClick={handleLogout}>
             Chiqish →
           </button>
         </div>
@@ -1391,16 +1485,16 @@ const PharmacyOwnerDashboard = () => {
           <div className="stat-card">
             <div className="stat-icon">✅</div>
             <div className="stat-content">
-              <p className="stat-label">Mavjud dorilar</p>
-              <p className="stat-value">{medicines.filter((m) => m.stock > 0).length}</p>
+              <p className="stat-label">Yaroqli mavjud dorilar</p>
+              <p className="stat-value">{medicines.filter(isMedicineAvailable).length}</p>
             </div>
           </div>
 
           <div className="stat-card">
             <div className="stat-icon">⚠️</div>
             <div className="stat-content">
-              <p className="stat-label">Tugagan dorilar</p>
-              <p className="stat-value">{medicines.filter((m) => m.stock === 0).length}</p>
+              <p className="stat-label">Tugagan yoki muddati o‘tgan</p>
+              <p className="stat-value">{medicines.filter((m) => !isMedicineAvailable(m)).length}</p>
             </div>
           </div>
 
@@ -1429,160 +1523,45 @@ const PharmacyOwnerDashboard = () => {
           </div>
         </div>
 
-        {/* Pharmacy Info Management Section */}
-        {updateMessage && (
-          <div className="message-alert" style={{ 
-            padding: '12px 16px', 
-            marginBottom: '20px', 
-            borderRadius: '6px',
-            backgroundColor: updateMessage.startsWith('✅') ? '#d1fae5' : '#fee2e2',
-            color: updateMessage.startsWith('✅') ? '#065f46' : '#991b1b'
-          }}>
-            {updateMessage}
-          </div>
-        )}
-
-        <section className="pharmacy-info-section" style={{
-          background: 'white',
-          padding: '20px',
-          borderRadius: '8px',
-          marginBottom: '30px',
-          border: '1px solid #e5e7eb'
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-            <h3 style={{ margin: 0, fontSize: '1.1rem', fontWeight: '600' }}>📋 Dorixona Ma'lumotlari</h3>
-            <button 
-              onClick={() => setShowPharmacyEdit(!showPharmacyEdit)}
-              style={{
-                padding: '8px 16px',
-                background: showPharmacyEdit ? '#ef4444' : '#3b82f6',
-                color: 'white',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer',
-                fontSize: '0.9rem',
-                fontWeight: '600',
-                transition: 'all 0.2s'
-              }}
-            >
-              {showPharmacyEdit ? '✕ Bekor qilish' : '✏️ O\'zgartirilsin'}
-            </button>
-          </div>
-
-          {showPharmacyEdit ? (
-            <form onSubmit={handleUpdatePharmacyInfo}>
-              <div style={{ display: 'grid', gap: '15px' }}>
-                <div>
-                  <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', fontSize: '0.9rem' }}>
-                    📍 Manzil
-                  </label>
-                  <input
-                    type="text"
-                    value={pharmacyInfo.address}
-                    onChange={(e) => setPharmacyInfo({ ...pharmacyInfo, address: e.target.value })}
-                    style={{
-                      width: '100%',
-                      padding: '10px 12px',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '6px',
-                      fontSize: '0.95rem',
-                      fontFamily: 'inherit'
-                    }}
-                  />
-                </div>
-
-                <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', fontSize: '0.9rem' }}>
-                      📞 Telefon
-                    </label>
-                    <input
-                      type="tel"
-                      value={pharmacyInfo.phone_number}
-                      onChange={(e) => setPharmacyInfo({ ...pharmacyInfo, phone_number: e.target.value })}
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        border: '1px solid #d1d5db',
-                        borderRadius: '6px',
-                        fontSize: '0.95rem',
-                        fontFamily: 'inherit'
-                      }}
-                    />
-                  </div>
-
-                  <div>
-                    <label style={{ display: 'block', marginBottom: '6px', fontWeight: '500', fontSize: '0.9rem' }}>
-                      🕐 Ish vaqti
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="09:00 - 20:00"
-                      value={pharmacyInfo.working_hours}
-                      onChange={(e) => setPharmacyInfo({ ...pharmacyInfo, working_hours: e.target.value })}
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        border: '1px solid #d1d5db',
-                        borderRadius: '6px',
-                        fontSize: '0.95rem',
-                        fontFamily: 'inherit'
-                      }}
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={updatingPharmacy}
-                  style={{
-                    padding: '12px 16px',
-                    background: '#10b981',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '6px',
-                    cursor: updatingPharmacy ? 'not-allowed' : 'pointer',
-                    fontSize: '0.95rem',
-                    fontWeight: '600',
-                    opacity: updatingPharmacy ? 0.7 : 1,
-                    transition: 'all 0.2s'
-                  }}
-                >
-                  {updatingPharmacy ? '⏳ Saqlanmoqda...' : '✅ Saqlash'}
-                </button>
-              </div>
-            </form>
-          ) : (
-            <div style={{ display: 'grid', gap: '12px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid #f3f4f6' }}>
-                <span style={{ color: '#666' }}>📍 Manzil:</span>
-                <strong>{currentPharmacy.address || '-'}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '12px', borderBottom: '1px solid #f3f4f6' }}>
-                <span style={{ color: '#666' }}>📞 Telefon:</span>
-                <strong>{pharmacyInfo.phone_number || '-'}</strong>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: '#666' }}>🕐 Ish vaqti:</span>
-                <strong>{pharmacyInfo.working_hours || '-'}</strong>
-              </div>
-            </div>
-          )}
-        </section>
+        <PharmacyPos
+          embedded={!pointOfSaleRoute}
+          showDeviceManagement={pointOfSaleRoute}
+          showSales={!pointOfSaleRoute}
+          showHeader={pointOfSaleRoute}
+          onStatusChange={handlePosStatusChange}
+          onExit={() => navigate(pointOfSaleRoute ? '/pharmacy-owner-dashboard' : '/pharmacy-owner-dashboard/pos')}
+          pharmacyInfo={pointOfSaleRoute ? pharmacyInfo : undefined}
+          showPharmacyEdit={showPharmacyEdit}
+          setShowPharmacyEdit={setShowPharmacyEdit}
+          updatingPharmacy={updatingPharmacy}
+          updateMessage={updateMessage}
+          onPharmacyInfoChange={(field, value) => {
+            setPharmacyInfo((current) => ({ ...current, [field]: value }))
+          }}
+          onUpdatePharmacyInfo={handleUpdatePharmacyInfo}
+        />
 
         {/* Medicines Section */}
-        <section className="medicines-section">
+        <section className="medicines-section" id="pharmacy-medicine-inventory">
           <div className="section-header">
             <div>
-              <h2>Dorilar</h2>
-              <p className="medicines-updated-at">Oxirgi yangilanish: {formatDateTimeLabel(medicinesUpdatedAt)}</p>
+              <h2>Dori ombori</h2>
+              <p className="medicines-updated-at">
+                {uniqueMedicineCount} xil dori · jami {medicines.reduce((total, medicine) => total + (Number(medicine.stock) || 0), 0)} dona
+                {' · '}yangilangan: {formatDateTimeLabel(medicinesUpdatedAt)}
+              </p>
             </div>
             <div className="medicine-toolbar">
               <div className="medicine-transfer-actions">
-                <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('xlsx')}>Excel</button>
-                <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('csv')}>CSV</button>
-                <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('json')}>JSON</button>
-                <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('tsv')}>TSV</button>
+                <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('xlsx')}>Excelga eksport</button>
+                <details className="medicine-extra-exports">
+                  <summary>Boshqa formatlar</summary>
+                  <div>
+                    <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('csv')}>CSV</button>
+                    <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('json')}>JSON</button>
+                    <button type="button" className="btn-transfer" onClick={() => handleExportMedicines('tsv')}>TSV</button>
+                  </div>
+                </details>
                 <button
                   type="button"
                   className="btn-transfer"
@@ -1617,24 +1596,25 @@ const PharmacyOwnerDashboard = () => {
               </div>
               <button
                 className="btn-add"
+                disabled={medicineSaving}
                 onClick={() => {
-                  setShowAddForm(!showAddForm)
+                  const nextShowAddForm = !showAddForm
+                  setShowAddForm(nextShowAddForm)
                   setEditingId(null)
                   setFormData({ ...DEFAULT_MEDICINE_FORM })
+                  setMedicineFormError('')
                 }}
               >
                 {showAddForm ? '✕ Bekor qilish' : '+ Yangi dori qo\'shish'}
               </button>
-              <button
-                type="button"
-                className="btn-transfer btn-transfer-danger"
-                onClick={handleDeleteAllMedicines}
-                disabled={bulkDeletingMedicines || medicines.length === 0}
-              >
-                {bulkDeletingMedicines ? 'O\'chirilmoqda...' : 'Barchasini o\'chirish'}
-              </button>
             </div>
           </div>
+
+          {medicineActionMessage && (
+            <p className={`medicine-action-message ${medicineActionType}`} role="status">
+              {medicineActionMessage}
+            </p>
+          )}
 
           {medicineTransferMessage && (
             <div className={`medicine-transfer-message ${medicineTransferType === 'error' ? 'error' : 'success'}`}>
@@ -1790,8 +1770,29 @@ const PharmacyOwnerDashboard = () => {
             </div>
           )}
 
+          <div className="medicine-inventory-search">
+            <label htmlFor="medicine-inventory-search">Dorilarni qidirish</label>
+            <div className="search-input-wrap">
+              <span className="search-icon" aria-hidden="true">🔎</span>
+              <input
+                id="medicine-inventory-search"
+                type="search"
+                placeholder="Dori nomi, doza, ko'rinishi, davlat yoki kategoriya..."
+                value={inventoryMedicineSearch}
+                onChange={(event) => {
+                  setInventoryMedicineSearch(event.target.value)
+                  setVisibleMedicineCount(MEDICINES_PAGE_SIZE)
+                }}
+              />
+            </div>
+            {normalizedInventoryMedicineSearch && (
+              <p className="medicine-search-meta">{filteredMedicines.length} ta dori topildi</p>
+            )}
+          </div>
+
           {showAddForm && (
             <form className="add-medicine-form" onSubmit={handleAddMedicine}>
+              {medicineFormError && <p className="medicine-form-error" role="alert">{medicineFormError}</p>}
               <div className="add-form-search">
                 <label>Dorilar bazasidan qidirish</label>
                 <div className="search-input-wrap">
@@ -1837,7 +1838,10 @@ const PharmacyOwnerDashboard = () => {
                   type="text"
                   placeholder="masalan: Aspirin 500mg"
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  onChange={(e) => {
+                    setFormData((current) => ({ ...current, name: e.target.value }))
+                    setMedicineFormError('')
+                  }}
                   required
                 />
 
@@ -1877,7 +1881,10 @@ const PharmacyOwnerDashboard = () => {
                   <label>Ko'rinishi</label>
                   <select
                     value={formData.dosageForm}
-                    onChange={(e) => setFormData({ ...formData, dosageForm: e.target.value })}
+                    onChange={(e) => {
+                      setFormData((current) => ({ ...current, dosageForm: e.target.value }))
+                      setMedicineFormError('')
+                    }}
                   >
                     {MEDICINE_APPEARANCE_OPTIONS.map((option) => (
                       <option key={option} value={option}>{option}</option>
@@ -1894,7 +1901,13 @@ const PharmacyOwnerDashboard = () => {
                     max={currentYear + 50}
                     placeholder={`${currentYear + 1}`}
                     value={formData.expiryDate}
-                    onChange={(e) => setFormData({ ...formData, expiryDate: String(e.target.value || '').replace(/\D+/g, '').slice(0, 4) })}
+                    onChange={(e) => {
+                      setFormData((current) => ({
+                        ...current,
+                        expiryDate: String(e.target.value || '').replace(/\D+/g, '').slice(0, 4),
+                      }))
+                      setMedicineFormError('')
+                    }}
                     required
                   />
                 </div>
@@ -1903,7 +1916,10 @@ const PharmacyOwnerDashboard = () => {
                   <label>Ishlab chiqarilgan davlat</label>
                   <select
                     value={formData.countryOfOrigin}
-                    onChange={(e) => setFormData({ ...formData, countryOfOrigin: e.target.value })}
+                    onChange={(e) => {
+                      setFormData((current) => ({ ...current, countryOfOrigin: e.target.value }))
+                      setMedicineFormError('')
+                    }}
                     required
                   >
                     <option value="">Davlatni tanlang</option>
@@ -1922,14 +1938,10 @@ const PharmacyOwnerDashboard = () => {
                     inputMode="numeric"
                     placeholder="5500"
                     value={formData.price}
-                    onFocus={() => {
-                      if (priceClearedOnFocus || !formData.price) {
-                        return
-                      }
-                      setFormData((prev) => ({ ...prev, price: '' }))
-                      setPriceClearedOnFocus(true)
+                    onChange={(e) => {
+                      setFormData((current) => ({ ...current, price: formatCurrencyInput(e.target.value) }))
+                      setMedicineFormError('')
                     }}
-                    onChange={(e) => setFormData({ ...formData, price: formatCurrencyInput(e.target.value) })}
                     required
                   />
                 </div>
@@ -1938,7 +1950,10 @@ const PharmacyOwnerDashboard = () => {
                   <label>Kategoriya</label>
                   <select
                     value={formData.category}
-                    onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                    onChange={(e) => {
+                      setFormData((current) => ({ ...current, category: e.target.value }))
+                      setMedicineFormError('')
+                    }}
                   >
                     <option>Joni dorilar</option>
                     <option>Antibiotiklar</option>
@@ -1951,27 +1966,33 @@ const PharmacyOwnerDashboard = () => {
                 </div>
 
                 <div className="form-group">
-                  <label>Mavjudlik</label>
-                  <select
+                  <label htmlFor="medicine-stock-quantity">Ombordagi miqdor (dona)</label>
+                  <input
+                    id="medicine-stock-quantity"
+                    type="number"
+                    inputMode="numeric"
+                    min="0"
+                    step="1"
+                    placeholder="Masalan: 25"
                     value={formData.stock}
-                    onChange={(e) => setFormData({ ...formData, stock: e.target.value })}
-                  >
-                    <option value="1">Bor</option>
-                    <option value="10">Ko'p</option>
-                    <option value="out">Tugagan</option>
-                  </select>
+                    onChange={(e) => {
+                      setFormData((current) => ({ ...current, stock: e.target.value }))
+                      setMedicineFormError('')
+                    }}
+                    required
+                  />
                 </div>
               </div>
 
-              <button type="submit" className="btn-submit">
-                {editingId ? 'Tahrirlashni saqlash' : 'Dorini qo\'shish'}
+              <button type="submit" className="btn-submit" disabled={medicineSaving}>
+                {medicineSaving ? 'Saqlanmoqda...' : editingId ? 'O‘zgarishlarni saqlash' : 'Dorini qo‘shish'}
               </button>
             </form>
           )}
 
           <div className="medicines-grid">
             {filteredMedicines.length > 0 ? (
-              filteredMedicines.map((medicine) => (
+              visibleMedicines.map((medicine) => (
                 <div key={medicine.id} className={`medicine-card ${medicine.stock === 0 ? 'out-of-stock' : ''}`}>
                   <div className="medicine-header">
                     <div>
@@ -2032,6 +2053,15 @@ const PharmacyOwnerDashboard = () => {
               </div>
             )}
           </div>
+          {visibleMedicineCount < filteredMedicines.length && (
+            <button
+              type="button"
+              className="load-more-medicines"
+              onClick={() => setVisibleMedicineCount((count) => count + MEDICINES_PAGE_SIZE)}
+            >
+              Yana
+            </button>
+          )}
         </section>
       </div>
     </div>

@@ -64,6 +64,25 @@ Set real values at minimum:
 - `CSRF_TRUSTED_ORIGINS=https://g-med.uz,https://www.g-med.uz`
 - `EMAIL_*`
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_SECRET` (if Telegram bot is enabled)
+- `LIZA_VOSK_MODEL_HOST_PATH` (only if the Uzbek model is not stored at the default path below)
+
+Install the Uzbek Vosk model on the host before deployment. The production preflight
+checks for `conf/model.conf`, and the backend container mounts this directory
+read-only:
+```bash
+mkdir -p jx.group_ovozli_yordamchi/engine
+curl -fL --retry 3 \
+  https://alphacephei.com/vosk/models/vosk-model-small-uz-0.22.zip \
+  -o /tmp/vosk-model-small-uz-0.22.zip
+unzip -q /tmp/vosk-model-small-uz-0.22.zip -d jx.group_ovozli_yordamchi/engine
+rm /tmp/vosk-model-small-uz-0.22.zip
+```
+
+If the model directory is elsewhere, set its absolute host path in
+`.env.production`, for example:
+```dotenv
+LIZA_VOSK_MODEL_HOST_PATH=/srv/hospitoll/models/vosk-model-small-uz-0.22
+```
 
 ## 3. Get SSL certificates (Let's Encrypt)
 Stop anything on port 80 if running, then:

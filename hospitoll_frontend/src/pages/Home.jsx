@@ -1,9 +1,14 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import ClinicCard from '../components/ClinicCard'
 import PharmacyCard from '../components/PharmacyCard'
 import { usePharmacy } from '../context/PharmacyContext'
 import { clinicsApi, clinicDepartmentsApi, siteSettingsApi, resolveMediaUrl } from '../services/api'
+import {
+  findAvailableMedicineMatch,
+  getMedicineSearchNames,
+  medicineMatches,
+} from '../utils/medicineMatching'
 import './Home.css'
 
 const PHARMACY_PRESCRIPTION_KEY = 'gmed-pharmacy-prescription-search'
@@ -25,8 +30,6 @@ const splitSearchTerms = (value) => {
   )
 }
 
-const getMedicineName = (medicine) => String(medicine?.name || medicine?.medicine_name || '').trim()
-
 const analyzePharmacyPrescription = (pharmacy, requestedMedicines = []) => {
   const medicines = Array.isArray(pharmacy?.medicines) ? pharmacy.medicines : []
   const requested = splitSearchTerms(requestedMedicines)
@@ -36,14 +39,9 @@ const analyzePharmacyPrescription = (pharmacy, requestedMedicines = []) => {
   let total = 0
 
   requested.forEach((requestedMedicine) => {
-    const normalizedRequested = normalizeSearchText(requestedMedicine)
-    const matchedMedicine = medicines.find((medicine) => {
-      const normalizedName = normalizeSearchText(getMedicineName(medicine))
-      if (!normalizedName || !normalizedRequested) return false
-      return normalizedName.includes(normalizedRequested) || normalizedRequested.includes(normalizedName)
-    })
+    const matchedMedicine = findAvailableMedicineMatch(medicines, requestedMedicine)
 
-    if (!matchedMedicine || Number(matchedMedicine.stock || 0) <= 0) {
+    if (!matchedMedicine) {
       missing.push(requestedMedicine)
       return
     }
@@ -52,9 +50,9 @@ const analyzePharmacyPrescription = (pharmacy, requestedMedicines = []) => {
     total += price
     found.push({
       requestedName: requestedMedicine,
-      medicineName: getMedicineName(matchedMedicine),
+      medicineName: matchedMedicine.name || matchedMedicine.medicine_name || 'Noma\'lum dori',
       price,
-      stock: Number(matchedMedicine.stock || 0),
+      stock: Number(matchedMedicine.stock ?? matchedMedicine.quantity_in_stock ?? 0),
     })
   })
 
@@ -88,6 +86,7 @@ const sortClinicsByRating = (items = []) => {
 
 const Home = () => {
   const navigate = useNavigate()
+  const location = useLocation()
   const [clinics, setClinics] = useState([])
   const { pharmacies } = usePharmacy()
   const [clinicSearchQuery, setClinicSearchQuery] = useState('')
@@ -175,14 +174,14 @@ const Home = () => {
 
   useEffect(() => {
     if (typeof window === 'undefined') return
-    if (window.location.hash !== '#pharmacy-section') return
+    if (location.hash !== '#pharmacy-section') return
 
     const timeoutId = window.setTimeout(() => {
       document.getElementById('pharmacy-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }, 120)
 
     return () => window.clearTimeout(timeoutId)
-  }, [prescriptionSearch])
+  }, [location.hash, location.key, prescriptionSearch])
 
   const handlePatientClick = () => {
     navigate('/patient-login')
@@ -220,13 +219,16 @@ const Home = () => {
     const address = normalizeSearchText(pharmacy.address)
     const city = normalizeSearchText(pharmacy.city)
     const name = normalizeSearchText(pharmacy.name)
-    const medicineNames = (pharmacy.medicines || []).map((medicine) => normalizeSearchText(getMedicineName(medicine)))
+    const medicineNames = (pharmacy.medicines || [])
+      .flatMap(getMedicineSearchNames)
+      .map(normalizeSearchText)
 
     return pharmacySearchTerms.some((term) => (
       name.includes(term) ||
       address.includes(term) ||
       city.includes(term) ||
-      medicineNames.some((medicineName) => medicineName.includes(term))
+      medicineNames.some((medicineName) => medicineName.includes(term)) ||
+      (pharmacy.medicines || []).some((medicine) => medicineMatches(term, medicine))
     ))
   })
 
@@ -362,6 +364,9 @@ const Home = () => {
                     ? `Shikoyat: ${prescriptionSearch.complaint}`
                     : 'Dorilar ro\'yxati Home sahifadagi dorixona qidiruviga uzatildi.'}
                 </p>
+                {prescriptionSearch.prescription_code || prescriptionSearch.prescriptionCode ? (
+                  <p>Retsept raqami: <strong>{prescriptionSearch.prescription_code || prescriptionSearch.prescriptionCode}</strong></p>
+                ) : null}
                 <div className="pharmacy-prescription-tags">
                   {prescriptionSearch.medicines.map((medicine) => (
                     <span key={medicine} className="pharmacy-prescription-tag">{medicine}</span>

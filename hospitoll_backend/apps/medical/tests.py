@@ -38,6 +38,61 @@ class MedicalApiTestCase(APITestCase):
         return response.json()
 
 
+class MedicalRecordPrescriptionLookupTests(MedicalApiTestCase):
+    def setUp(self):
+        self.patient_user = CustomUser.objects.create_user(
+            username='prescription_lookup_patient',
+            email='prescription.lookup@example.com',
+            password='Pass12345!',
+            role='patient',
+        )
+        self.patient = Patient.objects.create(user=self.patient_user)
+        self.other_patient_user = CustomUser.objects.create_user(
+            username='other_prescription_patient',
+            email='other.prescription@example.com',
+            password='Pass12345!',
+            role='patient',
+        )
+        self.other_patient = Patient.objects.create(user=self.other_patient_user)
+        self.record = MedicalRecord.objects.create(
+            patient=self.patient,
+            plan='Amoksitsillin 500 mg\n- Paratsetamol 500 mg',
+            assessment='Tomoq og‘rig‘i',
+        )
+
+    def test_patient_can_find_medicines_by_prescription_code(self):
+        self.auth_as(self.patient_user)
+
+        response = self.client.get(
+            reverse('medical-record-prescription-lookup'),
+            {'code': self.record.prescription_code},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['prescription_code'], self.record.prescription_code)
+        self.assertEqual(response.data['medicines'], ['Amoksitsillin 500 mg', 'Paratsetamol 500 mg'])
+
+    def test_patient_cannot_lookup_another_patients_prescription_code(self):
+        self.auth_as(self.other_patient_user)
+
+        response = self.client.get(
+            reverse('medical-record-prescription-lookup'),
+            {'code': self.record.prescription_code},
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_lookup_rejects_invalid_code_format(self):
+        self.auth_as(self.patient_user)
+
+        response = self.client.get(
+            reverse('medical-record-prescription-lookup'),
+            {'code': '1234'},
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+
 def safe_queue_base_now():
     return timezone.localtime().replace(hour=10, minute=0, second=0, microsecond=0)
 
@@ -1836,6 +1891,54 @@ class BookingWindowLunchTests(MedicalApiTestCase):
         self.assertIn(str(appointment.queue_position), ticket_text)
         self.assertEqual(job.payload['queue_number'], str(appointment.queue_position))
         self.assertEqual(job.payload['queue_number_size'], 'large')
+
+    def test_queue_ticket_uses_owner_selected_contact_options_and_number_size(self):
+        self.clinic.queue_ticket_number_size = 'small'
+        self.clinic.queue_ticket_show_address = False
+        self.clinic.queue_ticket_show_phone = True
+        self.clinic.queue_ticket_contact_url = '@lunch_clinic'
+        self.clinic.queue_ticket_show_contact = True
+        self.clinic.save(update_fields=[
+            'queue_ticket_number_size',
+            'queue_ticket_show_address',
+            'queue_ticket_show_phone',
+            'queue_ticket_contact_url',
+            'queue_ticket_show_contact',
+        ])
+
+        target_date = timezone.localdate() + timedelta(days=1)
+        slot = DoctorAvailability.objects.create(
+            doctor=self.doctor,
+            date=target_date,
+            start_time='16:10',
+            end_time='16:40',
+            status='available',
+        )
+        PrinterDevice.objects.create(
+            clinic=self.clinic,
+            device_name='Queue Ticket Options Printer',
+            device_token='queue-ticket-options-token',
+            status='ready',
+        )
+
+        response = self.client.post(reverse('appointment-online-booking'), {
+            'clinic': str(self.clinic.id),
+            'doctor': str(self.doctor.id),
+            'slot_id': str(slot.id),
+            'first_name': 'Queue',
+            'last_name': 'Options',
+            'phone_number': '+998901111776',
+            'source': 'reception',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        appointment_id = response.json()['appointment']['id']
+        job = PrintJob.objects.get(appointment_id=appointment_id)
+        ticket_text = '\n'.join(job.payload['lines'])
+        self.assertEqual(job.payload['queue_number_size'], 'small')
+        self.assertNotIn('Manzil:', ticket_text)
+        self.assertIn(f'Telefon: {self.clinic.phone_number}', ticket_text)
+        self.assertIn('Aloqa: @lunch_clinic', ticket_text)
 
     def test_reception_service_update_removes_and_adds_services_then_reprints_same_queue(self):
         staff = ReceptionStaff.objects.create(

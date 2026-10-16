@@ -350,6 +350,29 @@
   color: #64748b;
 }
 
+.history-prescription-code {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  margin: 0.25rem 0 0.9rem;
+}
+
+.history-prescription-code .history-medication-hint {
+  margin: 0;
+}
+
+.history-prescription-copy {
+  min-height: 2rem;
+  padding: 0.35rem 0.65rem;
+  color: #1e3a8a;
+  background: rgba(30, 111, 215, 0.08);
+  border: 1px solid rgba(30, 111, 215, 0.18);
+  border-radius: 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .history-medication-actions {
   display: flex;
   gap: 0.6rem;

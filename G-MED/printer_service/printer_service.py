@@ -2,6 +2,7 @@ import json
 import os
 import time
 import threading
+import textwrap
 import traceback
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -24,6 +25,7 @@ class GMedPrinterService:
         self.api_base_url = str(self.config.get('api_base_url', '')).rstrip('/')
         self.device_token = str(self.config.get('device_token', ''))
         self.clinic_id = str(self.config.get('clinic_id', ''))
+        self.pharmacy_id = str(self.config.get('pharmacy_id', ''))
         self.reception_room_id = str(self.config.get('reception_room_id', ''))
         self.service_name = str(self.config.get('service_name', 'GMedPrinterService'))
         self.printer_name_keywords = [
@@ -139,7 +141,7 @@ class GMedPrinterService:
                 self.printer_status = 'ready'
                 return printer_name
 
-        if self.config.get('allow_default_printer', True):
+        if not self.pharmacy_id and self.config.get('allow_default_printer', True):
             try:
                 default_printer = str(win32print.GetDefaultPrinter() or '').strip()
             except Exception:
@@ -167,6 +169,7 @@ class GMedPrinterService:
             'printer_status': self.printer_status,
             'device_id': self.device_token,
             'clinic_id': self.clinic_id,
+            'pharmacy_id': self.pharmacy_id,
             'reception_room_id': self.reception_room_id,
             'last_seen': datetime.utcnow().isoformat() + 'Z',
             'service_name': self.service_name,
@@ -180,10 +183,14 @@ class GMedPrinterService:
 
     def fetch_pending_jobs(self) -> List[Dict[str, Any]]:
         try:
-            resp = self._api(
-                'GET',
-                f"/api/v1/printers/jobs/pending/?device_token={self.device_token}&clinic_id={self.clinic_id}&reception_room_id={self.reception_room_id}",
-            )
+            if self.pharmacy_id:
+                pending_url = f'/api/v1/printers/jobs/pending/?device_token={self.device_token}&pharmacy_id={self.pharmacy_id}'
+            else:
+                pending_url = (
+                    f'/api/v1/printers/jobs/pending/?device_token={self.device_token}'
+                    f'&clinic_id={self.clinic_id}&reception_room_id={self.reception_room_id}'
+                )
+            resp = self._api('GET', pending_url)
             if resp.status_code != 200:
                 self.log(f"Fetch pending jobs failed: {resp.status_code} {resp.text}")
                 return []
@@ -197,6 +204,9 @@ class GMedPrinterService:
         payload = job.get('payload', {}) or {}
         queue_number = str(payload.get('queue_number') or '').strip()
         queue_number_size = str(payload.get('queue_number_size') or 'large').strip().lower()
+        is_pharmacy_receipt = payload.get('receipt_type') == 'pharmacy'
+        header_line_count = int(payload.get('header_line_count') or 0)
+        receipt_width = max(24, min(48, int(payload.get('receipt_width') or 32)))
         lines = payload.get('lines', [])
         if lines:
             text = '\n'.join(lines)
@@ -226,28 +236,42 @@ class GMedPrinterService:
 
         for line_index, raw_line in enumerate(lines_list):
             line = raw_line.strip('\t')
-            try:
-                encoded_line = line.encode('cp866')
-            except Exception:
-                encoded_line = line.encode('utf-8', errors='ignore')
-            encoded_lines.append((encoded_line, line_index == queue_number_line_index))
+            if is_pharmacy_receipt:
+                line = line.replace('’', "'").replace('‘', "'").replace('“', '"').replace('”', '"')
+                wrapped_lines = textwrap.wrap(
+                    line,
+                    width=receipt_width,
+                    break_long_words=True,
+                    break_on_hyphens=False,
+                ) or ['']
+            else:
+                wrapped_lines = [line]
+            for wrapped_line in wrapped_lines:
+                try:
+                    encoded_line = wrapped_line.encode('cp866', errors='replace')
+                except Exception:
+                    encoded_line = wrapped_line.encode('utf-8', errors='replace')
+                encoded_lines.append((encoded_line, line_index == queue_number_line_index))
 
         output = b'\x1B\x40'
         output += b'\x1B\x74\x01'
-        output += b'\x1B\x61\x01'
+        output += b'\x1B\x61\x00' if is_pharmacy_receipt else b'\x1B\x61\x01'
         output += b'\x1B\x21\x00'
         size_command = {
             'small': b'\x1B\x21\x01',
             'medium': b'\x1B\x21\x10',
             'large': b'\x1D\x21\x22',
         }.get(queue_number_size, b'\x1D\x21\x22')
-        for line, is_queue_number in encoded_lines:
+        for line_index, (line, is_queue_number) in enumerate(encoded_lines):
+            if is_pharmacy_receipt:
+                output += b'\x1B\x61\x01' if line_index < header_line_count else b'\x1B\x61\x00'
+                output += b'\x1B\x45\x01' if line_index == 0 else b'\x1B\x45\x00'
             if is_queue_number:
                 output += size_command
             output += line + b'\n'
             if is_queue_number:
                 output += b'\x1D\x21\x00'
-        output += b'\n\x1B\x64\x0A\x1D\x56\x00'
+        output += b'\x1B\x45\x00\n\x1B\x64\x04\x1D\x56\x00' if is_pharmacy_receipt else b'\n\x1B\x64\x0A\x1D\x56\x00'
         return output
 
     def print_to_printer(self, job: Dict[str, Any]) -> None:
@@ -276,6 +300,7 @@ class GMedPrinterService:
             'error_message': error_message,
             'device_id': self.device_token,
             'clinic_id': self.clinic_id,
+            'pharmacy_id': self.pharmacy_id,
             'reception_room_id': self.reception_room_id,
             'device_name': self.printer_name or 'unknown',
             'printed_at': datetime.utcnow().isoformat() + 'Z' if status == 'completed' else None,

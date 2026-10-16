@@ -1,7 +1,9 @@
 import { useState } from 'react'
+import {
+  findAvailableMedicineMatch,
+  medicineSearchMatches,
+} from '../utils/medicineMatching'
 import './PharmacyCard.css'
-
-const normalizeMedicineText = (value) => String(value || '').toLowerCase().replace(/\s+/g, ' ').trim()
 
 const getMedicineLabel = (medicine) => String(medicine?.name || medicine?.medicine_name || 'Noma\'lum dori').trim()
 
@@ -13,14 +15,9 @@ const buildRequestedMedicineMatch = (requestedMedicines = [], medicines = []) =>
   let total = 0
 
   requested.forEach((requestedMedicine) => {
-    const normalizedRequested = normalizeMedicineText(requestedMedicine)
-    const matched = availableMedicines.find((medicine) => {
-      const normalizedMedicine = normalizeMedicineText(getMedicineLabel(medicine))
-      if (!normalizedRequested || !normalizedMedicine) return false
-      return normalizedMedicine.includes(normalizedRequested) || normalizedRequested.includes(normalizedMedicine)
-    })
+    const matched = findAvailableMedicineMatch(availableMedicines, requestedMedicine)
 
-    if (!matched || Number(matched.stock || 0) <= 0) {
+    if (!matched) {
       missing.push(requestedMedicine)
       return
     }
@@ -31,7 +28,7 @@ const buildRequestedMedicineMatch = (requestedMedicines = [], medicines = []) =>
       requestedName: requestedMedicine,
       matchedName: getMedicineLabel(matched),
       price,
-      stock: Number(matched.stock || 0),
+      stock: Number(matched.stock ?? matched.quantity_in_stock ?? 0),
     })
   })
 
@@ -329,10 +326,11 @@ const PharmacyCard = ({ pharmacy, compact = false, requestedMedicines = [] }) =>
               {pharmacy.medicines && pharmacy.medicines.length > 0 ? (
                 (() => {
                   const filteredMedicines = pharmacy.medicines.filter(medicine => {
-                    const name = getMedicineLabel(medicine).toLowerCase()
-                    const category = (medicine.category || '').toLowerCase()
-                    const query = searchQuery.toLowerCase()
-                    return name.includes(query) || category.includes(query)
+                    const query = searchQuery.trim()
+                    const category = String(medicine.category || '').toLowerCase()
+                    return !query
+                      || medicineSearchMatches(query, medicine)
+                      || category.includes(query.toLowerCase())
                   })
 
                   if (filteredMedicines.length === 0) {

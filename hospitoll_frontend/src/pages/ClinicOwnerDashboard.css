@@ -1156,13 +1156,74 @@
 .clinic-settings-form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 1.25rem;
 }
 
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.9rem 1rem;
+  gap: 1.1rem 1.25rem;
+  align-items: start;
+}
+
+.settings-grid > .full-width {
+  grid-column: 1 / -1;
+}
+
+.settings-panel {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 1.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.85rem;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--primary-color) 4%, var(--bg-white)),
+    var(--bg-white) 58%
+  );
+}
+
+.settings-section-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.settings-section-heading h3 {
+  margin: 0;
+  color: var(--text-dark);
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.settings-feature-toggles .settings-section-heading .settings-help-text {
+  margin: 0;
+  color: var(--text-light);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.queue-ticket-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 1rem;
+}
+
+.queue-ticket-settings > .settings-section-heading,
+.queue-ticket-settings > .settings-toggle-grid {
+  grid-column: 1 / -1;
+}
+
+.settings-toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.settings-description-field,
+.settings-password-field {
+  width: 100%;
 }
 
 .clinic-settings-form textarea {
@@ -1257,6 +1318,24 @@
 @media (max-width: 768px) {
   .settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .settings-grid > .full-width {
+    grid-column: auto;
+  }
+
+  .queue-ticket-settings,
+  .settings-toggle-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .queue-ticket-settings > .settings-section-heading,
+  .queue-ticket-settings > .settings-toggle-grid {
+    grid-column: auto;
+  }
+
+  .settings-panel {
+    padding: 1rem;
   }
 
   .working-hours-row {
@@ -2714,10 +2793,47 @@
   cursor: pointer;
 }
 
-.settings-toggle-row input {
+.settings-toggle-row input[type="checkbox"] {
+  flex: 0 0 auto;
   width: 1.15rem;
   height: 1.15rem;
   accent-color: var(--primary-color);
+}
+
+.settings-ticket-field {
+  display: grid;
+  gap: 0.4rem;
+  color: var(--text-dark);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.settings-ticket-field input,
+.settings-toggle-row select {
+  width: 100%;
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-white);
+  color: var(--text-dark);
+  font: inherit;
+}
+
+.settings-toggle-row select {
+  width: auto;
+  min-width: 130px;
+}
+
+.settings-ticket-size select {
+  min-width: 145px;
+}
+
+.settings-feature-toggles .settings-help-text {
+  margin: 0;
+  color: var(--text-light);
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .attendance-actions {

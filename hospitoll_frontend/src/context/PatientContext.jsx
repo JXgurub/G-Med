@@ -48,6 +48,7 @@ const buildPatientHistory = async (medicalRecords) => {
 
       history.push({
         id: record.id,
+        prescriptionCode: record.prescription_code,
         date: record.created_at?.split('T')[0] || record.visit_date,
         diagnosis: record.assessment || record.diagnosis || 'Ko\'rik amalga oshirildi',
         complaint: record.chief_complaint || record.reason || '',

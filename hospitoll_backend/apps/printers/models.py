@@ -17,7 +17,27 @@ class PrinterDevice(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
-    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.CASCADE, related_name='printer_devices')
+    clinic = models.ForeignKey(
+        'clinics.Clinic',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='printer_devices',
+    )
+    pharmacy = models.ForeignKey(
+        'pharmacies.Pharmacy',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='printer_devices',
+    )
+    pos_device = models.OneToOneField(
+        'pharmacies.PharmacyPosDevice',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='printer_device',
+    )
     reception_room = models.ForeignKey('clinics.ClinicDepartment', on_delete=models.SET_NULL, null=True, blank=True, related_name='printer_devices')
     device_name = models.CharField(max_length=120, default='G-MED Printer Device', help_text='Lokal qurilma nomi')
     printer_name = models.CharField(max_length=150, blank=True, default='', help_text='Masalan: Xprinter XP-Q200')
@@ -29,7 +49,11 @@ class PrinterDevice(models.Model):
 
     class Meta:
         ordering = ['-updated_at']
-        indexes = [models.Index(fields=['clinic', 'status']), models.Index(fields=['device_token'])]
+        indexes = [
+            models.Index(fields=['clinic', 'status']),
+            models.Index(fields=['pharmacy', 'status']),
+            models.Index(fields=['device_token']),
+        ]
 
     def __str__(self):
         return self.device_name or self.printer_name or str(self.id)
@@ -44,7 +68,27 @@ class PrintJob(models.Model):
     )
 
     id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
-    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.CASCADE, related_name='print_jobs')
+    clinic = models.ForeignKey(
+        'clinics.Clinic',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='print_jobs',
+    )
+    pharmacy = models.ForeignKey(
+        'pharmacies.Pharmacy',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='print_jobs',
+    )
+    sale = models.OneToOneField(
+        'pharmacies.PharmacySale',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='print_job',
+    )
     reception_room = models.ForeignKey('clinics.ClinicDepartment', on_delete=models.SET_NULL, null=True, blank=True, related_name='print_jobs')
     printer_device = models.ForeignKey(PrinterDevice, on_delete=models.SET_NULL, null=True, blank=True, related_name='jobs')
     appointment = models.ForeignKey('medical.Appointment', on_delete=models.SET_NULL, null=True, blank=True, related_name='print_jobs')

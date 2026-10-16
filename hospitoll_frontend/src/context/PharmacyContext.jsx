@@ -1,5 +1,19 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-import { authApi, pharmaciesApi, pharmacyInventoryApi, medicinesApi, resolveMediaUrl } from '../services/api'
+import {
+  authApi,
+  pharmaciesApi,
+  pharmacyInventoryApi,
+  medicinesApi,
+  pharmacyPosApi,
+  resolveMediaUrl,
+} from '../services/api'
+import {
+  getLastCachedPharmacy,
+  getPosSnapshot,
+  saveCachedPharmacy,
+  savePosInventory,
+  savePosSnapshot,
+} from '../services/pharmacyPosStore'
 
 const PharmacyContext = createContext()
 
@@ -61,6 +75,16 @@ const mapInventoryToMedicine = (inventoryItem) => {
     countryOfOrigin: normalizeCountryOption(inventoryItem.medicine_country_of_origin || ''),
     expiryDate: inventoryItem.expiry_date || ''
   }
+}
+
+const filterInventoryForPharmacy = (inventory, pharmacyId) => {
+  const expectedPharmacyId = String(pharmacyId)
+  return inventory.filter((item) => {
+    const itemPharmacyIds = [item.pharmacy_id, item.pharmacy?.id ?? item.pharmacy]
+      .filter((id) => id != null)
+    return itemPharmacyIds.length > 0
+      && itemPharmacyIds.every((id) => String(id) === expectedPharmacyId)
+  })
 }
 
 const normalizeMedicineName = (value) => (value || '').trim().toLowerCase()
@@ -131,9 +155,34 @@ export const PharmacyProvider = ({ children }) => {
   const [medicines, setMedicines] = useState([])
   const [loading, setLoading] = useState(true)
 
-  const loadPharmacyInventory = async (pharmacyId) => {
+  const loadPharmacyInventory = async (pharmacyId, includeMedicineCatalog = false) => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      try {
+        const snapshot = await getPosSnapshot(pharmacyId)
+        const cachedRows = filterInventoryForPharmacy(snapshot?.inventory || [], pharmacyId)
+        setMedicines(cachedRows.map(mapInventoryToMedicine))
+        return cachedRows
+      } catch (error) {
+        console.error('Error loading cached pharmacy inventory:', error)
+        setMedicines([])
+        return []
+      }
+    }
+
     try {
-      const items = await fetchAllInventoryRows(pharmacyId)
+      let items
+      if (includeMedicineCatalog) {
+        const snapshot = await pharmacyPosApi.getSnapshot()
+        if (String(snapshot?.pharmacy?.id) !== String(pharmacyId)) {
+          throw new Error('Serverdan boshqa dorixonaga tegishli ma’lumot keldi.')
+        }
+        snapshot.inventory = filterInventoryForPharmacy(snapshot.inventory || [], pharmacyId)
+        await savePosSnapshot(snapshot)
+        items = snapshot.inventory
+      } else {
+        items = filterInventoryForPharmacy(await fetchAllInventoryRows(pharmacyId), pharmacyId)
+        await savePosInventory(pharmacyId, items)
+      }
       const mapped = items.map((item) => ({
         ...item,
         medicine_name: item.medicine_name || item.medicine_name_fallback,
@@ -143,8 +192,16 @@ export const PharmacyProvider = ({ children }) => {
       return mapped
     } catch (error) {
       console.error('Error loading pharmacy inventory:', error)
-      setMedicines([])
-      return []
+      try {
+        const snapshot = await getPosSnapshot(pharmacyId)
+        const cachedRows = filterInventoryForPharmacy(snapshot?.inventory || [], pharmacyId)
+        setMedicines(cachedRows.map(mapInventoryToMedicine))
+        return cachedRows
+      } catch (cacheError) {
+        console.error('Error loading cached pharmacy inventory:', cacheError)
+        setMedicines([])
+        return []
+      }
     }
   }
 
@@ -153,6 +210,11 @@ export const PharmacyProvider = ({ children }) => {
 
     const pharmacy = await pharmaciesApi.getMy()
     const normalized = normalizePharmacy(pharmacy)
+    try {
+      await saveCachedPharmacy(normalized)
+    } catch (cacheError) {
+      console.error('[PharmacyContext] Could not cache pharmacy profile:', cacheError)
+    }
     const isSubscriptionExpired = pharmacy.subscription?.is_expired || false
 
     setCurrentPharmacy((prev) => ({
@@ -167,7 +229,7 @@ export const PharmacyProvider = ({ children }) => {
         : item
     )))
 
-    await loadPharmacyInventory(pharmacy.id)
+    await loadPharmacyInventory(pharmacy.id, true)
     return normalized
   }
 
@@ -189,6 +251,12 @@ export const PharmacyProvider = ({ children }) => {
     console.log('[PharmacyContext] Loading session...')
     try {
       const pharmacy = await pharmaciesApi.getMy()
+      const normalizedPharmacy = normalizePharmacy(pharmacy)
+      try {
+        await saveCachedPharmacy(normalizedPharmacy)
+      } catch (cacheError) {
+        console.error('[PharmacyContext] Could not cache pharmacy profile:', cacheError)
+      }
 
       // Check if pharmacy is suspended or blocked (but don't clear tokens on refresh)
       if (pharmacy.status === 'suspended' || pharmacy.status === 'inactive' || pharmacy.is_blocked) {
@@ -201,12 +269,12 @@ export const PharmacyProvider = ({ children }) => {
 
       console.log('[PharmacyContext] Pharmacy loaded successfully:', pharmacy.name)
       setCurrentPharmacy({
-        ...normalizePharmacy(pharmacy),
+        ...normalizedPharmacy,
         isSubscriptionExpired
       })
       // Try to load inventory but don't fail if it errors
       try {
-        await loadPharmacyInventory(pharmacy.id)
+        await loadPharmacyInventory(pharmacy.id, true)
       } catch (inventoryErr) {
         console.warn('[PharmacyContext] Could not load inventory:', inventoryErr)
         // Continue anyway
@@ -218,6 +286,19 @@ export const PharmacyProvider = ({ children }) => {
         return
       }
       console.error('[PharmacyContext] Session restore error:', error?.response?.status, error.message)
+      if (!error?.response) {
+        try {
+          const cachedPharmacy = await getLastCachedPharmacy()
+          if (cachedPharmacy) {
+            const normalized = normalizePharmacy(cachedPharmacy)
+            setCurrentPharmacy(normalized)
+            await loadPharmacyInventory(normalized.id)
+            return
+          }
+        } catch (cacheError) {
+          console.error('[PharmacyContext] Cached session restore failed:', cacheError)
+        }
+      }
       // Only clear tokens for 401/403 errors, not network errors
       if (error?.response?.status === 401 || error?.response?.status === 403) {
         console.log('[PharmacyContext] 401/403 detected, clearing tokens')
@@ -231,14 +312,16 @@ export const PharmacyProvider = ({ children }) => {
 
   useEffect(() => {
     const init = async () => {
-      try {
-        const list = await pharmaciesApi.getAll()
-        const results = list?.results || list || []
-        const normalized = results.map(normalizePharmacy)
-        setPharmacies(normalized)
-      } catch (error) {
-        console.warn('Warning: Could not load pharmacies list:', error)
-        setPharmacies([])
+      if (localStorage.getItem('user_role') !== 'pharmacy') {
+        try {
+          const list = await pharmaciesApi.getAll()
+          const results = list?.results || list || []
+          const normalized = results.map(normalizePharmacy)
+          setPharmacies(normalized)
+        } catch (error) {
+          console.warn('Warning: Could not load pharmacies list:', error)
+          setPharmacies([])
+        }
       }
       
       // Load session - errors are handled inside loadSession
@@ -265,6 +348,11 @@ export const PharmacyProvider = ({ children }) => {
 
       try {
         const pharmacy = await pharmaciesApi.getMy()
+        try {
+          await saveCachedPharmacy(normalizePharmacy(pharmacy))
+        } catch (cacheError) {
+          console.error('[PharmacyContext] Could not cache pharmacy profile:', cacheError)
+        }
 
         // Check if pharmacy is suspended or blocked
         if (pharmacy.status === 'suspended' || pharmacy.status === 'inactive' || pharmacy.is_blocked) {
@@ -287,7 +375,7 @@ export const PharmacyProvider = ({ children }) => {
         setCurrentPharmacy(normalizePharmacy(pharmacy))
         // Load inventory but don't fail if it errors
         try {
-          await loadPharmacyInventory(pharmacy.id)
+          await loadPharmacyInventory(pharmacy.id, true)
         } catch (inventoryError) {
           console.warn('Warning: Could not load pharmacy inventory:', inventoryError)
           // Still return success, just without inventory
@@ -385,7 +473,10 @@ export const PharmacyProvider = ({ children }) => {
       })
     }
 
-    const stockValue = medicineData.stock === 'out' ? 0 : parseInt(medicineData.stock, 10) || 1
+    const stockValue = Number(medicineData.stock)
+    if (!Number.isSafeInteger(stockValue) || stockValue < 0) {
+      throw new Error('Dori miqdori 0 yoki undan katta butun son bo‘lishi kerak.')
+    }
     const unitPrice = parseInt(medicineData.price, 10) || 0
     const expiryDateValue = requestedExpiryDate || expiryDate.toISOString().slice(0, 10)
 
@@ -442,6 +533,10 @@ export const PharmacyProvider = ({ children }) => {
     if (!targetMedicine) {
       throw new Error('Dori topilmadi')
     }
+    const stockValue = Number(updates.stock)
+    if (!Number.isSafeInteger(stockValue) || stockValue < 0) {
+      throw new Error('Dori miqdori 0 yoki undan katta butun son bo‘lishi kerak.')
+    }
 
     await medicinesApi.update(targetMedicine.medicineId, {
       name: buildMedicineDisplayName(updates.name || targetMedicine.name || '', updates.strength).trim(),
@@ -453,7 +548,7 @@ export const PharmacyProvider = ({ children }) => {
     })
 
     await pharmacyInventoryApi.update(inventoryId, {
-      quantity_in_stock: updates.stock === 'out' ? 0 : parseInt(updates.stock, 10),
+      quantity_in_stock: stockValue,
       unit_price: parseInt(updates.price, 10),
       expiry_date: toIsoDate(updates.expiryDate) || toIsoDate(targetMedicine.expiryDate),
     })
@@ -466,15 +561,6 @@ export const PharmacyProvider = ({ children }) => {
   const deleteMedicine = async (pharmacyId, medicineId) => {
     await pharmacyInventoryApi.delete(medicineId)
     await loadPharmacyInventory(pharmacyId)
-  }
-
-  const clearAllMedicines = async (pharmacyId) => {
-    const result = await pharmacyInventoryApi.clearAll()
-    const deletedCount = Number(result?.deleted_count || 0)
-    const failedCount = 0
-
-    await loadPharmacyInventory(pharmacyId)
-    return { deletedCount, failedCount }
   }
 
   const uploadPharmacyLogo = async (file) => {
@@ -539,7 +625,6 @@ export const PharmacyProvider = ({ children }) => {
         addMedicine,
         updateMedicine,
         deleteMedicine,
-        clearAllMedicines,
         uploadPharmacyLogo,
         removePharmacyLogo,
         refreshCurrentPharmacyData
