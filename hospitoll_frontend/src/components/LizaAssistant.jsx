@@ -930,6 +930,24 @@ const LizaAssistant = () => {
 
   if (!isAssistantAvailable) return null
 
+  const assistantButton = (
+    <button
+      type="button"
+      className="liza-assistant-button"
+      data-enabled={enabled}
+      aria-pressed={enabled}
+      aria-label={enabled ? 'Liza tinglashini to‘xtatish' : 'Liza ovozli yordamchisini yoqish'}
+      onClick={toggleAssistant}
+    >
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="9" y="3" width="6" height="12" rx="3" />
+        <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3m-4 0h8" />
+      </svg>
+      <span>{enabled ? (phase === 'wake' ? 'Liza tinglayapti' : 'Liza') : 'Liza'}</span>
+      <span className="liza-assistant-indicator" aria-hidden="true" />
+    </button>
+  )
+
   return (
     <div className="liza-assistant" data-phase={phase}>
       {status ? (
@@ -1031,21 +1049,7 @@ const LizaAssistant = () => {
           </section>
         </div>
       ) : null}
-      <button
-        type="button"
-        className="liza-assistant-button"
-        data-enabled={enabled}
-        aria-pressed={enabled}
-        aria-label={enabled ? 'Liza tinglashini to‘xtatish' : 'Liza ovozli yordamchisini yoqish'}
-        onClick={toggleAssistant}
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="9" y="3" width="6" height="12" rx="3" />
-          <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3m-4 0h8" />
-        </svg>
-        <span>{enabled ? (phase === 'wake' ? 'Liza tinglayapti' : 'Liza') : 'Liza'}</span>
-        <span className="liza-assistant-indicator" aria-hidden="true" />
-      </button>
+      {assistantButton}
     </div>
   )
 }

@@ -204,6 +204,88 @@ GET /doctors/{id}/ratings/
 PATIENT ENDPOINTS
 ━━━━━━━━━━━━━━━━
 
+POST /patients/treatment-plans/
+  Description: Create a private treatment roadmap (patient only)
+  Authentication: Required (patient role)
+  Request:
+    {
+      "title": "Reabilitatsiya",
+      "summary": "Shifokor bilan kelishilgan reja",
+      "start_date": "2026-10-17",
+      "target_date": "2026-11-17"
+    }
+
+GET /patients/treatment-plans/
+  Description: List the authenticated patient's plans with their steps
+
+PATCH /patients/treatment-plans/{id}/
+  Description: Update plan details or set status to "active" / "completed"
+
+DELETE /patients/treatment-plans/{id}/
+  Description: Delete a plan and its steps
+
+POST /patients/treatment-steps/
+  Description: Add a step to one of the authenticated patient's plans
+  Request:
+    {
+      "plan": "<plan UUID>",
+      "title": "Nazorat ko‘rigiga borish",
+      "description": "",
+      "due_date": "2026-10-24"
+    }
+
+PATCH /patients/treatment-steps/{id}/
+  Description: Update a step or set "is_completed" to true / false
+
+DELETE /patients/treatment-steps/{id}/
+  Description: Delete one of the authenticated patient's steps
+
+Treatment plans and steps are private to their patient account. This feature
+tracks patient-entered steps and does not provide diagnoses or treatment advice.
+
+POST /patients/health-readings/
+  Description: Log a health reading (patient only). Blood pressure and glucose
+  use generic monitoring thresholds. Liver results are compared with the
+  reference range entered from the patient's laboratory report.
+  Request (blood pressure):
+    { "metric": "blood_pressure", "systolic": 150, "diastolic": 95,
+      "share_with_care_team": true }
+  Request (glucose):
+    { "metric": "blood_glucose", "glucose_mmol": "8.1",
+      "glucose_context": "fasting|after_meal|random" }
+  Request (liver test):
+    { "metric": "liver_alt", "value": "75", "unit": "U/L",
+      "reference_min": "0", "reference_max": "40",
+      "share_with_care_team": true }
+  Liver metric values: liver_alt, liver_ast, liver_bilirubin, liver_albumin,
+  liver_ggt, liver_viral_load. Include at least one laboratory reference bound.
+  Optional: "measured_at", "note".
+  If shared and not normal, linked doctors and clinic owners get a notification.
+
+GET /patients/health-readings/?metric=<metric>
+DELETE /patients/health-readings/{id}/
+  Description: List / delete the patient's own readings
+
+POST /patients/liver-journal/
+  Description: Save a daily symptom and measurement entry (patient only).
+  Supported symptoms: jaundice, abdominal_swelling, fatigue, itching,
+  dark_urine, weight_change, bloody_vomit, black_stool, confusion.
+  Optional measurements: weight_kg, abdominal_circumference_cm, salt_grams,
+  fluid_ml. Optional "recorded_at" and "note".
+
+GET /patients/liver-journal/
+DELETE /patients/liver-journal/{id}/
+  Description: List / delete the patient's own journal entries
+
+GET /patients/health-alerts/?status=all
+  Description: Doctor or clinic owner; shared non-normal readings of linked
+  patients (unreviewed only unless status=all)
+
+POST /patients/health-alerts/{id}/review/
+  Description: Mark an alert as reviewed
+
+This feature supports monitoring and communication only; it does not diagnose.
+
 POST /patients/medication-reminders/
   Description: Add a recurring medication reminder (patient only)
   Authentication: Required (patient role)
@@ -235,7 +317,9 @@ POST /patients/medication-reminders/acknowledge/
       "acknowledgement_token": "<token from the notification>"
     }
   Acknowledging a dose suppresses further reminders until its next scheduled
-  dose. If not acknowledged, a new reminder is sent every 10 minutes.
+  dose. If not acknowledged, a reminder is sent every 10 minutes; after the
+  first 10-minute follow-up, an unacknowledged dose is reported to linked
+  doctors and clinic owners once.
 
 Notifications are delivered as Web Push. The patient must allow browser
 notifications, and the Web Push keys, Celery worker, and Celery Beat scheduler

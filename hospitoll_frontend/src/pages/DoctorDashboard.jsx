@@ -4,6 +4,7 @@ import { useDoctor } from '../context/DoctorContext'
 import { clinicsApi, doctorsApi, patientsApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
 import MedicineAutocomplete from '../components/MedicineAutocomplete'
+import DoctorHealthAlerts from '../components/DoctorHealthAlerts'
 import { normalizeEmailWithDefaultDomain } from '../utils/helpers'
 import { formatCurrencyInput, parseCurrencyInput } from '../utils/currency'
 import './DoctorDashboard.css'
@@ -1476,6 +1477,7 @@ const DoctorDashboard = () => {
               </div>
             </div>
           </section>
+          <DoctorHealthAlerts />
           <section className="patients-section">
             <div className="section-header">
               <h2>Bemorlar</h2>

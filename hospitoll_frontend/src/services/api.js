@@ -497,6 +497,14 @@ export const doctorsApi = {
 
 // Patient API endpoints
 export const patientsApi = {
+  getHealthReadings: (params) => api.get('/patients/health-readings/', params),
+  createHealthReading: (data) => api.post('/patients/health-readings/', data),
+  deleteHealthReading: (id) => api.delete(`/patients/health-readings/${id}/`),
+  getLiverJournal: () => api.get('/patients/liver-journal/'),
+  createLiverJournalEntry: (data) => api.post('/patients/liver-journal/', data),
+  deleteLiverJournalEntry: (id) => api.delete(`/patients/liver-journal/${id}/`),
+  getHealthAlerts: (params) => api.get('/patients/health-alerts/', params),
+  reviewHealthAlert: (id) => api.post(`/patients/health-alerts/${id}/review/`, {}),
   getAll: (params) => api.get('/patients/', params),
   getById: (id) => api.get(`/patients/${id}/`),
   getMy: () => api.get('/patients/my/'),
@@ -508,6 +516,13 @@ export const patientsApi = {
   createMedicationReminder: (data) => api.post('/patients/medication-reminders/', data),
   updateMedicationReminder: (id, data) => api.patch(`/patients/medication-reminders/${id}/`, data),
   deleteMedicationReminder: (id) => api.delete(`/patients/medication-reminders/${id}/`),
+  getTreatmentPlans: () => api.get('/patients/treatment-plans/'),
+  createTreatmentPlan: (data) => api.post('/patients/treatment-plans/', data),
+  updateTreatmentPlan: (id, data) => api.patch(`/patients/treatment-plans/${id}/`, data),
+  deleteTreatmentPlan: (id) => api.delete(`/patients/treatment-plans/${id}/`),
+  createTreatmentStep: (data) => api.post('/patients/treatment-steps/', data),
+  updateTreatmentStep: (id, data) => api.patch(`/patients/treatment-steps/${id}/`, data),
+  deleteTreatmentStep: (id) => api.delete(`/patients/treatment-steps/${id}/`),
 }
 
 // Pharmacy API endpoints

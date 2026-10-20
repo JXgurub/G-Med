@@ -8,6 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.site_settings.models import BroadcastNotification
+from .health_alerts import notify_missed_dose_to_care_team
 from .models import PatientMedicationReminder
 from .reminder_utils import next_scheduled_reminder_at
 
@@ -77,6 +78,15 @@ def send_due_medication_reminders():
             scheduled_dose_at = reminder.next_scheduled_reminder_at if scheduled_due else None
             dose_is_pending = reminder.pending_dose_at is not None
 
+            if (
+                dose_is_pending
+                and reminder.next_nudge_at is not None
+                and reminder.next_nudge_at <= now
+                and reminder.missed_dose_reported_at is None
+                and notify_missed_dose_to_care_team(reminder)
+            ):
+                reminder.missed_dose_reported_at = now
+
             if scheduled_due:
                 reminder.next_scheduled_reminder_at = next_scheduled_reminder_at(
                     reminder.daily_times,
@@ -112,6 +122,7 @@ def send_due_medication_reminders():
                 'pending_dose_at',
                 'next_nudge_at',
                 'acknowledgement_token',
+                'missed_dose_reported_at',
                 'last_message_key',
                 'updated_at',
             ])

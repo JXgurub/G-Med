@@ -128,6 +128,18 @@
   box-shadow: 0 12px 24px rgba(30, 111, 215, 0.2);
 }
 
+.patient-liver-care { display: grid; gap: 28px; }
+.patient-liver-care-heading { padding: 20px 22px; border-radius: 16px; background: linear-gradient(130deg, rgba(30, 111, 215, .1), rgba(100, 179, 52, .12)); }
+.patient-liver-care-heading h2, .patient-liver-care-heading p { margin: 0; }
+.patient-liver-care-heading p { margin-top: 6px; color: #475569; }
+.liver-food-guidance { padding: 20px; border-radius: 14px; background: #fff; box-shadow: 0 8px 22px rgba(20, 36, 80, .06); }
+.liver-food-guidance h2, .liver-food-guidance h3 { margin: 0 0 10px; }
+.liver-food-guidance h3 { margin-top: 22px; }
+.liver-food-guidance ul { display: grid; gap: 8px; padding-left: 22px; color: #334155; line-height: 1.55; }
+.liver-food-guidance > p { color: #64748b; line-height: 1.55; }
+.liver-food-guidance .diet-tables-page { padding: 8px 0 0; }
+.reminder-missed-dose { color: #b91c1c !important; font-weight: 600; }
+
 .history-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -1091,5 +1103,805 @@
 
   .reminder-actions .history-action-btn {
     flex: 1;
+  }
+}
+
+.tab-icon,
+.tab-mobile-label {
+  display: none;
+}
+
+.tab-btn:focus-visible,
+.history-action-btn:focus-visible,
+.patient-logout-button:focus-visible,
+.save-profile-btn:focus-visible {
+  outline: 3px solid #0f766e;
+  outline-offset: 3px;
+}
+
+@media (max-width: 700px) {
+  .patient-portal {
+    min-height: 100dvh;
+    background: #f3f7fb;
+  }
+
+  .patient-hero {
+    padding: 1.35rem 0 1.1rem;
+    border-radius: 0 0 1.5rem 1.5rem;
+    background: linear-gradient(135deg, #0f766e 0%, #0e7490 100%);
+  }
+
+  .patient-hero-content {
+    gap: 1rem;
+    padding: 0 1rem;
+  }
+
+  .patient-profile {
+    width: 100%;
+    gap: 0.85rem;
+  }
+
+  .patient-avatar {
+    width: 54px;
+    height: 54px;
+    flex: 0 0 54px;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 18px;
+    font-size: 1.1rem;
+    letter-spacing: 0;
+  }
+
+  .patient-tag {
+    margin-bottom: 0.2rem;
+    font-size: 0.68rem;
+    letter-spacing: 0.12rem;
+  }
+
+  .patient-profile h1 {
+    margin: 0;
+    font-size: clamp(1.2rem, 5vw, 1.55rem);
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .patient-meta {
+    margin: 0.35rem 0 0;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .patient-status {
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+
+  .status-card {
+    min-width: 0;
+    padding: 0.7rem 0.8rem;
+    gap: 0.3rem;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 0.9rem;
+    background: rgba(255, 255, 255, 0.13);
+  }
+
+  .status-card span {
+    font-size: 0.69rem;
+  }
+
+  .status-card strong {
+    font-size: 0.82rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .patient-content {
+    width: 100%;
+    padding: 1rem 0.85rem calc(6.5rem + env(safe-area-inset-bottom));
+  }
+
+  .tabs {
+    position: fixed;
+    z-index: 1200;
+    right: 0.65rem;
+    bottom: calc(0.55rem + env(safe-area-inset-bottom));
+    left: 0.65rem;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 0.1rem;
+    width: auto;
+    margin: 0 auto;
+    padding: 0.4rem 0.25rem;
+    border: 1px solid rgba(226, 232, 240, 0.9);
+    border-radius: 1.15rem;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 8px 28px rgba(15, 23, 42, 0.16);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .tab-btn {
+    display: flex;
+    min-width: 0;
+    min-height: 3.25rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.12rem;
+    padding: 0.3rem 0.1rem;
+    border: 0;
+    border-radius: 0.8rem;
+    background: transparent;
+    color: #64748b;
+    box-shadow: none;
+    transition: background-color 0.18s ease, color 0.18s ease;
+  }
+
+  .tab-btn.active {
+    background: #e8f5f3;
+    color: #0f766e;
+    box-shadow: none;
+  }
+
+  .patient-conversation-link {
+    display: flex;
+    text-decoration: none;
+  }
+
+  .tab-label {
+    display: none;
+  }
+
+  .tab-icon {
+    display: block;
+    font-size: 1.1rem;
+    line-height: 1.15;
+  }
+
+  .tab-mobile-label {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 0.65rem;
+    font-weight: 700;
+    line-height: 1.15;
+    text-overflow: ellipsis;
+  }
+
+  .history-grid,
+  .ratings-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.85rem;
+  }
+
+  .history-card-modern,
+  .rating-card,
+  .patient-profile-form,
+  .patient-account-actions,
+  .liver-food-guidance {
+    border-radius: 1.1rem;
+    box-shadow: 0 5px 18px rgba(20, 36, 80, 0.055);
+  }
+
+  .history-card-modern {
+    padding: 1.05rem;
+  }
+
+  .history-card-modern .history-header {
+    align-items: flex-start;
+    margin-bottom: 0.8rem;
+  }
+
+  .history-card-modern .history-date,
+  .history-pill {
+    padding: 0.38rem 0.65rem;
+    font-size: 0.74rem;
+  }
+
+  .history-card-modern .history-diagnosis {
+    font-size: 1.3rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  .history-subtitle {
+    font-size: 0.82rem;
+    line-height: 1.45;
+  }
+
+  .history-complaint-card,
+  .history-medications-panel {
+    padding: 0.85rem;
+    border-radius: 0.85rem;
+  }
+
+  .history-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+  }
+
+  .history-detail-card {
+    min-width: 0;
+    padding: 0.7rem;
+    border-radius: 0.8rem;
+  }
+
+  .history-detail-label {
+    font-size: 0.7rem;
+    line-height: 1.35;
+  }
+
+  .history-detail-card strong {
+    font-size: 0.85rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .history-medications-header {
+    gap: 0.65rem;
+  }
+
+  .history-medications-header > div:first-child {
+    min-width: 0;
+  }
+
+  .history-medication-hint {
+    font-size: 0.75rem;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+
+  .history-medication-actions {
+    width: 100%;
+    flex-direction: column;
+  }
+
+  .history-action-btn {
+    min-height: 2.75rem;
+    padding: 0.7rem 0.85rem;
+  }
+
+  .medication-tags {
+    gap: 0.4rem;
+  }
+
+  .medication-tag {
+    max-width: 100%;
+    padding: 0.35rem 0.65rem;
+    overflow-wrap: anywhere;
+  }
+
+  .rating-card {
+    padding: 1.1rem;
+  }
+
+  .rating-header {
+    min-width: 0;
+    gap: 0.75rem;
+  }
+
+  .rating-header > div:last-child {
+    min-width: 0;
+  }
+
+  .rating-header h3,
+  .rating-header p {
+    overflow-wrap: anywhere;
+  }
+
+  .rating-star {
+    width: 44px;
+    height: 44px;
+  }
+
+  .patient-liver-care {
+    gap: 0.85rem;
+  }
+
+  .patient-liver-care-heading,
+  .roadmap-heading {
+    padding: 1.1rem;
+    border-radius: 1.1rem;
+  }
+
+  .patient-liver-care-heading h2,
+  .health-monitor-header h2,
+  .liver-journal-heading h2,
+  .liver-food-guidance h2,
+  .roadmap-heading h2 {
+    font-size: 1.15rem;
+    line-height: 1.35;
+  }
+
+  .patient-liver-care-heading p,
+  .liver-food-guidance > p {
+    font-size: 0.88rem;
+    line-height: 1.5;
+  }
+
+  .health-monitor-form,
+  .liver-journal-form,
+  .roadmap-form,
+  .roadmap-plan-card,
+  .roadmap-empty,
+  .liver-food-guidance {
+    min-width: 0;
+    padding: 1rem;
+  }
+
+  .health-monitor-form,
+  .liver-journal-fields,
+  .roadmap-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .health-monitor-form > *,
+  .liver-journal-fields > *,
+  .roadmap-form-grid > * {
+    min-width: 0;
+  }
+
+  .health-monitor-wide,
+  .roadmap-full-width {
+    grid-column: auto;
+  }
+
+  .liver-trend-grid,
+  .profile-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .patient-profile-form {
+    min-width: 0;
+    padding: 1rem;
+  }
+
+  .patient-account-actions {
+    align-items: flex-start;
+    padding: 0.9rem 1rem;
+  }
+
+  .patient-logout-button {
+    min-height: 2.75rem;
+  }
+
+  .profile-grid .form-group input,
+  .profile-grid .form-group select,
+  .profile-grid .form-group textarea,
+  .health-monitor-form input,
+  .health-monitor-form select,
+  .liver-journal-fields input,
+  .liver-journal-note textarea,
+  .roadmap-form-grid input,
+  .roadmap-form-grid textarea {
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    font-size: 16px;
+  }
+
+  .save-profile-btn,
+  .health-monitor-submit,
+  .liver-journal-form > button,
+  .roadmap-primary-button,
+  .roadmap-secondary-button {
+    min-height: 2.85rem;
+  }
+
+  .reminders-heading {
+    gap: 0.75rem;
+  }
+
+  .reminder-push-status {
+    white-space: normal;
+    line-height: 1.35;
+  }
+
+  .reminder-schedule-choice {
+    padding: 0.65rem;
+  }
+
+  .liver-symptoms {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0.8rem;
+  }
+
+  .liver-trend-grid {
+    gap: 0.75rem;
+  }
+
+  .liver-trend-card {
+    min-width: 0;
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 380px) {
+  .patient-hero-content {
+    padding: 0 0.8rem;
+  }
+
+  .patient-content {
+    padding-right: 0.7rem;
+    padding-left: 0.7rem;
+  }
+
+  .patient-profile {
+    gap: 0.65rem;
+  }
+
+  .patient-meta {
+    font-size: 0.7rem;
+  }
+
+  .status-card {
+    padding: 0.65rem;
+  }
+
+  .history-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tabs {
+    right: 0.45rem;
+    left: 0.45rem;
+    padding-right: 0.15rem;
+    padding-left: 0.15rem;
+  }
+
+  .tab-mobile-label {
+    font-size: 0.61rem;
+  }
+}
+
+.patient-liver-care {
+  gap: 1rem;
+  min-width: 0;
+}
+
+.patient-liver-care-heading {
+  position: relative;
+  padding: 1.25rem 1.4rem 1.25rem 4.5rem;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 100% 0, rgba(255, 255, 255, 0.55), transparent 38%),
+    linear-gradient(125deg, #e7f7f2, #e8f4fa);
+  border: 1px solid #d6ebe7;
+  box-shadow: 0 5px 16px rgba(20, 55, 70, 0.04);
+}
+
+.patient-liver-care-heading::before {
+  position: absolute;
+  top: 50%;
+  left: 1.15rem;
+  display: grid;
+  width: 2.5rem;
+  height: 2.5rem;
+  place-items: center;
+  content: '💚';
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 0.85rem;
+  font-size: 1.15rem;
+  transform: translateY(-50%);
+}
+
+.patient-liver-care-heading h2 {
+  color: #14564f;
+}
+
+.patient-liver-care-heading p {
+  max-width: 760px;
+  color: #4e6b70;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.patient-liver-care .medication-reminders {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.15rem;
+  border-color: #e2ecea;
+  border-radius: 1rem;
+  box-shadow: 0 5px 18px rgba(20, 55, 70, 0.045);
+}
+
+.patient-liver-care .reminders-heading {
+  align-items: center;
+  margin: 0;
+}
+
+.patient-liver-care .reminders-heading > div {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.patient-liver-care .password-form-title {
+  margin: 0;
+  color: #14564f;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.patient-liver-care .reminders-heading p {
+  max-width: 680px;
+  margin: 0;
+  color: #647b80;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.patient-liver-care .reminder-push-status {
+  max-width: 230px;
+  padding: 0.5rem 0.7rem;
+  color: #80520c;
+  background: #fff8e8;
+  border: 1px solid #f2e1b7;
+  border-radius: 0.75rem;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.patient-liver-care .reminder-form {
+  align-items: end;
+  gap: 0.85rem;
+}
+
+.patient-liver-care .reminder-schedule-choice {
+  align-content: start;
+  gap: 0.55rem;
+  padding: 0.75rem;
+  background: #f8fbfb;
+  border-color: #dce8e7;
+  border-radius: 0.8rem;
+}
+
+.patient-liver-care .reminder-schedule-choice legend {
+  color: #334f55;
+  font-size: 0.82rem;
+}
+
+.patient-liver-care .reminder-schedule-choice label {
+  font-size: 0.8rem;
+}
+
+.patient-liver-care .reminder-form .form-group input {
+  min-height: 2.75rem;
+}
+
+.patient-liver-care .reminder-form-action .save-profile-btn {
+  min-height: 2.75rem;
+  margin: 0;
+  padding: 0.7rem 0.95rem;
+  background: linear-gradient(135deg, #0f766e, #0e7490);
+  border-radius: 0.75rem;
+  box-shadow: 0 5px 12px rgba(15, 118, 110, 0.14);
+}
+
+.patient-liver-care .reminder-error {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 0.75rem;
+}
+
+.patient-liver-care .reminder-list {
+  gap: 0.65rem;
+  margin-top: 0;
+}
+
+.patient-liver-care .reminder-card {
+  gap: 0.8rem;
+  padding: 0.85rem;
+  background: #f8fbfb;
+  border-color: #e0eae9;
+  border-radius: 0.85rem;
+}
+
+.patient-liver-care .reminder-card-info {
+  gap: 0.3rem;
+}
+
+.patient-liver-care .reminder-card-info strong {
+  color: #174f4b;
+  font-size: 0.9rem;
+}
+
+.patient-liver-care .reminder-card-info span {
+  color: #61777c;
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.patient-liver-care .reminder-actions {
+  gap: 0.4rem;
+}
+
+.patient-liver-care .reminder-actions .history-action-btn {
+  min-height: 2.5rem;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.75rem;
+}
+
+.patient-liver-care .reminder-delete-btn {
+  color: #9f3535;
+  background: #fff6f6;
+  border: 1px solid #f3dddd;
+}
+
+.patient-liver-care .reminder-empty {
+  margin: 0;
+  padding: 0.9rem;
+  text-align: center;
+  background: #f8fbfb;
+  border: 1px dashed #cddcdd;
+  border-radius: 0.8rem;
+}
+
+.patient-liver-care .reminder-disclaimer {
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid #e7eeee;
+  font-size: 0.78rem;
+}
+
+.patient-liver-care .liver-food-guidance {
+  display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+  padding: 1.2rem;
+  border: 1px solid #e2ecea;
+  border-radius: 1rem;
+  box-shadow: 0 5px 18px rgba(20, 55, 70, 0.045);
+}
+
+.patient-liver-care .liver-food-guidance h2,
+.patient-liver-care .liver-food-guidance h3 {
+  margin: 0;
+  color: #14564f;
+  line-height: 1.4;
+}
+
+.patient-liver-care .liver-food-guidance h2 {
+  font-size: 1.05rem;
+}
+
+.patient-liver-care .liver-food-guidance h3 {
+  margin-top: 0.45rem;
+  font-size: 0.95rem;
+}
+
+.patient-liver-care .liver-food-guidance ul {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  color: #465f64;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  list-style: none;
+}
+
+.patient-liver-care .liver-food-guidance li {
+  position: relative;
+  padding: 0.65rem 0.75rem 0.65rem 2.2rem;
+  background: #f7fbfa;
+  border: 1px solid #e7efee;
+  border-radius: 0.7rem;
+}
+
+.patient-liver-care .liver-food-guidance li::before {
+  position: absolute;
+  top: 0.67rem;
+  left: 0.8rem;
+  color: #0f766e;
+  content: '✓';
+  font-weight: 800;
+}
+
+.patient-liver-care .liver-food-guidance > p {
+  margin: 0;
+  color: #647b80;
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.patient-liver-care .liver-food-guidance > p:first-of-type {
+  padding: 0.75rem;
+  color: #805316;
+  background: #fff9eb;
+  border: 1px solid #f3e2b7;
+  border-radius: 0.75rem;
+}
+
+.patient-liver-care .liver-food-guidance .diet-guide-hero {
+  min-height: 190px;
+  border-radius: 1.1rem;
+}
+
+@media (max-width: 700px) {
+  .patient-liver-care {
+    gap: 0.8rem;
+  }
+
+  .patient-liver-care-heading {
+    padding: 1rem 1rem 1rem 3.75rem;
+  }
+
+  .patient-liver-care-heading::before {
+    left: 0.85rem;
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+
+  .patient-liver-care-heading p {
+    margin-top: 0.35rem;
+    font-size: 0.82rem;
+  }
+
+  .patient-liver-care .medication-reminders,
+  .patient-liver-care .liver-food-guidance {
+    gap: 0.8rem;
+    padding: 0.95rem;
+  }
+
+  .patient-liver-care .reminders-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .patient-liver-care .reminder-push-status {
+    max-width: none;
+  }
+
+  .patient-liver-care .reminder-form {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .patient-liver-care .reminder-form-action .save-profile-btn {
+    width: 100%;
+  }
+
+  .patient-liver-care .reminder-card {
+    align-items: stretch;
+  }
+
+  .patient-liver-care .reminder-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .patient-liver-care .reminder-actions .history-action-btn {
+    width: 100%;
+  }
+
+  .patient-liver-care .reminder-actions .reminder-delete-btn {
+    grid-column: 1 / -1;
+  }
+
+  .patient-liver-care .reminder-schedule-editor {
+    gap: 0.7rem;
+    padding: 0.8rem;
+  }
+
+  .patient-liver-care .liver-food-guidance .diet-guide-hero {
+    min-height: 195px;
+  }
+}
+
+@media (max-width: 380px) {
+  .patient-liver-care .reminder-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .patient-liver-care .reminder-actions .reminder-delete-btn {
+    grid-column: auto;
   }
 }

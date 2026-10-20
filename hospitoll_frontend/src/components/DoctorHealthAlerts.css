@@ -1,0 +1,110 @@
+.health-monitor {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.health-monitor-header h2 {
+  margin: 0 0 6px;
+}
+
+.health-monitor-header p {
+  margin: 0;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.health-monitor-error {
+  padding: 10px 14px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border-radius: 10px;
+}
+
+.health-monitor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health-monitor-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #fff;
+  border-left: 5px solid #16a34a;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.health-monitor-item.attention {
+  border-color: #d97706;
+}
+
+.health-monitor-item.urgent {
+  border-color: #dc2626;
+}
+
+.health-monitor-item > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.health-monitor-item small,
+.health-monitor-item > div > span {
+  color: #64748b;
+}
+
+.health-monitor-item button {
+  padding: 0.55rem 0.8rem;
+  color: #1e3a8a;
+  background: rgba(30, 111, 215, 0.08);
+  border: 0;
+  border-radius: 0.65rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.health-badge {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.health-badge.normal {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.health-badge.attention {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.health-badge.urgent {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+@media (max-width: 600px) {
+  .health-monitor-item {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .health-monitor-item > div {
+    flex: 1 1 100%;
+  }
+
+  .health-monitor-item button {
+    margin-left: auto;
+  }
+}

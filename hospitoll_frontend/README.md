@@ -46,4 +46,6 @@ src/
 
 - Public home page with clinic listings
 - Authentication (login/register)
+- Patient treatment roadmaps with dated steps and progress tracking
+- Chronic disease monitoring (blood pressure / glucose) with doctor and clinic alerts
 - Role-based dashboards (future)

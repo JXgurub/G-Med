@@ -1,0 +1,510 @@
+.health-monitor {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.health-monitor-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 1.1rem 1.15rem;
+  background: linear-gradient(135deg, #f0fdfa, #f0f9ff);
+  border: 1px solid #d4eeea;
+  border-radius: 1rem;
+}
+
+.health-monitor-heading-icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.85rem;
+  background: #d8f2eb;
+  font-size: 1.25rem;
+}
+
+.health-monitor-header h2 {
+  margin: 0 0 0.3rem;
+  color: #134e4a;
+  font-size: 1.15rem;
+  line-height: 1.35;
+}
+
+.health-monitor-header p {
+  max-width: 720px;
+  margin: 0;
+  color: #526b70;
+  font-size: 0.87rem;
+  line-height: 1.55;
+}
+
+.health-monitor-error {
+  padding: 0.8rem 0.95rem;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 0.8rem;
+  line-height: 1.45;
+}
+
+.health-monitor-banner {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid transparent;
+  border-left-width: 4px;
+  border-radius: 0.85rem;
+  line-height: 1.5;
+}
+
+.health-monitor-banner.normal {
+  color: #166534;
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.health-monitor-banner.attention {
+  color: #92400e;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+.health-monitor-banner.urgent {
+  color: #991b1b;
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.health-monitor-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
+  align-items: end;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1.1rem;
+  background: #fff;
+  border: 1px solid #e2ecea;
+  border-radius: 1rem;
+  box-shadow: 0 5px 18px rgba(20, 55, 70, 0.045);
+}
+
+.health-monitor-form-heading {
+  display: grid;
+  gap: 0.25rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #e7efee;
+}
+
+.health-monitor-form-heading strong {
+  color: #173f42;
+  font-size: 1rem;
+}
+
+.health-monitor-form-heading span,
+.health-monitor-hint {
+  color: #647b80;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.health-monitor-form label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.4rem;
+  color: #334155;
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.health-monitor-form input[type='number'],
+.health-monitor-form input[type='text'],
+.health-monitor-form input[type='datetime-local'],
+.health-monitor-form select {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.85rem;
+  box-sizing: border-box;
+  padding: 0.65rem 0.75rem;
+  color: #183344;
+  background: #fbfdfd;
+  border: 1px solid #cfdddf;
+  border-radius: 0.7rem;
+  font: inherit;
+  font-size: 0.94rem;
+  font-weight: 400;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.health-monitor-form input:focus,
+.health-monitor-form select:focus {
+  outline: none;
+  border-color: #0f8b7b;
+  box-shadow: 0 0 0 3px rgba(15, 139, 123, 0.12);
+}
+
+.health-monitor-wide {
+  grid-column: 1 / -1;
+}
+
+.health-monitor-form .health-monitor-check {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem;
+  color: #365b5b;
+  background: #f2faf8;
+  border: 1px solid #d9eee8;
+  border-radius: 0.75rem;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.health-monitor-check input {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  margin: 0.1rem 0 0;
+  accent-color: #0f766e;
+}
+
+.health-monitor-submit {
+  grid-column: 1 / -1;
+  min-height: 2.9rem;
+  padding: 0.72rem 1rem;
+  color: #fff;
+  background: linear-gradient(135deg, #0f766e, #0e7490);
+  border: 0;
+  border-radius: 0.75rem;
+  box-shadow: 0 5px 12px rgba(15, 118, 110, 0.16);
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.health-monitor-submit:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(15, 118, 110, 0.2);
+}
+
+.health-monitor-submit:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.health-monitor-results {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.health-monitor-results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.health-monitor-results-heading h3 {
+  margin: 0;
+  color: #173f42;
+  font-size: 1rem;
+}
+
+.health-monitor-results-heading p {
+  margin: 0.2rem 0 0;
+  color: #71838a;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.health-monitor-result-count {
+  display: inline-grid;
+  min-width: 2rem;
+  height: 2rem;
+  place-items: center;
+  padding: 0 0.45rem;
+  color: #0f766e;
+  background: #e6f5f1;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.health-monitor-filters {
+  display: flex;
+  gap: 0.45rem;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0.1rem 0 0.35rem;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.health-monitor-filters button {
+  min-height: 2.45rem;
+  flex: 0 0 auto;
+  padding: 0.55rem 0.8rem;
+  color: #536a70;
+  background: #fff;
+  border: 1px solid #dbe6e7;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+.health-monitor-filters button.active {
+  color: #fff;
+  background: #0f766e;
+  border-color: #0f766e;
+}
+
+.health-monitor-empty {
+  margin: 0;
+  padding: 1.2rem;
+  color: #647b80;
+  text-align: center;
+  background: #f8fbfb;
+  border: 1px dashed #cddcdd;
+  border-radius: 0.85rem;
+  font-size: 0.88rem;
+}
+
+.health-monitor-hint {
+  margin: 0;
+  padding: 0.7rem 0.8rem;
+  background: #f4f8fa;
+  border-radius: 0.7rem;
+}
+
+.liver-trend-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 0.75rem;
+}
+
+.liver-trend-card {
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  background: #fff;
+  border: 1px solid #e4edec;
+  border-radius: 0.9rem;
+  box-shadow: 0 4px 12px rgba(20, 55, 70, 0.035);
+}
+
+.liver-trend-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+
+.liver-trend-title strong {
+  color: #173f42;
+  font-size: 0.88rem;
+}
+
+.liver-trend-title span {
+  color: #71838a;
+  font-size: 0.76rem;
+}
+
+.liver-trend-card svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.liver-trend-card svg line {
+  stroke: #d8e4e4;
+  stroke-width: 1;
+}
+
+.liver-trend-card svg .liver-trend-line {
+  fill: none;
+  stroke: #0f8b7b;
+  stroke-width: 2.5;
+}
+
+.liver-trend-card svg circle {
+  fill: #0f8b7b;
+  stroke: #fff;
+  stroke-width: 2;
+}
+
+.liver-trend-card svg text {
+  fill: #71838a;
+  font-size: 10px;
+}
+
+.health-monitor-list {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.health-monitor-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.85rem;
+  background: #fff;
+  border: 1px solid #e4edec;
+  border-left: 4px solid #22a06b;
+  border-radius: 0.85rem;
+  box-shadow: 0 3px 10px rgba(20, 55, 70, 0.035);
+}
+
+.health-monitor-item.attention {
+  border-color: #f2d494;
+}
+
+.health-monitor-item.urgent {
+  border-color: #f2b7b7;
+}
+
+.health-monitor-item > div {
+  display: grid;
+  flex: 1;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.health-monitor-item > div strong {
+  color: #203f48;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.health-monitor-item small {
+  color: #71838a;
+  font-size: 0.76rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.health-badge {
+  flex: 0 0 auto;
+  padding: 0.32rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.health-badge.normal {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.health-badge.attention {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.health-badge.urgent {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.health-monitor-item button {
+  min-height: 2.4rem;
+  flex: 0 0 auto;
+  padding: 0.45rem 0.6rem;
+  color: #9f3535;
+  background: #fff6f6;
+  border: 1px solid #f3dddd;
+  border-radius: 0.65rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.health-monitor-item button:hover {
+  background: #feecec;
+}
+
+.health-monitor button:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.35);
+  outline-offset: 2px;
+}
+
+@media (max-width: 520px) {
+  .health-monitor {
+    gap: 0.8rem;
+  }
+
+  .health-monitor-header {
+    gap: 0.7rem;
+    padding: 0.9rem;
+  }
+
+  .health-monitor-heading-icon {
+    width: 2.45rem;
+    height: 2.45rem;
+    border-radius: 0.75rem;
+  }
+
+  .health-monitor-header h2 {
+    font-size: 1.02rem;
+  }
+
+  .health-monitor-header p {
+    font-size: 0.81rem;
+  }
+
+  .health-monitor-form {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+    padding: 0.9rem;
+  }
+
+  .health-monitor-wide,
+  .health-monitor-submit {
+    grid-column: auto;
+  }
+
+  .health-monitor-form input,
+  .health-monitor-form select {
+    font-size: 16px;
+  }
+
+  .health-monitor-item {
+    flex-wrap: wrap;
+    gap: 0.55rem;
+  }
+
+  .health-monitor-item > div {
+    flex-basis: calc(100% - 0.25rem);
+  }
+
+  .health-monitor-item button {
+    margin-left: auto;
+  }
+
+  .liver-trend-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .health-monitor-form input,
+  .health-monitor-form select,
+  .health-monitor-submit,
+  .health-monitor-filters button {
+    transition: none;
+  }
+}

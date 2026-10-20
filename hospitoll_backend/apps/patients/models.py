@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from uuid import uuid4
@@ -372,6 +373,7 @@ class PatientMedicationReminder(models.Model):
     pending_dose_at = models.DateTimeField(blank=True, null=True)
     next_nudge_at = models.DateTimeField(blank=True, null=True)
     acknowledgement_token = models.UUIDField(blank=True, null=True, unique=True, editable=False)
+    missed_dose_reported_at = models.DateTimeField(blank=True, null=True)
     last_message_key = models.CharField(max_length=40, blank=True, default='')
     created_at = models.DateTimeField(_('created at'), auto_now_add=True)
     updated_at = models.DateTimeField(_('updated at'), auto_now=True)
@@ -387,3 +389,181 @@ class PatientMedicationReminder(models.Model):
 
     def __str__(self):
         return f'{self.medication_name} ({self.patient_id})'
+
+
+class PatientTreatmentPlan(models.Model):
+    class Status(models.TextChoices):
+        ACTIVE = 'active', _('Faol')
+        COMPLETED = 'completed', _('Yakunlangan')
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    patient = models.ForeignKey(
+        Patient,
+        on_delete=models.CASCADE,
+        related_name='treatment_plans',
+    )
+    title = models.CharField(_('title'), max_length=200)
+    summary = models.TextField(_('summary'), blank=True)
+    start_date = models.DateField(_('start date'), blank=True, null=True)
+    target_date = models.DateField(_('target date'), blank=True, null=True)
+    status = models.CharField(
+        _('status'),
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+    )
+    created_at = models.DateTimeField(_('created at'), auto_now_add=True)
+    updated_at = models.DateTimeField(_('updated at'), auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.title} ({self.patient_id})'
+
+
+class PatientTreatmentStep(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    plan = models.ForeignKey(
+        PatientTreatmentPlan,
+        on_delete=models.CASCADE,
+        related_name='steps',
+    )
+    title = models.CharField(_('title'), max_length=200)
+    description = models.TextField(_('description'), blank=True)
+    due_date = models.DateField(_('due date'), blank=True, null=True)
+    is_completed = models.BooleanField(_('completed'), default=False)
+    completed_at = models.DateTimeField(_('completed at'), blank=True, null=True)
+    created_at = models.DateTimeField(_('created at'), auto_now_add=True)
+    updated_at = models.DateTimeField(_('updated at'), auto_now=True)
+
+    class Meta:
+        ordering = ['due_date', 'created_at']
+
+    def __str__(self):
+        return f'{self.title} ({self.plan_id})'
+
+
+class PatientHealthReading(models.Model):
+    class Metric(models.TextChoices):
+        BLOOD_PRESSURE = 'blood_pressure', _('Qon bosimi')
+        BLOOD_GLUCOSE = 'blood_glucose', _('Qon qandi')
+        LIVER_ALT = 'liver_alt', _('ALT')
+        LIVER_AST = 'liver_ast', _('AST')
+        LIVER_BILIRUBIN = 'liver_bilirubin', _('Bilirubin')
+        LIVER_ALBUMIN = 'liver_albumin', _('Albumin')
+        LIVER_GGT = 'liver_ggt', _('GGT')
+        LIVER_VIRAL_LOAD = 'liver_viral_load', _('Virus yuklamasi')
+
+    class GlucoseContext(models.TextChoices):
+        FASTING = 'fasting', _('Och qoringa')
+        AFTER_MEAL = 'after_meal', _('Ovqatdan keyin')
+        RANDOM = 'random', _('Boshqa vaqt')
+
+    class Severity(models.TextChoices):
+        NORMAL = 'normal', _('Me’yorda')
+        ATTENTION = 'attention', _('E’tibor talab')
+        URGENT = 'urgent', _('Shoshilinch')
+
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    patient = models.ForeignKey(
+        Patient,
+        on_delete=models.CASCADE,
+        related_name='health_readings',
+    )
+    metric = models.CharField(_('metric'), max_length=30, choices=Metric.choices)
+    systolic = models.PositiveSmallIntegerField(blank=True, null=True)
+    diastolic = models.PositiveSmallIntegerField(blank=True, null=True)
+    glucose_mmol = models.DecimalField(max_digits=4, decimal_places=1, blank=True, null=True)
+    glucose_context = models.CharField(
+        max_length=20,
+        choices=GlucoseContext.choices,
+        blank=True,
+        default='',
+    )
+    value = models.DecimalField(max_digits=14, decimal_places=3, blank=True, null=True)
+    unit = models.CharField(max_length=30, blank=True, default='')
+    reference_min = models.DecimalField(max_digits=14, decimal_places=3, blank=True, null=True)
+    reference_max = models.DecimalField(max_digits=14, decimal_places=3, blank=True, null=True)
+    measured_at = models.DateTimeField(_('measured at'), db_index=True)
+    note = models.CharField(_('note'), max_length=300, blank=True)
+    severity = models.CharField(
+        max_length=20,
+        choices=Severity.choices,
+        default=Severity.NORMAL,
+        db_index=True,
+    )
+    alert_reason = models.CharField(max_length=200, blank=True)
+    share_with_care_team = models.BooleanField(
+        _('share with doctor and clinic'),
+        default=True,
+    )
+    reviewed_at = models.DateTimeField(blank=True, null=True)
+    reviewed_by = models.ForeignKey(
+        'users.CustomUser',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='reviewed_health_readings',
+    )
+    created_at = models.DateTimeField(_('created at'), auto_now_add=True)
+
+    class Meta:
+        ordering = ['-measured_at', '-created_at']
+        indexes = [
+            models.Index(
+                fields=['patient', 'metric', '-measured_at'],
+                name='patients_reading_series_idx',
+            ),
+            models.Index(
+                fields=['severity', 'share_with_care_team', 'reviewed_at'],
+                name='patients_reading_alert_idx',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.metric} ({self.patient_id}) {self.measured_at:%Y-%m-%d %H:%M}'
+
+
+class PatientLiverJournalEntry(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid4, editable=False)
+    patient = models.ForeignKey(
+        Patient,
+        on_delete=models.CASCADE,
+        related_name='liver_journal_entries',
+    )
+    symptoms = models.JSONField(default=list, blank=True)
+    weight_kg = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0.1), MaxValueValidator(500)],
+    )
+    abdominal_circumference_cm = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(1), MaxValueValidator(400)],
+    )
+    salt_grams = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    fluid_ml = models.PositiveIntegerField(blank=True, null=True)
+    note = models.CharField(max_length=300, blank=True)
+    recorded_at = models.DateTimeField(default=timezone.now, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-recorded_at', '-created_at']
+        indexes = [
+            models.Index(fields=['patient', '-recorded_at'], name='patients_liver_journal_idx'),
+        ]
+
+    def __str__(self):
+        return f'Liver journal ({self.patient_id}) {self.recorded_at:%Y-%m-%d}'

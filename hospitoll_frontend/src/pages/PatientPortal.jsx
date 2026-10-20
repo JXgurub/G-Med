@@ -3,6 +3,9 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { usePatient } from '../context/PatientContext'
 import { patientsApi } from '../services/api'
 import PasswordInput from '../components/PasswordInput'
+import PatientTreatmentRoadmap from '../components/PatientTreatmentRoadmap'
+import PatientHealthMonitor from '../components/PatientHealthMonitor'
+import PatientLiverJournal from '../components/PatientLiverJournal'
 import DietTables from './DietTables'
 import './PatientPortal.css'
 
@@ -421,43 +424,66 @@ const PatientPortal = () => {
       </header>
 
       <section className="patient-content">
-        <div className="tabs">
+        <nav className="tabs" aria-label="Bemor bo‘limlari">
           <button
             type="button"
             className={`tab-btn ${activeTab === 'history' ? 'active' : ''}`}
+            aria-pressed={activeTab === 'history'}
             onClick={() => setActiveTab('history')}
           >
-            Kasallik tarixi
+            <span className="tab-icon" aria-hidden="true">📋</span>
+            <span className="tab-label">Kasallik tarixi</span>
+            <span className="tab-mobile-label">Tarix</span>
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'ratings' ? 'active' : ''}`}
+            aria-pressed={activeTab === 'ratings'}
             onClick={() => setActiveTab('ratings')}
           >
-            Doktor baholash
+            <span className="tab-icon" aria-hidden="true">⭐</span>
+            <span className="tab-label">Doktor baholash</span>
+            <span className="tab-mobile-label">Baho</span>
+          </button>
+          <a
+            className="tab-btn patient-conversation-link"
+            href="/liza/index.html"
+            aria-label="Suhbatdosh sahifasini ochish"
+          >
+            <span className="tab-icon" aria-hidden="true">💬</span>
+            <span className="tab-mobile-label">Suhbatdosh</span>
+          </a>
+          <button
+            type="button"
+            className={`tab-btn ${activeTab === 'liver-care' ? 'active' : ''}`}
+            aria-pressed={activeTab === 'liver-care'}
+            onClick={() => setActiveTab('liver-care')}
+          >
+            <span className="tab-icon" aria-hidden="true">💚</span>
+            <span className="tab-label">Jigar salomatligi</span>
+            <span className="tab-mobile-label">Jigar</span>
           </button>
           <button
             type="button"
-            className={`tab-btn ${activeTab === 'medication-reminders' ? 'active' : ''}`}
-            onClick={() => setActiveTab('medication-reminders')}
+            className={`tab-btn ${activeTab === 'treatment-roadmap' ? 'active' : ''}`}
+            aria-pressed={activeTab === 'treatment-roadmap'}
+            onClick={() => setActiveTab('treatment-roadmap')}
           >
-            Dorilarni eslatish 💊
-          </button>
-          <button
-            type="button"
-            className={`tab-btn ${activeTab === 'diet-tables' ? 'active' : ''}`}
-            onClick={() => setActiveTab('diet-tables')}
-          >
-            Parhez stollari 🥗
+            <span className="tab-icon" aria-hidden="true">🩺</span>
+            <span className="tab-label">Davolanish rejasi</span>
+            <span className="tab-mobile-label">Reja</span>
           </button>
           <button
             type="button"
             className={`tab-btn ${activeTab === 'profile' ? 'active' : ''}`}
+            aria-pressed={activeTab === 'profile'}
             onClick={() => setActiveTab('profile')}
           >
-            Profilim
+            <span className="tab-icon" aria-hidden="true">👤</span>
+            <span className="tab-label">Profilim</span>
+            <span className="tab-mobile-label">Profil</span>
           </button>
-        </div>
+        </nav>
 
         {activeTab === 'history' && (
           <div className="history-grid">
@@ -584,12 +610,26 @@ const PatientPortal = () => {
           </div>
         )}
 
-        {activeTab === 'medication-reminders' && (
+        {activeTab === 'liver-care' && (
+          <div className="patient-liver-care">
+            <header className="patient-liver-care-heading">
+              <h2>Jigar salomatligi</h2>
+              <p>
+                Tahlillar, kundalik belgilar, dori eslatmalari va ovqatlanish bo‘yicha
+                muhim ma’lumotlar bitta bo‘limda.
+              </p>
+            </header>
+            <PatientHealthMonitor />
+            <PatientLiverJournal />
           <section className="patient-profile-form medication-reminders">
             <div className="reminders-heading">
               <div>
                 <h3 className="password-form-title">Dorilarni eslatish 💊</h3>
-                <p>Dori ichish tartibini tanlang: interval bo‘yicha yoki har kuni belgilangan aniq vaqtlarda. Ikkalasi bir vaqtda qo‘llanmaydi.</p>
+                <p>
+                  Gepatit B/C davosida dozani o‘tkazib yubormaslik muhim. Eslatma bo‘yicha
+                  doza tasdiqlanmasa, o‘tkazib yuborilgan doza haqida shifokoringizga xabar beriladi.
+                  Dori tartibini shifokor bilan kelishib belgilang.
+                </p>
               </div>
               <span className="reminder-push-status">
                 Telefon bildirishnomalari uchun brauzer ruxsati kerak
@@ -715,6 +755,12 @@ const PatientPortal = () => {
                       )}
                       {reminder.interval_hours != null && (
                         <span>Keyingi eslatma: {reminder.is_active ? formatReminderDate(reminder.next_reminder_at) : 'Eslatma vaqtincha to‘xtatilgan'}</span>
+                      )}
+                      {reminder.pending_dose_at && (
+                        <span className="reminder-missed-dose">
+                          Tasdiqlanmagan doza: {formatReminderDate(reminder.pending_dose_at)}
+                          {reminder.missed_dose_reported_at ? ' · Shifokorga xabar berildi' : ' · Tasdiq kutilmoqda'}
+                        </span>
                       )}
                       {!reminder.is_active && reminder.interval_hours == null && (
                         <span>Eslatma vaqtincha to‘xtatilgan</span>
@@ -842,11 +888,35 @@ const PatientPortal = () => {
             )}
             <p className="reminder-disclaimer">Eslatmalar faqat telefoningizda bildirishnomalarga ruxsat berilganida yuboriladi. Dori qabul qilish tartibini shifokor tavsiyasiga muvofiq belgilang.</p>
           </section>
+            <section className="liver-food-guidance">
+              <h2>Ovqatlanish va ehtiyot choralari</h2>
+              <ul>
+                <li>Spirtli ichimliklardan saqlaning.</li>
+                <li>
+                  Paratsetamolni ko‘p miqdorda qabul qilmang; retseptsiz dorilar, qo‘shimchalar
+                  va o‘simlik damlamalarini shifokor bilan maslahatlashmasdan ishlatmang.
+                </li>
+                <li>
+                  “Jigar tozalash” vositalarining samaradorligi isbotlanmagan va ular zarar
+                  yetkazishi mumkin; ishlatishdan oldin shifokor bilan gaplashing.
+                </li>
+                <li>
+                  Sirrozda tuz va suyuqlik cheklovi shaxsiy belgilanadi. Vazn, qorin hajmi,
+                  tuz va suyuqlik qaydlarini shifokoringiz bergan maqsadlar bilan solishtiring.
+                </li>
+              </ul>
+              <p>
+                Qon qusish, qora najas yoki chalkashlik bo‘lsa, darhol 103 ga murojaat qiling.
+                Bu bo‘lim shifokor ko‘rigini va individual davolash rejasini almashtirmaydi.
+              </p>
+              <h3>Ovqatlanish jadvallari</h3>
+              <p>Jigar va o‘t yo‘llari uchun № 5 jadval hamda boshqa yo‘nalishlarni ko‘ring.</p>
+              <DietTables />
+            </section>
+          </div>
         )}
 
-        <div hidden={activeTab !== 'diet-tables'}>
-          <DietTables />
-        </div>
+        {activeTab === 'treatment-roadmap' && <PatientTreatmentRoadmap />}
 
         {activeTab === 'profile' && (
           <div className="profile-forms-stack">

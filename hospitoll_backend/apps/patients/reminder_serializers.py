@@ -31,6 +31,8 @@ class PatientMedicationReminderSerializer(serializers.ModelSerializer):
             'is_active',
             'next_reminder_at',
             'next_scheduled_reminder_at',
+            'pending_dose_at',
+            'missed_dose_reported_at',
             'created_at',
             'updated_at',
         ]
@@ -38,6 +40,8 @@ class PatientMedicationReminderSerializer(serializers.ModelSerializer):
             'id',
             'next_reminder_at',
             'next_scheduled_reminder_at',
+            'pending_dose_at',
+            'missed_dose_reported_at',
             'created_at',
             'updated_at',
         ]
@@ -92,10 +96,12 @@ class PatientMedicationReminderSerializer(serializers.ModelSerializer):
             instance.pending_dose_at = None
             instance.next_nudge_at = None
             instance.acknowledgement_token = None
+            instance.missed_dose_reported_at = None
             instance.save(update_fields=[
                 'pending_dose_at',
                 'next_nudge_at',
                 'acknowledgement_token',
+                'missed_dose_reported_at',
                 'updated_at',
             ])
         elif (
@@ -113,12 +119,14 @@ class PatientMedicationReminderSerializer(serializers.ModelSerializer):
             instance.pending_dose_at = None
             instance.next_nudge_at = None
             instance.acknowledgement_token = None
+            instance.missed_dose_reported_at = None
             instance.save(update_fields=[
                 'next_reminder_at',
                 'next_scheduled_reminder_at',
                 'pending_dose_at',
                 'next_nudge_at',
                 'acknowledgement_token',
+                'missed_dose_reported_at',
                 'updated_at',
             ])
         return instance

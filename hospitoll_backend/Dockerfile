@@ -45,7 +45,7 @@ COPY . .
 RUN mkdir -p /app/staticfiles /app/media /app/logs
 
 # Collect static files
-RUN python manage.py collectstatic --noinput --clear || true
+RUN DJANGO_SECRET_KEY=build-only-collectstatic-key python manage.py collectstatic --noinput --clear
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app

@@ -1,0 +1,389 @@
+.liver-journal {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+}
+
+.liver-journal-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.85rem;
+  padding: 1.1rem 1.15rem;
+  background: linear-gradient(135deg, #f0fdfa, #f0f9ff);
+  border: 1px solid #d4eeea;
+  border-radius: 1rem;
+}
+
+.liver-journal-heading-icon {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 0.85rem;
+  background: #d8f2eb;
+  font-size: 1.2rem;
+}
+
+.liver-journal-heading h2 {
+  margin: 0 0 0.3rem;
+  color: #134e4a;
+  font-size: 1.15rem;
+  line-height: 1.35;
+}
+
+.liver-journal-heading p,
+.liver-journal-disclaimer {
+  margin: 0;
+  color: #526b70;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.liver-journal-form {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1.1rem;
+  background: #fff;
+  border: 1px solid #e2ecea;
+  border-radius: 1rem;
+  box-shadow: 0 5px 18px rgba(20, 55, 70, 0.045);
+}
+
+.liver-journal-form-heading {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.liver-journal-form-heading strong {
+  color: #173f42;
+  font-size: 0.98rem;
+}
+
+.liver-journal-form-heading span,
+.liver-symptoms-hint {
+  margin: 0;
+  color: #71838a;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.liver-symptoms {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 155px), 1fr));
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.9rem;
+  background: #f8fbfb;
+  border: 1px solid #e1eaea;
+  border-radius: 0.85rem;
+}
+
+.liver-symptoms legend {
+  padding: 0 0.35rem;
+  color: #254b50;
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.liver-symptoms-hint {
+  grid-column: 1 / -1;
+  margin: -0.1rem 0 0.2rem;
+}
+
+.liver-symptoms label {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 2.55rem;
+  padding: 0.5rem 0.65rem;
+  color: #3b555a;
+  background: #fff;
+  border: 1px solid #e8eeee;
+  border-radius: 0.65rem;
+  font-size: 0.81rem;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.liver-symptoms label:has(input:checked) {
+  color: #0f625c;
+  background: #effaf7;
+  border-color: #9fd8c9;
+}
+
+.liver-symptoms input {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: #0f766e;
+}
+
+.liver-symptoms .emergency-symptom {
+  color: #9a3434;
+}
+
+.liver-symptoms .emergency-symptom:has(input:checked) {
+  color: #991b1b;
+  background: #fff4f2;
+  border-color: #f0b5a9;
+}
+
+.liver-journal-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.liver-journal-fields label,
+.liver-journal-note {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.4rem;
+  color: #334f55;
+  font-size: 0.81rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.liver-journal-fields input,
+.liver-journal-note textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  padding: 0.65rem 0.75rem;
+  color: #183344;
+  background: #fbfdfd;
+  border: 1px solid #cfdddf;
+  border-radius: 0.7rem;
+  font: inherit;
+  font-size: 0.94rem;
+  font-weight: 400;
+}
+
+.liver-journal-note textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.liver-journal-fields input:focus,
+.liver-journal-note textarea:focus {
+  outline: none;
+  border-color: #0f8b7b;
+  box-shadow: 0 0 0 3px rgba(15, 139, 123, 0.12);
+}
+
+.liver-journal-form > button {
+  justify-self: start;
+  min-height: 2.85rem;
+  padding: 0.72rem 1rem;
+  color: #fff;
+  background: linear-gradient(135deg, #0f766e, #0e7490);
+  border: 0;
+  border-radius: 0.75rem;
+  box-shadow: 0 5px 12px rgba(15, 118, 110, 0.16);
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.liver-journal-form > button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 16px rgba(15, 118, 110, 0.2);
+}
+
+.liver-journal-form > button:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}
+
+.liver-journal-disclaimer {
+  padding: 0.8rem 0.95rem;
+  color: #765316;
+  background: #fff9eb;
+  border: 1px solid #f3e2b7;
+  border-left: 4px solid #dfad45;
+  border-radius: 0.75rem;
+}
+
+.liver-emergency-alert {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.95rem 1rem;
+  color: #8f2525;
+  background: #fff3f1;
+  border: 1px solid #f3b8ad;
+  border-left: 4px solid #dc4c3f;
+  border-radius: 0.85rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.liver-journal-error {
+  margin: 0;
+  padding: 0.8rem 0.95rem;
+  color: #991b1b;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 0.8rem;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.liver-journal-empty {
+  margin: 0;
+  padding: 1.1rem;
+  color: #647b80;
+  text-align: center;
+  background: #f8fbfb;
+  border: 1px dashed #cddcdd;
+  border-radius: 0.85rem;
+  font-size: 0.86rem;
+}
+
+.liver-journal-list {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.liver-journal-list li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+  min-width: 0;
+  padding: 0.85rem 0.95rem;
+  background: #fff;
+  border: 1px solid #e3eceb;
+  border-radius: 0.85rem;
+  box-shadow: 0 3px 10px rgba(20, 55, 70, 0.035);
+}
+
+.liver-journal-list li > div {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.liver-journal-list li strong {
+  color: #254b50;
+  font-size: 0.84rem;
+}
+
+.liver-journal-list li span {
+  color: #60767b;
+  font-size: 0.79rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.liver-journal-list li button {
+  min-height: 2.3rem;
+  flex: 0 0 auto;
+  padding: 0.4rem 0.6rem;
+  color: #9f3535;
+  background: #fff6f6;
+  border: 1px solid #f3dddd;
+  border-radius: 0.65rem;
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.liver-journal-list li button:hover {
+  background: #feecec;
+}
+
+.liver-journal button:focus-visible,
+.liver-journal input:focus-visible,
+.liver-journal textarea:focus-visible {
+  outline: 3px solid rgba(15, 118, 110, 0.32);
+  outline-offset: 2px;
+}
+
+@media (max-width: 520px) {
+  .liver-journal {
+    gap: 0.8rem;
+  }
+
+  .liver-journal-heading {
+    gap: 0.7rem;
+    padding: 0.9rem;
+  }
+
+  .liver-journal-heading-icon {
+    width: 2.45rem;
+    height: 2.45rem;
+    border-radius: 0.75rem;
+  }
+
+  .liver-journal-heading h2 {
+    font-size: 1.02rem;
+  }
+
+  .liver-journal-heading p {
+    font-size: 0.81rem;
+  }
+
+  .liver-journal-form {
+    gap: 0.75rem;
+    padding: 0.9rem;
+  }
+
+  .liver-symptoms {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4rem;
+    padding: 0.7rem;
+  }
+
+  .liver-symptoms label {
+    min-height: 2.6rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.75rem;
+  }
+
+  .liver-journal-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .liver-journal-fields input,
+  .liver-journal-note textarea {
+    font-size: 16px;
+  }
+
+  .liver-journal-form > button {
+    width: 100%;
+  }
+
+  .liver-journal-list li {
+    gap: 0.55rem;
+    padding: 0.75rem;
+  }
+}
+
+@media (max-width: 350px) {
+  .liver-symptoms,
+  .liver-journal-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liver-symptoms label,
+  .liver-journal-form > button {
+    transition: none;
+  }
+}
